@@ -1,0 +1,111 @@
+/* ── Finply · sistema de diseño ───────────────────────────────────────────
+   Un libro mayor moderno: papel verde contable, tinta verde bosque y el
+   doble filete rojo de margen como firma estructural. El modo oscuro es
+   la "lámpara de banquero": el mismo libro, de noche. */
+
+:root {
+  color-scheme: light;
+
+  /* papel y reglas */
+  --papel: #eef1e4;        /* fondo general: papel verde contable */
+  --lomo: #e8ecdb;         /* lomo del libro (barra lateral) */
+  --hoja: #f7f8ee;         /* hojas: tarjetas y superficies */
+  --hoja-hover: #f1f3e2;
+  --regla: #dde2cc;        /* rayado de las hojas */
+  --regla-fuerte: #c2cbaa;
+
+  /* tintas */
+  --tinta: #1e2a21;
+  --tinta-2: #57665b;
+  --tinta-3: #7e8b80;      /* solo texto grande o decorativo */
+
+  /* colores de marca */
+  --verde: #1d5c3d;        /* verde banca */
+  --verde-osc: #12402a;
+  --rojo: #b23a2a;         /* filete de margen y números rojos */
+  --rojo-osc: #8e2b1e;
+  --rojo-tinte: #f4e1dc;
+  --laton: #8f6420;
+  --cobalto: #2c4a74;
+  --vino: #7c2f42;
+
+  /* acento por perfil (cada libro tiene su tinta) */
+  --acento: var(--verde);
+
+  /* marcas de gráfica — par validado para daltonismo (ΔE 7.9 + textura) */
+  --viz-entrada: #3d8f63;
+  --viz-salida: #b23a2a;
+
+  /* derivados que cambian con el tema */
+  --boton-texto: #fdfdf7;
+  --tinte-verde: #e2ecdc;
+  --tinte-neutro: #e9e8d8;
+  --rojo-borde: #dfb2a8;
+  --nav-hover: rgba(247, 248, 238, 0.7);
+  --halo: rgba(30, 42, 33, 0.05);
+  --sello-fondo: rgba(247, 248, 238, 0.6);
+  --velo-fondo: rgba(24, 34, 26, 0.45);
+
+  /* tipografía */
+  --f-display: 'Besley Variable', 'Besley', Georgia, serif;
+  --f-ui: 'Instrument Sans Variable', 'Instrument Sans', system-ui, sans-serif;
+  --f-mono: 'Spline Sans Mono Variable', 'Spline Sans Mono', ui-monospace, 'SF Mono', monospace;
+
+  /* forma */
+  --radio: 3px;
+  --sombra-hoja: 0 1px 0 rgba(30, 42, 33, 0.05), 0 10px 26px -20px rgba(30, 42, 33, 0.4);
+  --sombra-alta: 0 2px 6px rgba(30, 42, 33, 0.08), 0 24px 48px -24px rgba(30, 42, 33, 0.45);
+
+  /* el doble filete rojo, dibujado como gradiente */
+  --filete-rojo: linear-gradient(
+    90deg,
+    var(--rojo) 0 1.5px,
+    transparent 1.5px 3.5px,
+    var(--rojo) 3.5px 5px
+  );
+}
+
+[data-accent='laton'] { --acento: var(--laton); }
+[data-accent='cobalto'] { --acento: var(--cobalto); }
+[data-accent='vino'] { --acento: var(--vino); }
+
+/* ── modo oscuro: lámpara de banquero ────────────────────────────────── */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --papel: #10160f;
+  --lomo: #0c110b;
+  --hoja: #1a221a;
+  --hoja-hover: #212b21;
+  --regla: #2a352b;
+  --regla-fuerte: #3d4a3d;
+
+  --tinta: #e9ebd9;
+  --tinta-2: #a4b1a0;
+  --tinta-3: #76837a;
+
+  --verde: #5aa87e;
+  --verde-osc: #7cc09b;
+  --rojo: #d66653;
+  --rojo-osc: #e08472;
+  --rojo-tinte: #392420;
+  --laton: #cfa24f;
+  --cobalto: #88abd8;
+  --vino: #cd7f92;
+
+  /* par de gráficas validado contra superficie oscura (ΔE 6.8 + textura) */
+  --viz-entrada: #35835a;
+  --viz-salida: #c14b37;
+
+  --boton-texto: #10160f;
+  --tinte-verde: #22331f;
+  --tinte-neutro: #2b2f22;
+  --rojo-borde: #6b3a30;
+  --nav-hover: rgba(26, 34, 26, 0.8);
+  --halo: rgba(233, 235, 217, 0.07);
+  --sello-fondo: rgba(16, 22, 15, 0.6);
+  --velo-fondo: rgba(0, 0, 0, 0.55);
+
+  --sombra-hoja: 0 1px 0 rgba(0, 0, 0, 0.2), 0 10px 26px -20px rgba(0, 0, 0, 0.7);
+  --sombra-alta: 0 2px 6px rgba(0, 0, 0, 0.3), 0 24px 48px -24px rgba(0, 0, 0, 0.8);
+}

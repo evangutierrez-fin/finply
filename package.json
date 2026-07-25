@@ -1,0 +1,38 @@
+{
+  "name": "finply",
+  "version": "0.2.0",
+  "description": "Finply — libro abierto de finanzas personales y de negocio. Registro manual, multi-perfil, local-first.",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=23.6"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c green,yellow \"node --watch server/index.ts\" \"vite\"",
+    "build": "tsc --noEmit && vite build",
+    "start": "node server/index.ts",
+    "seed": "node server/seed.ts",
+    "reset": "node server/seed.ts --empty",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fontsource-variable/besley": "^5.2.0",
+    "@fontsource-variable/instrument-sans": "^5.2.0",
+    "@fontsource-variable/spline-sans-mono": "^5.2.0",
+    "express": "^5.1.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "concurrently": "^9.1.0",
+    "typescript": "^5.8.0",
+    "vite": "^7.0.0"
+  }
+}

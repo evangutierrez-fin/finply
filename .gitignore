@@ -1,0 +1,16 @@
+# Dependencias
+node_modules/
+
+# Build
+dist/
+
+# Base de datos local (tus finanzas nunca salen de tu máquina)
+data/
+
+# Sistema
+.DS_Store
+*.log
+*.local
+
+# Configuración local del editor/agente
+.claude/
