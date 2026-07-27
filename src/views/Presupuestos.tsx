@@ -44,7 +44,7 @@ export function Presupuestos() {
       return false
     }
     try {
-      await api.budgets.set({ profileId: profile.id, categoryId, amountCents: cents })
+      await api.budgets.set({ profileId: profile.id, categoryId, month, amountCents: cents })
       stamp('Fijado')
       setFormError(null)
       bump()
@@ -52,6 +52,25 @@ export function Presupuestos() {
     } catch (err) {
       setFormError((err as Error).message)
       return false
+    }
+  }
+
+  const copyPrevious = async () => {
+    try {
+      const { copiados } = await api.budgets.copy({
+        profileId: profile.id,
+        from: shiftMonth(month, -1),
+        to: month,
+      })
+      if (copiados === 0) {
+        setFormError(`${monthLabel(shiftMonth(month, -1))} no tiene presupuestos que copiar`)
+        return
+      }
+      stamp('Copiado')
+      setFormError(null)
+      bump()
+    } catch (err) {
+      setFormError((err as Error).message)
     }
   }
 
@@ -79,11 +98,14 @@ export function Presupuestos() {
 
       {budgets && budgets.length === 0 ? (
         <div className="vacio">
-          <p className="vacio-titulo">Sin presupuestos fijados.</p>
+          <p className="vacio-titulo">Sin presupuestos en {monthLabel(month)}.</p>
           <p className="vacio-sub">
-            Ponle un techo mensual a cada categoría de gasto y Finply te dirá cuánto te queda
-            conforme registras movimientos.
+            Cada mes lleva sus propios topes. Ponle un techo a cada categoría de gasto y Finply
+            te dirá cuánto te queda conforme registras movimientos.
           </p>
+          <button type="button" className="btn btn-fantasma btn-chico" onClick={copyPrevious}>
+            Copiar los de {monthLabel(shiftMonth(month, -1))}
+          </button>
         </div>
       ) : (
         budgets && (
@@ -229,6 +251,14 @@ export function Presupuestos() {
             <button type="submit" className="btn btn-primario btn-chico">Fijar</button>
           </form>
           {formError && <p className="forma-error" role="alert">{formError}</p>}
+          {budgets && budgets.length > 0 && (
+            <p className="presup-pie">
+              <button type="button" className="btn-liga" onClick={copyPrevious}>
+                Traer los topes de {monthLabel(shiftMonth(month, -1))}
+              </button>
+              {' · no toca los que ya fijaste en este mes'}
+            </p>
+          )}
         </section>
       )}
     </div>

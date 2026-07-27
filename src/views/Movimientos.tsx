@@ -1,10 +1,17 @@
 import { useEffect, useState } from 'react'
-import { api } from '../api.ts'
+import { api, type TxFilters } from '../api.ts'
 import { useApp } from '../context.ts'
 import { useFetch } from '../hooks.ts'
-import { currentMonth, fmtDate, monthLabel, shiftMonth } from '../format.ts'
+import { currentMonth, fmtDate, monthLabel, parseAmount, shiftMonth } from '../format.ts'
 import { Money } from '../components/Money.tsx'
 import type { Tx } from '../../shared/types.ts'
+
+const POR_PAGINA = 50
+
+/** La app escucha `hashchange`, así que basta con cambiar el hash. */
+function irAImportar() {
+  window.location.hash = '#/importar'
+}
 
 export function Movimientos() {
   const { profile, refreshKey, openTx, bump, stamp } = useApp()
@@ -15,23 +22,50 @@ export function Movimientos() {
   const [q, setQ] = useState('')
   const [deletingId, setDeletingId] = useState<number | null>(null)
 
+  // Filtros avanzados: ocultos por omisión para no saturar la vista diaria.
+  const [avanzados, setAvanzados] = useState(false)
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+  const [minInput, setMinInput] = useState('')
+  const [maxInput, setMaxInput] = useState('')
+  const [tagId, setTagId] = useState(0)
+
+  const [pagina, setPagina] = useState(0)
+
   // El buscador espera a que dejes de teclear antes de consultar.
   useEffect(() => {
     const timer = setTimeout(() => setQ(qInput.trim()), 300)
     return () => clearTimeout(timer)
   }, [qInput])
 
+  const minCents = parseAmount(minInput) ?? undefined
+  const maxCents = parseAmount(maxInput) ?? undefined
+  const porRango = Boolean(from || to)
+
+  const filtros: TxFilters = {
+    profileId: profile.id,
+    // Un rango explícito reemplaza al mes; el servidor aplica la misma regla.
+    month: porRango ? undefined : month,
+    from: from || undefined,
+    to: to || undefined,
+    accountId: accountId || undefined,
+    type: type || undefined,
+    tagId: tagId || undefined,
+    minCents,
+    maxCents,
+    q: q || undefined,
+  }
+
+  // Cualquier cambio de filtro vuelve a la primera página: quedarse en la
+  // página 4 de un resultado de 10 filas se ve como "no hay nada".
+  const claveFiltros = JSON.stringify(filtros)
+  useEffect(() => setPagina(0), [claveFiltros])
+
   const { data: accounts } = useFetch(() => api.accounts.list(profile.id), [profile.id, refreshKey])
-  const { data: txs, error } = useFetch(
-    () =>
-      api.tx.list({
-        profileId: profile.id,
-        month,
-        accountId: accountId || undefined,
-        type: type || undefined,
-        q: q || undefined,
-      }),
-    [profile.id, month, accountId, type, q, refreshKey],
+  const { data: tags } = useFetch(() => api.tags.list(profile.id), [profile.id, refreshKey])
+  const { data: page, error } = useFetch(
+    () => api.tx.list({ ...filtros, limit: POR_PAGINA, offset: pagina * POR_PAGINA }),
+    [claveFiltros, pagina, refreshKey],
   )
 
   const remove = async (tx: Tx) => {
@@ -45,17 +79,36 @@ export function Movimientos() {
     setDeletingId(null)
   }
 
-  const cargos = (txs ?? []).filter((t) => t.type === 'gasto').reduce((s, t) => s + t.amountCents, 0)
-  const abonos = (txs ?? []).filter((t) => t.type === 'ingreso').reduce((s, t) => s + t.amountCents, 0)
+  const txs = page?.items ?? []
+  const total = page?.total ?? 0
+  const paginas = Math.max(1, Math.ceil(total / POR_PAGINA))
+  const hayFiltro = Boolean(q || accountId || type || tagId || from || to || minInput || maxInput)
+
+  const limpiar = () => {
+    setFrom('')
+    setTo('')
+    setMinInput('')
+    setMaxInput('')
+    setTagId(0)
+    setAccountId(0)
+    setType('')
+    setQInput('')
+  }
 
   return (
     <div className="vista">
       <header className="vista-head">
         <h1>Movimientos</h1>
         <div className="mes-nav">
-          <button type="button" className="mes-flecha" onClick={() => setMonth(shiftMonth(month, -1))} aria-label="Mes anterior">‹</button>
-          <span className="vista-mes">{monthLabel(month)}</span>
-          <button type="button" className="mes-flecha" onClick={() => setMonth(shiftMonth(month, 1))} aria-label="Mes siguiente">›</button>
+          {porRango ? (
+            <span className="vista-mes">Rango elegido</span>
+          ) : (
+            <>
+              <button type="button" className="mes-flecha" onClick={() => setMonth(shiftMonth(month, -1))} aria-label="Mes anterior">‹</button>
+              <span className="vista-mes">{monthLabel(month)}</span>
+              <button type="button" className="mes-flecha" onClick={() => setMonth(shiftMonth(month, 1))} aria-label="Mes siguiente">›</button>
+            </>
+          )}
         </div>
       </header>
 
@@ -89,92 +142,187 @@ export function Movimientos() {
           onChange={(e) => setQInput(e.target.value)}
           aria-label="Buscar"
         />
+        <button
+          type="button"
+          className="btn btn-fantasma btn-chico"
+          aria-expanded={avanzados}
+          onClick={() => setAvanzados((v) => !v)}
+        >
+          {avanzados ? 'Menos filtros' : 'Más filtros'}
+        </button>
       </div>
+
+      {avanzados && (
+        <div className="filtros filtros-avanzados">
+          <label className="filtro-campo">
+            <span className="filtro-label">Desde</span>
+            <input type="date" className="filtro" value={from} onChange={(e) => setFrom(e.target.value)} />
+          </label>
+          <label className="filtro-campo">
+            <span className="filtro-label">Hasta</span>
+            <input type="date" className="filtro" value={to} onChange={(e) => setTo(e.target.value)} />
+          </label>
+          <label className="filtro-campo">
+            <span className="filtro-label">Monto mínimo</span>
+            <input className="filtro" inputMode="decimal" placeholder="0.00" value={minInput} onChange={(e) => setMinInput(e.target.value)} />
+          </label>
+          <label className="filtro-campo">
+            <span className="filtro-label">Monto máximo</span>
+            <input className="filtro" inputMode="decimal" placeholder="Sin tope" value={maxInput} onChange={(e) => setMaxInput(e.target.value)} />
+          </label>
+          <label className="filtro-campo">
+            <span className="filtro-label">Etiqueta</span>
+            <select className="filtro" value={tagId} onChange={(e) => setTagId(Number(e.target.value))}>
+              <option value={0}>Cualquiera</option>
+              {(tags ?? []).map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          </label>
+          {hayFiltro && (
+            <button type="button" className="btn-liga" onClick={limpiar}>Limpiar filtros</button>
+          )}
+        </div>
+      )}
 
       {error && <p className="aviso" role="alert">{error}</p>}
 
-      {txs && txs.length === 0 ? (
+      {page && txs.length === 0 ? (
         <div className="vacio">
-          <p className="vacio-titulo">Este mes está en blanco.</p>
+          <p className="vacio-titulo">{porRango ? 'Nada en ese rango.' : 'Este mes está en blanco.'}</p>
           <p className="vacio-sub">
-            {q || accountId || type
+            {hayFiltro
               ? 'Ningún movimiento coincide con los filtros.'
               : 'Registra el primer movimiento del periodo.'}
           </p>
-          {!q && !accountId && !type && (
-            <button type="button" className="btn btn-primario" onClick={() => openTx()}>
-              ＋ Registrar movimiento
-            </button>
+          {!hayFiltro && (
+            <div className="vacio-acciones">
+              <button type="button" className="btn btn-primario" onClick={() => openTx()}>
+                ＋ Registrar movimiento
+              </button>
+              <button type="button" className="btn btn-fantasma" onClick={irAImportar}>
+                ↑ Importar CSV
+              </button>
+            </div>
           )}
         </div>
       ) : (
-        <table className="libro">
-          <thead>
-            <tr>
-              <th className="col-fecha">Fecha</th>
-              <th>Concepto</th>
-              <th className="col-cuenta">Cuenta</th>
-              <th className="col-monto">Cargo</th>
-              <th className="col-monto">Abono</th>
-              <th className="col-acciones"><span className="sr-only">Acciones</span></th>
-            </tr>
-          </thead>
-          <tbody>
-            {(txs ?? []).map((tx, i) => (
-              <tr key={tx.id} className="libro-fila" style={{ animationDelay: `${Math.min(i * 25, 400)}ms` }}>
-                <td className="col-fecha">{fmtDate(tx.date)}</td>
-                <td>
-                  <span className="mov-concepto">
-                    {tx.note || tx.categoryName || (tx.type === 'transferencia' ? 'Transferencia' : 'Sin concepto')}
-                  </span>
-                  {tx.categoryName && tx.note && <span className="mov-cat">{tx.categoryName}</span>}
-                  {tx.debtPaymentId && <span className="mov-cat">Abono de deuda</span>}
-                </td>
-                <td className="col-cuenta">
-                  {tx.type === 'transferencia'
-                    ? `${tx.accountName} → ${tx.transferAccountName}`
-                    : tx.accountName}
-                </td>
-                <td className={`col-monto${tx.type === 'transferencia' ? ' neutro' : ''}`}>
-                  {tx.type === 'gasto' && <Money cents={tx.amountCents} />}
-                  {tx.type === 'transferencia' && <Money cents={tx.amountCents} />}
-                </td>
-                <td className={`col-monto${tx.type === 'transferencia' ? ' neutro' : ''}`}>
-                  {tx.type === 'ingreso' && <Money cents={tx.amountCents} />}
-                  {tx.type === 'transferencia' && <Money cents={tx.amountCents} />}
-                </td>
-                <td className="col-acciones">
-                  {deletingId === tx.id ? (
-                    <span className="confirmar">
-                      <button type="button" className="btn-liga btn-liga-rojo" onClick={() => remove(tx)}>Anular</button>
-                      <button type="button" className="btn-liga" onClick={() => setDeletingId(null)}>No</button>
-                    </span>
-                  ) : (
-                    <span className="acciones">
-                      <button type="button" className="accion" onClick={() => openTx(tx)} aria-label="Corregir">✎</button>
-                      <button type="button" className="accion" onClick={() => setDeletingId(tx.id)} aria-label="Anular">✕</button>
-                    </span>
-                  )}
-                </td>
+        <>
+          <div className="libro-barra">
+            <span className="libro-cuenta">
+              {total} movimiento{total === 1 ? '' : 's'}
+              {paginas > 1 && ` · página ${pagina + 1} de ${paginas}`}
+            </span>
+            <span className="libro-barra-acciones">
+              <button type="button" className="btn btn-fantasma btn-chico" onClick={irAImportar}>
+                ↑ Importar CSV
+              </button>
+              <a className="btn btn-fantasma btn-chico" href={api.tx.exportUrl(filtros)}>
+                ↓ Exportar CSV
+              </a>
+            </span>
+          </div>
+
+          <table className="libro">
+            <thead>
+              <tr>
+                <th className="col-fecha">Fecha</th>
+                <th>Concepto</th>
+                <th className="col-cuenta">Cuenta</th>
+                <th className="col-monto">Cargo</th>
+                <th className="col-monto">Abono</th>
+                <th className="col-acciones"><span className="sr-only">Acciones</span></th>
               </tr>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr className="libro-suma">
-              <td colSpan={3}>Sumas del periodo</td>
-              <td className="col-monto"><Money cents={cargos} /></td>
-              <td className="col-monto"><Money cents={abonos} /></td>
-              <td />
-            </tr>
-            <tr className="libro-neto">
-              <td colSpan={3}>Neto</td>
-              <td colSpan={2} className="col-monto">
-                <span className="doble-raya"><Money cents={abonos - cargos} signed /></span>
-              </td>
-              <td />
-            </tr>
-          </tfoot>
-        </table>
+            </thead>
+            <tbody>
+              {txs.map((tx, i) => (
+                <tr key={tx.id} className="libro-fila" style={{ animationDelay: `${Math.min(i * 25, 400)}ms` }}>
+                  <td className="col-fecha">{fmtDate(tx.date)}</td>
+                  <td>
+                    <span className="mov-concepto">
+                      {tx.note || tx.categoryName || (tx.type === 'transferencia' ? 'Transferencia' : 'Sin concepto')}
+                    </span>
+                    {tx.categoryName && tx.note && <span className="mov-cat">{tx.categoryName}</span>}
+                    {tx.debtPaymentId && <span className="mov-cat">Abono de deuda</span>}
+                    {tx.tags.length > 0 && (
+                      <span className="mov-etiquetas">
+                        {tx.tags.map((t) => (
+                          <span className="chip chip-etiqueta" key={t.id}>{t.name}</span>
+                        ))}
+                      </span>
+                    )}
+                  </td>
+                  <td className="col-cuenta">
+                    {tx.type === 'transferencia'
+                      ? `${tx.accountName} → ${tx.transferAccountName}`
+                      : tx.accountName}
+                  </td>
+                  <td className={`col-monto${tx.type === 'transferencia' ? ' neutro' : ''}`}>
+                    {tx.type === 'gasto' && <Money cents={tx.amountCents} />}
+                    {tx.type === 'transferencia' && <Money cents={tx.amountCents} />}
+                  </td>
+                  <td className={`col-monto${tx.type === 'transferencia' ? ' neutro' : ''}`}>
+                    {tx.type === 'ingreso' && <Money cents={tx.amountCents} />}
+                    {tx.type === 'transferencia' && <Money cents={tx.amountCents} />}
+                  </td>
+                  <td className="col-acciones">
+                    {deletingId === tx.id ? (
+                      <span className="confirmar">
+                        <button type="button" className="btn-liga btn-liga-rojo" onClick={() => remove(tx)}>Anular</button>
+                        <button type="button" className="btn-liga" onClick={() => setDeletingId(null)}>No</button>
+                      </span>
+                    ) : (
+                      <span className="acciones">
+                        <button type="button" className="accion" onClick={() => openTx(tx)} aria-label="Corregir">✎</button>
+                        <button type="button" className="accion" onClick={() => setDeletingId(tx.id)} aria-label="Anular">✕</button>
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              {/* Las sumas son de todo el filtro, no de la página visible. */}
+              <tr className="libro-suma">
+                <td colSpan={3}>Sumas del periodo</td>
+                <td className="col-monto"><Money cents={page?.gastoCents ?? 0} /></td>
+                <td className="col-monto"><Money cents={page?.ingresoCents ?? 0} /></td>
+                <td />
+              </tr>
+              <tr className="libro-neto">
+                <td colSpan={3}>Neto</td>
+                <td colSpan={2} className="col-monto">
+                  <span className="doble-raya">
+                    <Money cents={(page?.ingresoCents ?? 0) - (page?.gastoCents ?? 0)} signed />
+                  </span>
+                </td>
+                <td />
+              </tr>
+            </tfoot>
+          </table>
+
+          {paginas > 1 && (
+            <nav className="paginacion" aria-label="Páginas de movimientos">
+              <button
+                type="button"
+                className="btn btn-fantasma btn-chico"
+                disabled={pagina === 0}
+                onClick={() => setPagina((p) => Math.max(0, p - 1))}
+              >
+                ‹ Anteriores
+              </button>
+              <span className="paginacion-estado">Página {pagina + 1} de {paginas}</span>
+              <button
+                type="button"
+                className="btn btn-fantasma btn-chico"
+                disabled={pagina + 1 >= paginas}
+                onClick={() => setPagina((p) => p + 1)}
+              >
+                Siguientes ›
+              </button>
+            </nav>
+          )}
+        </>
       )}
     </div>
   )

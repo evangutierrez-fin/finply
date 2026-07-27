@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { Account, Category, Tx, TxType } from '../../shared/types.ts'
+import type { Account, Category, Tag, Tx, TxType } from '../../shared/types.ts'
 import { api } from '../api.ts'
 import { parseAmount, todayISO } from '../format.ts'
 import { useApp } from '../context.ts'
@@ -31,20 +31,44 @@ export function TxModal({
   const [date, setDate] = useState(tx?.date ?? todayISO())
   const [note, setNote] = useState(tx?.note ?? '')
   const [newCategory, setNewCategory] = useState<string | null>(null)
+  const [tags, setTags] = useState<Tag[]>([])
+  const [tagIds, setTagIds] = useState<number[]>(tx?.tags.map((t) => t.id) ?? [])
+  const [newTag, setNewTag] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    Promise.all([api.accounts.list(profile.id), api.categories.list(profile.id)]).then(
-      ([accs, cats]) => {
+    Promise.all([
+      api.accounts.list(profile.id),
+      api.categories.list(profile.id),
+      api.tags.list(profile.id),
+    ]).then(
+      ([accs, cats, tgs]) => {
         setAccounts(accs)
         setCategories(cats)
+        setTags(tgs)
         const active = accs.filter((a) => !a.archived)
         if (!tx && active.length > 0) setAccountId((id) => id || active[0]!.id)
       },
       (err: Error) => setError(err.message),
     )
   }, [profile.id, tx])
+
+  const toggleTag = (id: number) =>
+    setTagIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
+
+  const addTag = async () => {
+    const name = newTag.trim()
+    if (!name) return
+    try {
+      const created = await api.tags.create({ profileId: profile.id, name })
+      setTags((prev) => (prev.some((t) => t.id === created.id) ? prev : [...prev, created]))
+      setTagIds((prev) => (prev.includes(created.id) ? prev : [...prev, created.id]))
+      setNewTag('')
+    } catch (err) {
+      setError((err as Error).message)
+    }
+  }
 
   const kind = type === 'ingreso' ? 'ingreso' : 'gasto'
   const options = useMemo(
@@ -91,6 +115,7 @@ export function TxModal({
         categoryId: type === 'transferencia' ? null : catId,
         note,
         transferAccountId: type === 'transferencia' ? transferAccountId || null : null,
+        tagIds,
       }
       if (tx) await api.tx.update(tx.id, draft)
       else await api.tx.create(draft)
@@ -238,6 +263,44 @@ export function TxModal({
             />
           </label>
         </div>
+
+        <fieldset className="campo campo-fieldset">
+          <legend className="campo-label">Etiquetas</legend>
+          {tags.length > 0 && (
+            <div className="etiquetas-picker">
+              {tags.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  aria-pressed={tagIds.includes(t.id)}
+                  className={`chip chip-etiqueta chip-boton${tagIds.includes(t.id) ? ' activa' : ''}`}
+                  onClick={() => toggleTag(t.id)}
+                >
+                  {t.name}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="campo-inline">
+            <input
+              className="campo-input"
+              placeholder="Nueva etiqueta…"
+              maxLength={30}
+              value={newTag}
+              onChange={(e) => setNewTag(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  void addTag()
+                }
+              }}
+              aria-label="Nueva etiqueta"
+            />
+            <button type="button" className="btn-liga" onClick={() => void addTag()} disabled={!newTag.trim()}>
+              Agregar
+            </button>
+          </div>
+        </fieldset>
 
         {error && <p className="forma-error" role="alert">{error}</p>}
 

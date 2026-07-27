@@ -14,3 +14,6 @@ data/
 
 # Configuración local del editor/agente
 .claude/
+
+# Documento de trabajo local (la hoja de ruta pública vive en el README)
+PLAN.md

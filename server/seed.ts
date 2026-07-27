@@ -217,15 +217,54 @@ inTransaction(() => {
   insertEntry.run(btc, 'valuacion', 274500, '2026-07-18', '')
 
   // ── Presupuestos ──────────────────────────────────────────────────────
+  // Un tope por categoría y por mes: julio afloja en Ocio y aprieta en Súper,
+  // como pasa de verdad cuando ajustas el plan sobre la marcha.
   const insertBudget = db.prepare(
-    'INSERT INTO budgets (profile_id, category_id, amount_cents) VALUES (?, ?, ?)',
+    'INSERT INTO budgets (profile_id, category_id, month, amount_cents) VALUES (?, ?, ?, ?)',
   )
-  insertBudget.run(personal, cSuper, 350000)
-  insertBudget.run(personal, cComida, 90000)
-  insertBudget.run(personal, cTransporte, 90000)
-  insertBudget.run(personal, cOcio, 80000)
-  insertBudget.run(negocio, nInsumos, 1500000)
-  insertBudget.run(negocio, nServicios, 120000)
+  for (const m of months) {
+    insertBudget.run(personal, cSuper, m, m === '2026-07' ? 320000 : 350000)
+    insertBudget.run(personal, cComida, m, 90000)
+    insertBudget.run(personal, cTransporte, m, 90000)
+    insertBudget.run(personal, cOcio, m, m === '2026-07' ? 120000 : 80000)
+    insertBudget.run(negocio, nInsumos, m, 1500000)
+    insertBudget.run(negocio, nServicios, m, 120000)
+  }
+
+  // ── Etiquetas ─────────────────────────────────────────────────────────
+  // Cruzan categorías: el mismo viaje lleva comida, transporte y hospedaje.
+  const insertTag = db.prepare('INSERT INTO tags (profile_id, name) VALUES (?, ?)')
+  const tagId = (profileId: number, name: string) =>
+    Number(insertTag.run(profileId, name).lastInsertRowid)
+
+  const tViaje = tagId(personal, 'viaje Oaxaca')
+  const tFijo = tagId(personal, 'gasto fijo')
+  const tReembolsable = tagId(personal, 'reembolsable')
+  const tDeducible = tagId(negocio, 'deducible')
+  const tProveedor = tagId(negocio, 'proveedor clave')
+
+  const etiquetar = db.prepare(
+    'INSERT OR IGNORE INTO transaction_tags (transaction_id, tag_id) VALUES (?, ?)',
+  )
+  /** Etiqueta los movimientos de un perfil cuyo concepto contenga el texto. */
+  const etiquetarPor = (profileId: number, like: string, tag: number, limite = 99) => {
+    const filas = db
+      .prepare(
+        'SELECT id FROM transactions WHERE profile_id = ? AND note LIKE ? ORDER BY date DESC LIMIT ?',
+      )
+      .all(profileId, `%${like}%`, limite) as { id: number }[]
+    for (const fila of filas) etiquetar.run(fila.id, tag)
+  }
+
+  etiquetarPor(personal, 'Renta', tFijo)
+  etiquetarPor(personal, 'Luz CFE', tFijo)
+  etiquetarPor(personal, 'Internet', tFijo)
+  etiquetarPor(personal, 'Comida corrida', tViaje, 3)
+  etiquetarPor(personal, 'Proyecto freelance', tReembolsable)
+  etiquetarPor(negocio, 'Proveedor', tProveedor)
+  etiquetarPor(negocio, 'Insumos cocina', tProveedor)
+  etiquetarPor(negocio, 'Nómina', tDeducible)
+  etiquetarPor(negocio, 'Renta local', tDeducible)
 
   // ── Metas ─────────────────────────────────────────────────────────────
   const insertGoal = db.prepare(

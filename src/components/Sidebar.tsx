@@ -10,6 +10,9 @@ export type View =
   | 'presupuestos'
   | 'metas'
   | 'notas'
+  | 'taxonomia'
+  | 'importar'
+  | 'ajustes'
 
 export type ThemePref = 'claro' | 'oscuro' | 'auto'
 
@@ -20,6 +23,7 @@ const NAV_GROUPS: { label: string | null; items: { id: View; label: string }[] }
     items: [
       { id: 'movimientos', label: 'Movimientos' },
       { id: 'cuentas', label: 'Cuentas' },
+      { id: 'taxonomia', label: 'Categorías' },
     ],
   },
   {
@@ -178,14 +182,26 @@ export function Sidebar({
       </nav>
 
       <div className="lomo-pie">
-        <button
-          type="button"
-          className="btn btn-fantasma btn-chico tema-btn"
-          onClick={onCycleTheme}
-          aria-label={`Tema: ${THEME_LABEL[theme]}. Cambiar`}
-        >
-          {THEME_LABEL[theme]}
-        </button>
+        <div className="lomo-pie-fila">
+          <button
+            type="button"
+            className="btn btn-fantasma btn-chico tema-btn"
+            onClick={onCycleTheme}
+            aria-label={`Tema: ${THEME_LABEL[theme]}. Cambiar`}
+          >
+            {THEME_LABEL[theme]}
+          </button>
+          {/* Ajustes es configuración de la app, no una sección del libro:
+              vive con el tema, no con Movimientos y Metas. */}
+          <button
+            type="button"
+            className={`btn btn-fantasma btn-chico ajustes-btn${view === 'ajustes' ? ' activa' : ''}`}
+            aria-current={view === 'ajustes' ? 'page' : undefined}
+            onClick={() => onNav('ajustes')}
+          >
+            ⚙ Ajustes
+          </button>
+        </div>
         <button type="button" className="btn btn-primario btn-registrar" onClick={onRegister}>
           ＋ Registrar movimiento
         </button>

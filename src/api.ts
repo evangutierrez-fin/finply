@@ -1,24 +1,83 @@
 import type {
-  Account, Budget, Category, Debt, DebtPayment, Goal, Investment, InvestmentEntryType,
-  Note, Profile, Summary, Tx, TxType,
+  Account, Budget, Category, Debt, DebtPayment, Goal, InformeImport, Investment,
+  InvestmentEntryType, LoteImport, MapeoImport, Note, Profile, ResultadoImport,
+  Summary, Tag, Tx, TxType,
 } from '../shared/types.ts'
 
-async function req<T>(url: string, options?: RequestInit): Promise<T> {
+/** Error de la API que conserva el código y el cuerpo, para poder reaccionar. */
+export class ApiError extends Error {
+  status: number
+  body: any
+  constructor(message: string, status: number, body: unknown) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.body = body
+  }
+}
+
+async function raw(url: string, options?: RequestInit): Promise<Response> {
   const res = await fetch(url, {
     headers: options?.body ? { 'Content-Type': 'application/json' } : undefined,
     ...options,
   })
   if (!res.ok) {
     let message = `Error ${res.status}`
+    let body: unknown = null
     try {
-      const body = await res.json()
-      if (body?.error) message = body.error
+      body = await res.json()
+      if ((body as any)?.error) message = (body as any).error
     } catch {
       // sin cuerpo JSON: se queda el mensaje genérico
     }
-    throw new Error(message)
+    throw new ApiError(message, res.status, body)
   }
-  return res.json() as Promise<T>
+  return res
+}
+
+async function req<T>(url: string, options?: RequestInit): Promise<T> {
+  return (await raw(url, options)).json() as Promise<T>
+}
+
+export interface TxPage {
+  items: Tx[]
+  /** Movimientos que cumplen el filtro, más allá de la página. */
+  total: number
+  /** Sumas de todo el filtro, no de la página. */
+  gastoCents: number
+  ingresoCents: number
+}
+
+export interface TxFilters {
+  profileId: number
+  month?: string
+  from?: string
+  to?: string
+  accountId?: number
+  type?: string
+  tagId?: number
+  minCents?: number
+  maxCents?: number
+  q?: string
+  limit?: number
+  offset?: number
+}
+
+function txSearch(params: TxFilters): URLSearchParams {
+  const search = new URLSearchParams()
+  search.set('profileId', String(params.profileId))
+  if (params.month) search.set('month', params.month)
+  if (params.from) search.set('from', params.from)
+  if (params.to) search.set('to', params.to)
+  if (params.accountId) search.set('accountId', String(params.accountId))
+  if (params.type) search.set('type', params.type)
+  if (params.tagId) search.set('tagId', String(params.tagId))
+  if (params.minCents !== undefined) search.set('minCents', String(params.minCents))
+  if (params.maxCents !== undefined) search.set('maxCents', String(params.maxCents))
+  if (params.q) search.set('q', params.q)
+  if (params.limit !== undefined) search.set('limit', String(params.limit))
+  if (params.offset) search.set('offset', String(params.offset))
+  return search
 }
 
 export interface TxDraft {
@@ -30,6 +89,20 @@ export interface TxDraft {
   categoryId?: number | null
   note?: string
   transferAccountId?: number | null
+  /** Ausente deja las etiquetas como estaban; arreglo vacío las quita. */
+  tagIds?: number[]
+}
+
+export interface ImportDraft {
+  profileId: number
+  csv: string
+  filename?: string
+  cuentaPorOmision: number
+  mapeo?: MapeoImport
+  separador?: string
+  crearCategorias?: boolean
+  crearEtiquetas?: boolean
+  omitirDuplicadas?: boolean
 }
 
 export interface DebtDraft {
@@ -66,19 +139,50 @@ export const api = {
     list: (profileId: number) => req<Category[]>(`/api/categories?profileId=${profileId}`),
     create: (data: { profileId: number; name: string; kind: 'ingreso' | 'gasto' }) =>
       req<Category>('/api/categories', { method: 'POST', body: JSON.stringify(data) }),
+    rename: (id: number, name: string) =>
+      req<Category>(`/api/categories/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
+    /** Sin `reassignTo` ni `force`, una categoría en uso responde 409 con txCount. */
+    remove: (id: number, options: { reassignTo?: number; force?: boolean } = {}) => {
+      const search = new URLSearchParams()
+      if (options.reassignTo) search.set('reassignTo', String(options.reassignTo))
+      if (options.force) search.set('force', 'true')
+      const qs = search.toString()
+      return req<{
+        ok: true
+        movimientosReasignados: number
+        movimientosSinCategoria: number
+        presupuestosBorrados: number
+      }>(`/api/categories/${id}${qs ? `?${qs}` : ''}`, { method: 'DELETE' })
+    },
+  },
+  tags: {
+    list: (profileId: number) => req<Tag[]>(`/api/tags?profileId=${profileId}`),
+    create: (data: { profileId: number; name: string }) =>
+      req<Tag>('/api/tags', { method: 'POST', body: JSON.stringify(data) }),
+    rename: (id: number, name: string) =>
+      req<Tag>(`/api/tags/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
+    remove: (id: number) => req<{ ok: true }>(`/api/tags/${id}`, { method: 'DELETE' }),
   },
   tx: {
-    list: (params: {
-      profileId: number; month?: string; accountId?: number; type?: string; q?: string
-    }) => {
-      const search = new URLSearchParams()
-      search.set('profileId', String(params.profileId))
-      if (params.month) search.set('month', params.month)
-      if (params.accountId) search.set('accountId', String(params.accountId))
-      if (params.type) search.set('type', params.type)
-      if (params.q) search.set('q', params.q)
-      return req<Tx[]>(`/api/transactions?${search}`)
+    /**
+     * Devuelve la página más los agregados de **todo** el filtro, que vienen
+     * en cabeceras: el pie del libro no debe sumar solo la página visible.
+     */
+    list: async (params: TxFilters): Promise<TxPage> => {
+      const res = await raw(`/api/transactions?${txSearch(params)}`)
+      const items = (await res.json()) as Tx[]
+      const num = (nombre: string, porOmision: number) => {
+        const valor = Number(res.headers.get(nombre))
+        return Number.isFinite(valor) ? valor : porOmision
+      }
+      return {
+        items,
+        total: num('X-Total-Count', items.length),
+        gastoCents: num('X-Sum-Gasto-Cents', 0),
+        ingresoCents: num('X-Sum-Ingreso-Cents', 0),
+      }
     },
+    exportUrl: (params: TxFilters) => `/api/transactions/export.csv?${txSearch(params)}`,
     create: (data: TxDraft) =>
       req<Tx>('/api/transactions', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: number, data: TxDraft) =>
@@ -124,8 +228,13 @@ export const api = {
   budgets: {
     list: (profileId: number, month: string) =>
       req<Budget[]>(`/api/budgets?profileId=${profileId}&month=${month}`),
-    set: (data: { profileId: number; categoryId: number; amountCents: number }) =>
-      req<{ ok: true }>('/api/budgets', { method: 'POST', body: JSON.stringify(data) }),
+    set: (data: { profileId: number; categoryId: number; month: string; amountCents: number }) =>
+      req<Budget>('/api/budgets', { method: 'POST', body: JSON.stringify(data) }),
+    copy: (data: { profileId: number; from: string; to: string }) =>
+      req<{ copiados: number; budgets: Budget[] }>('/api/budgets/copiar', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
     remove: (id: number) => req<{ ok: true }>(`/api/budgets/${id}`, { method: 'DELETE' }),
   },
   goals: {
@@ -151,6 +260,32 @@ export const api = {
       req<Note>(`/api/notes/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     remove: (id: number) => req<{ ok: true }>(`/api/notes/${id}`, { method: 'DELETE' }),
   },
+  importaciones: {
+    /** Analiza sin escribir nada. Devuelve el informe fila por fila. */
+    previsualizar: (data: ImportDraft) =>
+      req<InformeImport>('/api/importaciones/previsualizar', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    /** Escribe. `huella` obliga a que sea lo mismo que se previsualizó. */
+    ejecutar: (data: ImportDraft & { huella: string }) =>
+      req<ResultadoImport>('/api/importaciones', { method: 'POST', body: JSON.stringify(data) }),
+    lotes: (profileId: number) => req<LoteImport[]>(`/api/importaciones?profileId=${profileId}`),
+    deshacer: (id: number, profileId: number) =>
+      req<{ borradas: number }>(`/api/importaciones/${id}?profileId=${profileId}`, {
+        method: 'DELETE',
+      }),
+  },
   summary: (profileId: number, month: string) =>
     req<Summary>(`/api/summary?profileId=${profileId}&month=${month}`),
+  backup: {
+    /** El navegador descarga el archivo directo desde esta ruta. */
+    downloadUrl: '/api/respaldo',
+    info: () => req<{ dbPath: string }>('/api/respaldo/info'),
+    restore: (snapshot: unknown) =>
+      req<{ restaurados: Record<string, number> }>('/api/respaldo/restaurar', {
+        method: 'POST',
+        body: JSON.stringify(snapshot),
+      }),
+  },
 }

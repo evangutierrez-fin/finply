@@ -14,6 +14,7 @@
     "start": "node server/index.ts",
     "seed": "node server/seed.ts",
     "reset": "node server/seed.ts --empty",
+    "test": "node --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

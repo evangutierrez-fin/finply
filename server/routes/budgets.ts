@@ -1,56 +1,80 @@
 import { Router } from 'express'
-import { db } from '../db.ts'
-import { budgetInput } from '../validators.ts'
+import { db, httpError } from '../db.ts'
+import { budgetCopyInput, budgetInput, budgetQuery } from '../validators.ts'
 
 const router = Router()
 
-router.get('/', (req, res) => {
-  const profileId = Number(req.query.profileId)
-  const month = String(req.query.month ?? '')
-  if (!Number.isInteger(profileId) || profileId <= 0) {
-    return res.status(400).json({ error: 'Falta profileId' })
+function mapBudget(row: any) {
+  return {
+    id: row.id,
+    profileId: row.profile_id,
+    categoryId: row.category_id,
+    categoryName: row.category_name,
+    month: row.month,
+    amountCents: row.amount_cents,
+    spentCents: row.spent_cents,
   }
-  if (!/^\d{4}-\d{2}$/.test(month)) {
-    return res.status(400).json({ error: 'Mes inválido (AAAA-MM)' })
-  }
-  const rows: any[] = db
-    .prepare(
-      `SELECT b.id, b.profile_id, b.category_id, c.name AS category_name, b.amount_cents,
-        COALESCE((SELECT SUM(t.amount_cents) FROM transactions t
-          WHERE t.profile_id = b.profile_id AND t.category_id = b.category_id
-            AND t.type = 'gasto' AND substr(t.date, 1, 7) = ?), 0) AS spent_cents
-      FROM budgets b
-      JOIN categories c ON c.id = b.category_id
-      WHERE b.profile_id = ?
-      ORDER BY c.name ASC`,
-    )
-    .all(month, profileId)
-  res.json(
-    rows.map((r) => ({
-      id: r.id,
-      profileId: r.profile_id,
-      categoryId: r.category_id,
-      categoryName: r.category_name,
-      amountCents: r.amount_cents,
-      spentCents: r.spent_cents,
-    })),
-  )
-})
+}
 
-// Fijar o actualizar el presupuesto de una categoría (upsert).
-router.post('/', (req, res) => {
-  const input = budgetInput.parse(req.body)
+/** El tope y lo gastado son ambos del mes del presupuesto. */
+const BUDGET_SELECT = `
+  SELECT b.id, b.profile_id, b.category_id, b.month, b.amount_cents, c.name AS category_name,
+    COALESCE((SELECT SUM(t.amount_cents) FROM transactions t
+      WHERE t.profile_id = b.profile_id AND t.category_id = b.category_id
+        AND t.type = 'gasto' AND substr(t.date, 1, 7) = b.month), 0) AS spent_cents
+  FROM budgets b
+  JOIN categories c ON c.id = b.category_id
+`
+
+/** La categoría debe existir, ser del perfil y ser de gasto. */
+function ensureExpenseCategory(profileId: number, categoryId: number): void {
   const category = db
     .prepare("SELECT id FROM categories WHERE id = ? AND profile_id = ? AND kind = 'gasto'")
-    .get(input.categoryId, input.profileId)
+    .get(categoryId, profileId)
   if (!category) {
-    return res.status(400).json({ error: 'La categoría no es de gasto o no pertenece al perfil' })
+    throw httpError(400, 'La categoría no es de gasto o no pertenece al perfil')
   }
+}
+
+router.get('/', (req, res) => {
+  const { profileId, month } = budgetQuery.parse(req.query)
+  const rows: any[] = db
+    .prepare(`${BUDGET_SELECT} WHERE b.profile_id = ? AND b.month = ? ORDER BY c.name ASC`)
+    .all(profileId, month)
+  res.json(rows.map(mapBudget))
+})
+
+// Fijar o actualizar el tope de una categoría en un mes (upsert).
+router.post('/', (req, res) => {
+  const input = budgetInput.parse(req.body)
+  ensureExpenseCategory(input.profileId, input.categoryId)
   db.prepare(
-    `INSERT INTO budgets (profile_id, category_id, amount_cents) VALUES (?, ?, ?)
-     ON CONFLICT (profile_id, category_id) DO UPDATE SET amount_cents = excluded.amount_cents`,
-  ).run(input.profileId, input.categoryId, input.amountCents)
-  res.status(201).json({ ok: true })
+    `INSERT INTO budgets (profile_id, category_id, month, amount_cents) VALUES (?, ?, ?, ?)
+     ON CONFLICT (profile_id, category_id, month) DO UPDATE SET amount_cents = excluded.amount_cents`,
+  ).run(input.profileId, input.categoryId, input.month, input.amountCents)
+  const row: any = db
+    .prepare(`${BUDGET_SELECT} WHERE b.profile_id = ? AND b.category_id = ? AND b.month = ?`)
+    .get(input.profileId, input.categoryId, input.month)
+  res.status(201).json(mapBudget(row))
+})
+
+// Copiar los topes de un mes a otro. No pisa los que el mes destino ya tenga:
+// arrastrar el plan del mes pasado nunca debe borrar lo que ya ajustaste.
+router.post('/copiar', (req, res) => {
+  const { profileId, from, to } = budgetCopyInput.parse(req.body)
+  if (from === to) return res.status(400).json({ error: 'El mes origen y el destino son el mismo' })
+  const result = db
+    .prepare(
+      `INSERT INTO budgets (profile_id, category_id, month, amount_cents)
+       SELECT profile_id, category_id, ?, amount_cents FROM budgets
+       WHERE profile_id = ? AND month = ?
+       ON CONFLICT (profile_id, category_id, month) DO NOTHING`,
+    )
+    .run(to, profileId, from)
+  const rows: any[] = db
+    .prepare(`${BUDGET_SELECT} WHERE b.profile_id = ? AND b.month = ? ORDER BY c.name ASC`)
+    .all(profileId, to)
+  res.json({ copiados: Number(result.changes), budgets: rows.map(mapBudget) })
 })
 
 router.delete('/:id', (req, res) => {

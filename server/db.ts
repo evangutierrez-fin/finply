@@ -3,12 +3,33 @@ import { existsSync, mkdirSync, renameSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { ProfileKind } from '../shared/types.ts'
+import { migrate } from './migrations.ts'
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
-const dataDir = path.join(root, 'data')
-mkdirSync(dataDir, { recursive: true })
 
-const dbPath = path.join(dataDir, 'finply.db')
+// FINPLY_DB permite apuntar a otro archivo (las pruebas usan uno temporal
+// para no tocar nunca el libro real).
+const rutaPorOmision = path.join(root, 'data', 'finply.db')
+
+// Red de seguridad: bajo `node --test`, abrir la base por omisión significa
+// que alguien importó este módulo antes de fijar FINPLY_DB — casi siempre un
+// `import` estático de un módulo del servidor en un archivo de prueba, que se
+// eleva por encima de `levantar()`. Pasó una vez y llenó el libro real de
+// datos de prueba; mejor tronar aquí que descubrirlo después.
+if (process.env.NODE_TEST_CONTEXT && !process.env.FINPLY_DB) {
+  throw new Error(
+    'db.ts se cargó en una prueba sin FINPLY_DB. Algún archivo de prueba importa ' +
+      'un módulo del servidor de forma estática: usa `await import(...)` después de ' +
+      'levantar(), o mueve las funciones puras a un módulo que no toque la base.',
+  )
+}
+
+export const dbPath = process.env.FINPLY_DB
+  ? path.resolve(process.env.FINPLY_DB)
+  : rutaPorOmision
+
+export const dataDir = path.dirname(dbPath)
+mkdirSync(dataDir, { recursive: true })
 
 // Migración del nombre anterior (tomo.db) sin perder datos.
 const legacyPath = path.join(dataDir, 'tomo.db')
@@ -25,138 +46,7 @@ db.exec(`
   PRAGMA foreign_keys = ON;
 `)
 
-db.exec(`
-CREATE TABLE IF NOT EXISTS profiles (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  kind TEXT NOT NULL DEFAULT 'personal' CHECK (kind IN ('personal', 'negocio')),
-  accent TEXT NOT NULL DEFAULT 'verde' CHECK (accent IN ('verde', 'laton', 'cobalto', 'vino')),
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS accounts (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  type TEXT NOT NULL DEFAULT 'efectivo' CHECK (type IN ('efectivo', 'banco', 'tarjeta', 'ahorro', 'otro')),
-  currency TEXT NOT NULL DEFAULT 'MXN',
-  opening_cents INTEGER NOT NULL DEFAULT 0,
-  archived INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS categories (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('ingreso', 'gasto')),
-  UNIQUE (profile_id, name, kind)
-);
-
-CREATE TABLE IF NOT EXISTS debts (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-  direction TEXT NOT NULL CHECK (direction IN ('por_cobrar', 'por_pagar')),
-  counterparty TEXT NOT NULL,
-  concept TEXT NOT NULL DEFAULT '',
-  principal_cents INTEGER NOT NULL CHECK (principal_cents > 0),
-  start_date TEXT NOT NULL,
-  due_date TEXT,
-  status TEXT NOT NULL DEFAULT 'abierta' CHECK (status IN ('abierta', 'saldada')),
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS debt_payments (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  debt_id INTEGER NOT NULL REFERENCES debts(id) ON DELETE CASCADE,
-  amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
-  date TEXT NOT NULL,
-  note TEXT NOT NULL DEFAULT ''
-);
-
-CREATE TABLE IF NOT EXISTS transactions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-  account_id INTEGER NOT NULL REFERENCES accounts(id),
-  type TEXT NOT NULL CHECK (type IN ('ingreso', 'gasto', 'transferencia')),
-  amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
-  date TEXT NOT NULL,
-  category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
-  note TEXT NOT NULL DEFAULT '',
-  transfer_account_id INTEGER REFERENCES accounts(id),
-  debt_payment_id INTEGER REFERENCES debt_payments(id) ON DELETE SET NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS investments (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  kind TEXT NOT NULL DEFAULT 'otro' CHECK (kind IN ('cetes', 'acciones', 'cripto', 'fondo', 'inmueble', 'otro')),
-  note TEXT NOT NULL DEFAULT '',
-  archived INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS investment_entries (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  investment_id INTEGER NOT NULL REFERENCES investments(id) ON DELETE CASCADE,
-  type TEXT NOT NULL CHECK (type IN ('aporte', 'retiro', 'valuacion')),
-  amount_cents INTEGER NOT NULL CHECK (amount_cents >= 0),
-  date TEXT NOT NULL,
-  note TEXT NOT NULL DEFAULT ''
-);
-
-CREATE TABLE IF NOT EXISTS budgets (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-  category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
-  amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
-  UNIQUE (profile_id, category_id)
-);
-
-CREATE TABLE IF NOT EXISTS goals (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  target_cents INTEGER NOT NULL CHECK (target_cents > 0),
-  due_date TEXT,
-  note TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'activa' CHECK (status IN ('activa', 'cumplida')),
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS goal_entries (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  goal_id INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
-  amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
-  date TEXT NOT NULL,
-  note TEXT NOT NULL DEFAULT ''
-);
-
-CREATE TABLE IF NOT EXISTS notes (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-  title TEXT NOT NULL DEFAULT '',
-  body TEXT NOT NULL DEFAULT '',
-  pinned INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_tx_profile_date ON transactions(profile_id, date);
-CREATE INDEX IF NOT EXISTS idx_tx_account ON transactions(account_id);
-CREATE INDEX IF NOT EXISTS idx_accounts_profile ON accounts(profile_id);
-CREATE INDEX IF NOT EXISTS idx_debts_profile ON debts(profile_id);
-`)
-
-// Migración: bases creadas antes de Inversiones no tienen esta columna.
-const txColumns = db.prepare('PRAGMA table_info(transactions)').all() as { name: string }[]
-if (!txColumns.some((c) => c.name === 'investment_entry_id')) {
-  db.exec(
-    'ALTER TABLE transactions ADD COLUMN investment_entry_id INTEGER REFERENCES investment_entries(id) ON DELETE SET NULL',
-  )
-}
+migrate(db, { backupDir: path.join(dataDir, 'respaldos') })
 
 /** Ejecuta fn dentro de una transacción SQLite; revierte si lanza. */
 export function inTransaction<T>(fn: () => T): T {
@@ -168,6 +58,41 @@ export function inTransaction<T>(fn: () => T): T {
   } catch (err) {
     db.exec('ROLLBACK')
     throw err
+  }
+}
+
+/** Error con código HTTP, para que el middleware de errores lo traduzca. */
+export function httpError(status: number, message: string): Error {
+  return Object.assign(new Error(message), { status })
+}
+
+/** La cuenta debe existir y pertenecer al perfil. */
+export function ensureAccount(profileId: number, accountId: number): void {
+  const row = db
+    .prepare('SELECT id FROM accounts WHERE id = ? AND profile_id = ?')
+    .get(accountId, profileId)
+  if (!row) throw httpError(400, 'La cuenta no pertenece a este perfil')
+}
+
+/**
+ * La categoría debe existir, pertenecer al perfil y ser del mismo tipo que el
+ * movimiento: sin esto una partida puede acabar clasificada con la categoría
+ * de otro libro, o un gasto etiquetado con una categoría de ingreso.
+ */
+export function ensureCategory(
+  profileId: number,
+  categoryId: number,
+  txType: 'ingreso' | 'gasto',
+): void {
+  const row: any = db
+    .prepare('SELECT kind FROM categories WHERE id = ? AND profile_id = ?')
+    .get(categoryId, profileId)
+  if (!row) throw httpError(400, 'La categoría no pertenece a este perfil')
+  if (row.kind !== txType) {
+    throw httpError(
+      400,
+      `La categoría es de ${row.kind} y el movimiento es de ${txType}`,
+    )
   }
 }
 
@@ -266,7 +191,55 @@ export function mapTx(row: any) {
     transferAccountName: row.transfer_account_name ?? null,
     debtPaymentId: row.debt_payment_id,
     investmentEntryId: row.investment_entry_id ?? null,
+    tags: [] as { id: number; name: string }[],
   }
+}
+
+/** Todas las etiquetas deben existir y ser del perfil. */
+export function ensureTags(profileId: number, tagIds: number[]): void {
+  if (tagIds.length === 0) return
+  const rows = db
+    .prepare(
+      `SELECT id FROM tags WHERE profile_id = ? AND id IN (${tagIds.map(() => '?').join(',')})`,
+    )
+    .all(profileId, ...tagIds) as { id: number }[]
+  if (rows.length !== new Set(tagIds).size) {
+    throw httpError(400, 'Alguna etiqueta no pertenece a este perfil')
+  }
+}
+
+/** Reemplaza las etiquetas de un movimiento. Llamar dentro de una transacción. */
+export function setTxTags(txId: number, tagIds: number[]): void {
+  db.prepare('DELETE FROM transaction_tags WHERE transaction_id = ?').run(txId)
+  if (tagIds.length === 0) return
+  const insert = db.prepare(
+    'INSERT OR IGNORE INTO transaction_tags (transaction_id, tag_id) VALUES (?, ?)',
+  )
+  for (const tagId of new Set(tagIds)) insert.run(txId, tagId)
+}
+
+/**
+ * Etiquetas de varios movimientos en una sola consulta: evita el N+1 al
+ * listar (R11 — nada de una consulta por fila).
+ */
+export function attachTags(txs: { id: number; tags: { id: number; name: string }[] }[]): void {
+  if (txs.length === 0) return
+  const ids = txs.map((t) => t.id)
+  const rows = db
+    .prepare(
+      `SELECT tt.transaction_id, t.id, t.name FROM transaction_tags tt
+       JOIN tags t ON t.id = tt.tag_id
+       WHERE tt.transaction_id IN (${ids.map(() => '?').join(',')})
+       ORDER BY t.name ASC`,
+    )
+    .all(...ids) as { transaction_id: number; id: number; name: string }[]
+  const byTx = new Map<number, { id: number; name: string }[]>()
+  for (const r of rows) {
+    const list = byTx.get(r.transaction_id) ?? []
+    list.push({ id: r.id, name: r.name })
+    byTx.set(r.transaction_id, list)
+  }
+  for (const tx of txs) tx.tags = byTx.get(tx.id) ?? []
 }
 
 export function mapDebt(row: any) {

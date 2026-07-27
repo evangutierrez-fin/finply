@@ -262,7 +262,10 @@ input, select { font: inherit; color: inherit; }
   gap: 10px;
   padding-top: 14px;
 }
-.tema-btn { width: 100%; font-family: var(--f-mono); font-size: 12px; }
+.lomo-pie-fila { display: flex; gap: 6px; }
+.tema-btn { flex: 1; font-family: var(--f-mono); font-size: 12px; }
+.ajustes-btn { flex: 1; font-family: var(--f-mono); font-size: 12px; white-space: nowrap; }
+.ajustes-btn.activa { border-color: var(--acento); color: var(--acento); }
 .lomo-nota {
   font-family: var(--f-mono);
   font-size: 10px;
@@ -281,6 +284,8 @@ input, select { font: inherit; color: inherit; }
   font-weight: 600;
   padding: 9px 16px;
   border-radius: var(--radio);
+  /* Un botón puede ser un <a> (la descarga del respaldo): sin subrayado. */
+  text-decoration: none;
   transition: transform 0.14s ease, box-shadow 0.14s ease, filter 0.14s ease, background 0.14s ease;
 }
 .btn-primario {
@@ -1114,6 +1119,7 @@ select.campo-input { cursor: pointer; }
 }
 .presup-nuevo-forma .monto-wrap { flex: 0 0 170px; }
 .presup-nuevo .forma-error { margin-top: 12px; }
+.presup-pie { margin-top: 12px; font-size: 13px; color: var(--tinta-2); }
 
 /* ── metas ───────────────────────────────────────────────────────────── */
 .metas-resumen { font-size: 14px; color: var(--tinta-2); }
@@ -1226,6 +1232,149 @@ select.campo-input { cursor: pointer; }
 .patrimonio-total .doble-raya { padding-bottom: 3px; border-bottom-width: 5px; }
 
 /* ── estados ─────────────────────────────────────────────────────────── */
+/* ── filtros avanzados, paginación y etiquetas ────────────────────────── */
+.filtros-avanzados {
+  margin-top: -6px;
+  padding: 14px 16px;
+  background: var(--hoja);
+  border: 1px solid var(--regla);
+  border-radius: var(--radio);
+  align-items: flex-end;
+}
+.filtro-campo { display: flex; flex-direction: column; gap: 4px; }
+.filtro-label {
+  font-family: var(--f-mono);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--tinta-3);
+}
+
+.libro-barra {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.libro-cuenta { font-size: 13px; color: var(--tinta-2); font-family: var(--f-mono); }
+
+.mov-etiquetas { display: inline-flex; gap: 5px; flex-wrap: wrap; margin-left: 8px; }
+.chip-etiqueta {
+  font-size: 10.5px;
+  padding: 1px 7px;
+  background: var(--tinte-neutro);
+  border-color: var(--regla);
+  color: var(--tinta-2);
+}
+.chip-boton { cursor: pointer; transition: background 0.12s ease, color 0.12s ease; }
+.chip-boton.activa {
+  background: var(--acento);
+  border-color: var(--acento);
+  color: var(--boton-texto);
+}
+.etiquetas-picker { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+
+.paginacion {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 20px;
+}
+.paginacion-estado { font-size: 13px; color: var(--tinta-2); font-family: var(--f-mono); }
+.paginacion .btn:disabled { opacity: 0.4; cursor: default; }
+
+/* ── importar CSV ────────────────────────────────────────────────────── */
+.libro-barra-acciones { display: inline-flex; gap: 8px; flex-wrap: wrap; }
+.vacio-acciones { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 8px; }
+
+.import-controles {
+  display: flex;
+  gap: 20px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.import-mapeo {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 12px 16px;
+}
+.import-resumen { font-size: 15px; color: var(--tinta-2); margin-bottom: 12px; }
+.import-opciones {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin: 16px 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--regla);
+}
+/* La previa puede traer cientos de filas: se desplaza sola, sin empujar la
+   página a lo ancho. */
+.import-tabla-wrap { max-height: 460px; overflow: auto; border: 1px solid var(--regla); border-radius: var(--radio); }
+.import-tabla { margin: 0; }
+.import-tabla thead th { position: sticky; top: 0; background: var(--hoja); z-index: 1; }
+.previa-fila.estado-error { background: var(--rojo-tinte); }
+.previa-fila.estado-duplicada { opacity: 0.62; }
+.previa-motivo { font-size: 13px; color: var(--rojo-osc); }
+.import-pie { margin-top: 18px; }
+.chip-ambar { border-color: var(--laton); color: var(--laton); }
+
+/* ── categorías y etiquetas ──────────────────────────────────────────── */
+.taxo-lista { display: flex; flex-direction: column; }
+.taxo-fila {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--regla);
+}
+.taxo-fila:last-child { border-bottom: none; }
+.taxo-nombre { font-size: 15px; color: var(--tinta); text-align: left; }
+.taxo-cuenta {
+  margin-left: auto;
+  font-family: var(--f-mono);
+  font-size: 12px;
+  color: var(--tinta-3);
+  white-space: nowrap;
+}
+.taxo-editor { flex: 1; }
+.taxo-pendiente {
+  margin-bottom: 18px;
+  border-color: var(--rojo-borde);
+  background: var(--rojo-tinte);
+}
+.taxo-pendiente .hoja-titulo { color: var(--rojo-osc); }
+.taxo-pendiente-forma { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+
+/* ── ajustes ─────────────────────────────────────────────────────────── */
+.ajustes-bloque { margin-bottom: 18px; max-width: 680px; }
+.ajustes-texto { font-size: 14px; color: var(--tinta-2); margin-bottom: 14px; line-height: 1.55; }
+.ajustes-nota { font-size: 13px; color: var(--tinta-3); margin-top: 14px; line-height: 1.5; }
+.ajustes-ruta { margin-top: 4px; word-break: break-all; }
+.ajustes-bloque code {
+  font-family: var(--f-mono);
+  font-size: 0.92em;
+  background: var(--papel);
+  border: 1px solid var(--regla);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.ajustes-archivo { font-size: 13px; color: var(--tinta-2); }
+.ajustes-confirma {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid var(--rojo-borde);
+  background: var(--rojo-tinte);
+  border-radius: var(--radio);
+}
+.ajustes-confirma .ajustes-texto { color: var(--rojo-osc); margin-bottom: 12px; }
+.ajustes-confirma-forma { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.ajustes-confirma-forma .campo-input { flex: 0 0 180px; }
+.ajustes-ok { margin-top: 14px; font-size: 14px; color: var(--verde); }
+
 .vacio {
   display: flex;
   flex-direction: column;

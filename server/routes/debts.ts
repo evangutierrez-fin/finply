@@ -79,19 +79,23 @@ router.patch('/:id', (req, res) => {
   const existing: any = db.prepare('SELECT * FROM debts WHERE id = ?').get(id)
   if (!existing) return res.status(404).json({ error: 'Deuda no encontrada' })
   const input = debtPatch.parse(req.body)
-  db.prepare(
-    `UPDATE debts SET direction = ?, counterparty = ?, concept = ?, principal_cents = ?,
-      start_date = ?, due_date = ?, status = ? WHERE id = ?`,
-  ).run(
-    input.direction ?? existing.direction,
-    input.counterparty ?? existing.counterparty,
-    input.concept ?? existing.concept,
-    input.principalCents ?? existing.principal_cents,
-    input.startDate ?? existing.start_date,
-    input.dueDate === undefined ? existing.due_date : input.dueDate,
-    input.status ?? existing.status,
-    id,
-  )
+  inTransaction(() => {
+    db.prepare(
+      `UPDATE debts SET direction = ?, counterparty = ?, concept = ?, principal_cents = ?,
+        start_date = ?, due_date = ? WHERE id = ?`,
+    ).run(
+      input.direction ?? existing.direction,
+      input.counterparty ?? existing.counterparty,
+      input.concept ?? existing.concept,
+      input.principalCents ?? existing.principal_cents,
+      input.startDate ?? existing.start_date,
+      input.dueDate === undefined ? existing.due_date : input.dueDate,
+      id,
+    )
+    // El estado siempre se deriva de los abonos: cambiar el principal puede
+    // saldar la deuda (o reabrirla) sin que se haya tocado un solo abono.
+    refreshDebtStatus(id)
+  })
   res.json(debtWithPayments(id))
 })
 

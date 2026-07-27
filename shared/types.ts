@@ -33,6 +33,15 @@ export interface Category {
   profileId: number
   name: string
   kind: 'ingreso' | 'gasto'
+  /** Movimientos que la usan; sirve para avisar antes de borrarla. */
+  txCount: number
+}
+
+export interface Tag {
+  id: number
+  profileId: number
+  name: string
+  txCount: number
 }
 
 export interface Tx {
@@ -50,6 +59,7 @@ export interface Tx {
   transferAccountName: string | null
   debtPaymentId: number | null
   investmentEntryId: number | null
+  tags: { id: number; name: string }[]
 }
 
 export type DebtDirection = 'por_cobrar' | 'por_pagar'
@@ -120,6 +130,8 @@ export interface Budget {
   profileId: number
   categoryId: number
   categoryName: string
+  /** Mes al que aplica el tope, 'AAAA-MM'. */
+  month: string
   amountCents: number
   spentCents: number
 }
@@ -152,4 +164,67 @@ export interface Note {
   pinned: boolean
   createdAt: string
   updatedAt: string
+}
+
+// ── Importación de CSV ────────────────────────────────────────────────────
+
+export type CampoImport =
+  | 'fecha' | 'monto' | 'cargo' | 'abono' | 'tipo'
+  | 'cuenta' | 'cuentaDestino' | 'categoria' | 'etiquetas' | 'concepto'
+
+/** Campo → índice de columna en el archivo. */
+export type MapeoImport = Partial<Record<CampoImport, number>>
+
+export type EstadoFila = 'nueva' | 'duplicada' | 'error'
+
+export interface FilaAnalizada {
+  /** Número de línea en el archivo, contando el encabezado. */
+  linea: number
+  estado: EstadoFila
+  motivo?: string
+  date: string
+  type: TxType
+  amountCents: number
+  accountName: string
+  transferAccountName: string
+  categoryName: string
+  tagNames: string[]
+  note: string
+}
+
+export interface InformeImport {
+  /** Identifica lo analizado; importar exige que coincida con lo aprobado. */
+  huella: string
+  separador: string
+  encabezados: string[]
+  mapeo: MapeoImport
+  filas: FilaAnalizada[]
+  resumen: {
+    total: number
+    nuevas: number
+    duplicadas: number
+    errores: number
+    categoriasPorCrear: string[]
+    etiquetasPorCrear: string[]
+    cuentasNoEncontradas: string[]
+  }
+}
+
+export interface ResultadoImport {
+  batchId: number
+  importadas: number
+  omitidas: number
+  errores: number
+  categoriasCreadas: number
+  etiquetasCreadas: number
+}
+
+export interface LoteImport {
+  id: number
+  profileId: number
+  filename: string
+  rowCount: number
+  createdAt: string
+  /** Partidas que quedan del lote; menos que `rowCount` si anulaste algunas. */
+  vigentes: number
 }

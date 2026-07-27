@@ -13,10 +13,15 @@ import { Inversiones } from './views/Inversiones.tsx'
 import { Presupuestos } from './views/Presupuestos.tsx'
 import { Metas } from './views/Metas.tsx'
 import { Notas } from './views/Notas.tsx'
+import { Ajustes } from './views/Ajustes.tsx'
+import { Taxonomia } from './views/Taxonomia.tsx'
+import { Importar } from './views/Importar.tsx'
 
+// 'importar' no tiene entrada en el nav: se llega desde Movimientos, que es
+// donde uno la busca.
 const VIEWS: View[] = [
-  'resumen', 'movimientos', 'cuentas', 'deudas',
-  'inversiones', 'presupuestos', 'metas', 'notas',
+  'resumen', 'movimientos', 'cuentas', 'taxonomia', 'importar', 'deudas',
+  'inversiones', 'presupuestos', 'metas', 'notas', 'ajustes',
 ]
 
 const THEME_CYCLE: Record<ThemePref, ThemePref> = { claro: 'oscuro', oscuro: 'auto', auto: 'claro' }
@@ -220,11 +225,14 @@ export default function App() {
           {view === 'resumen' && <Resumen onNav={nav} />}
           {view === 'movimientos' && <Movimientos />}
           {view === 'cuentas' && <Cuentas />}
+          {view === 'taxonomia' && <Taxonomia />}
+          {view === 'importar' && <Importar onVerMovimientos={() => nav('movimientos')} />}
           {view === 'deudas' && <Deudas />}
           {view === 'inversiones' && <Inversiones />}
           {view === 'presupuestos' && <Presupuestos />}
           {view === 'metas' && <Metas />}
           {view === 'notas' && <Notas />}
+          {view === 'ajustes' && <Ajustes />}
         </main>
 
         {txModal.open && (
