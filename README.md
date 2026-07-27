@@ -63,6 +63,18 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   —tu línea de crédito se usa completa desde el primer día, que es lo que de
   verdad pasa— y genera las N parcialidades, cada una en su corte. El saldo al
   corte suma solo las parcialidades ya facturadas: nunca la compra dos veces.
+- **Recurrencias que proponen, no asientan** — la renta, las suscripciones, la
+  colegiatura o el sueldo quincenal. Finply calcula los periodos vencidos y te
+  los pone en una bandeja **por confirmar**; tú los asientas, los ajustas o los
+  descartas uno por uno. No hay modo automático y no lo va a haber: el valor de
+  llevar un libro es que nada entra sin que lo veas. Las propuestas ni siquiera
+  se guardan —se derivan de la plantilla cada vez—, así que si le subes a la
+  renta, lo pendiente sube y lo ya asentado no se toca. Y un periodo no puede
+  asentarse dos veces, ni con dos pestañas abiertas.
+- **Calendario de vencimientos** — 30, 60 o 90 días con todo lo que ya sabe tu
+  libro: recurrencias por confirmar, cortes de tarjeta con su fecha límite de
+  pago, la mensualidad que sigue de cada deuda con plazo y las parcialidades de
+  tus compras a meses. Es un recordatorio, no un cargo.
 - **Inversiones** — CETES, fondos, acciones, cripto o lo que sea: registra
   aportes y retiros (ligables a una cuenta) y valúa cuando quieras. Finply
   calcula el rendimiento y dibuja la evolución del valor.
@@ -152,17 +164,21 @@ server/          Express + node:sqlite
   importar.ts    análisis, ejecución y deshacer de importaciones
   tarjetas.ts    saldo al corte, línea disponible y compras a meses
   reportes.ts    agregados del año y serie de patrimonio (solo lectura)
+  recurrencias.ts plantillas y bandeja derivada de propuestas
+  calendario.ts  lo que vence en los próximos días (solo lectura)
   routes/        profiles · accounts · categories · tags · transactions · debts
                  · tarjetas · investments · budgets · goals · notes · summary
-                 · backup · importaciones
+                 · reportes · recurrencias · calendario · backup · importaciones
   seed.ts        datos demo deterministas
 shared/
   types.ts       tipos compartidos cliente/servidor
-  credito.ts     fechas de corte, amortización y parcialidades (módulo puro)
+  fechas.ts      aritmética de fechas: recorte de día, meses y semana ISO (puro)
+  credito.ts     amortización, parcialidades e interés devengado (puro)
+  recurrencias.ts periodos de una plantilla y su clave estable (puro)
 src/
   views/         Resumen · Movimientos · Cuentas · Categorías · Reportes
-                 · Tarjetas · Deudas · Inversiones · Presupuestos · Metas
-                 · Notas · Ajustes
+                 · Tarjetas · Deudas · Inversiones · Recurrencias · Calendario
+                 · Presupuestos · Metas · Notas · Ajustes
   components/    formularios, gráficas, sello, barra lateral
   styles/        tokens.css (temas claro/oscuro) + app.css
 test/            pruebas de integridad contra una base temporal
@@ -207,6 +223,11 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 | `GET /api/summary?profileId&month` | Resumen del mes + patrimonio en una llamada |
 | `GET /api/reportes?profileId&year` | El año: patrimonio mes a mes, ingresos vs gastos, categorías, etiquetas y tasa de ahorro |
 | `GET /api/reportes/comparativa?profileId&month` | Un mes contra el anterior, categoría por categoría |
+| `GET/POST /api/recurrencias` · `PATCH/DELETE /:id` | Plantillas de lo que se repite (mensual, quincenal, semanal, anual) |
+| `GET /api/recurrencias/pendientes?profileId` | La bandeja por confirmar. **Derivada**: no escribe ni guarda propuestas |
+| `POST /api/recurrencias/:id/asentar` | Crea el movimiento y marca el periodo, en una transacción. 409 si ya se resolvió |
+| `POST /api/recurrencias/:id/descartar` · `/reabrir` | Descartar no mueve el libro; reabrir deshace un descarte |
+| `GET /api/calendario?profileId&dias` | Lo que vence: recurrencias, cortes y pagos de tarjeta, deudas y parcialidades |
 | `GET /api/respaldo` · `GET /info` · `POST /restaurar` | Respaldo completo en JSON |
 
 Reglas de integridad que cuida el backend, todas cubiertas por `npm test`:
@@ -221,8 +242,11 @@ siempre se deriva del **capital** abonado contra el principal, nunca del total
 pagado; las parcialidades de una compra a meses suman
 exactamente su total y la amortización cuadra al centavo contra el monto
 original; y un movimiento nunca cruza de perfil, ni toma la cuenta o la
-categoría de otro libro —ni una categoría de ingreso para un gasto—. El libro
-siempre cuadra.
+categoría de otro libro —ni una categoría de ingreso para un gasto—; y una
+recurrencia no puede asentar dos veces el mismo periodo, porque la clave
+`(plantilla, periodo)` es única en la base y no una comprobación del código
+—si anulas el movimiento que asentaste, ese periodo vuelve solo a la bandeja—.
+El libro siempre cuadra.
 
 ## Sistema de diseño
 
@@ -242,12 +266,13 @@ Display: **Besley** (una Clarendon, la letra de la banca del XIX) · UI:
 
 **Siguiente**
 
-- Recurrencias (renta, suscripciones) y calendario de vencimientos. El motor
-  **propone** partidas y tú las asientas: Finply no escribe en tu libro solo.
+- Alertas en el tablero: presupuesto excedido, corte de tarjeta cerca, pago
+  vencido, meta en riesgo. Panel de análisis: gasto recurrente contra
+  discrecional, concentración por categoría, meses de colchón.
 
 **Después**
 
-- Alertas y análisis en el tablero · personalización de color
+- Personalización de color con validación de contraste
 - Inversiones con unidades, precio y rendimiento anualizado; simulador
   financiero. **Sin cotizaciones en línea**: valuación manual o CSV de precios,
   porque tus datos no salen de tu máquina.

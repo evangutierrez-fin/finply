@@ -1,0 +1,529 @@
+// Recurrencias: plantillas de lo que se repite y la bandeja de propuestas.
+//
+// El modelo, que es lo que hay que entender antes de tocar nada:
+//
+//   · La **plantilla** dice qué se repite y cada cuándo. No es un movimiento.
+//   · Las **propuestas no se guardan** (D7). La bandeja se calcula al vuelo:
+//     los periodos vencidos de cada plantilla, menos los que ya están
+//     resueltos. Ninguna lectura de este archivo escribe una sola fila.
+//   · En la base solo queda lo que el usuario resolvió: `recurrence_runs`, con
+//     `(recurrence_id, period)` UNIQUE. Esa restricción —no el código de la
+//     ruta— es la que hace imposible asentar dos veces el mismo periodo (R5).
+//   · Nada se asienta sin que el usuario lo confirme (R4). Aquí no hay motor
+//     que corra solo, ni tarea programada, ni modo automático: no existe.
+//
+// Si no abres Finply en tres meses, al volver ves los tres meses de propuestas.
+
+import {
+  attachTags,
+  db,
+  ensureAccount,
+  ensureCategory,
+  ensureTags,
+  getTx,
+  httpError,
+  inTransaction,
+  mapTx,
+  setTxTags,
+} from './db.ts'
+import { diasEntre, hoyISO, sumarDias } from '../shared/fechas.ts'
+import {
+  describirRecurrencia,
+  fechaDeOcurrencia,
+  ocurrencias,
+  type ReglaRecurrencia,
+} from '../shared/recurrencias.ts'
+import type { Bandeja, Propuesta, Recurrencia, Tx } from '../shared/types.ts'
+
+/** Hasta dónde se mira hacia adelante para decir "lo próximo que viene". */
+const HORIZONTE_DIAS = 400
+
+const REC_SELECT = `
+  SELECT r.*, a.name AS account_name, c.name AS category_name, ta.name AS transfer_account_name
+  FROM recurrences r
+  JOIN accounts a ON a.id = r.account_id
+  LEFT JOIN categories c ON c.id = r.category_id
+  LEFT JOIN accounts ta ON ta.id = r.transfer_account_id
+`
+
+export function reglaDe(row: any): ReglaRecurrencia {
+  return {
+    frequency: row.frequency,
+    dayOfMonth: row.day_of_month ?? null,
+    dayOfMonth2: row.day_of_month_2 ?? null,
+    monthOfYear: row.month_of_year ?? null,
+    weekday: row.weekday ?? null,
+    startDate: row.start_date,
+    endDate: row.end_date ?? null,
+  }
+}
+
+function mapRecurrencia(row: any): Recurrencia {
+  return {
+    id: row.id,
+    profileId: row.profile_id,
+    accountId: row.account_id,
+    accountName: row.account_name ?? '',
+    type: row.type,
+    amountCents: row.amount_cents,
+    categoryId: row.category_id ?? null,
+    categoryName: row.category_name ?? null,
+    transferAccountId: row.transfer_account_id ?? null,
+    transferAccountName: row.transfer_account_name ?? null,
+    note: row.note,
+    frequency: row.frequency,
+    dayOfMonth: row.day_of_month ?? null,
+    dayOfMonth2: row.day_of_month_2 ?? null,
+    monthOfYear: row.month_of_year ?? null,
+    weekday: row.weekday ?? null,
+    startDate: row.start_date,
+    endDate: row.end_date ?? null,
+    archived: row.archived === 1,
+    tags: [],
+    descripcion: describirRecurrencia(reglaDe(row)),
+    proximaFecha: null,
+    pendientes: 0,
+  }
+}
+
+/** Etiquetas de varias plantillas en una sola consulta (R11: nada de N+1). */
+function adjuntarEtiquetas(recs: { id: number; tags: { id: number; name: string }[] }[]): void {
+  if (recs.length === 0) return
+  const ids = recs.map((r) => r.id)
+  const filas = db
+    .prepare(
+      `SELECT rt.recurrence_id, t.id, t.name FROM recurrence_tags rt
+       JOIN tags t ON t.id = rt.tag_id
+       WHERE rt.recurrence_id IN (${ids.map(() => '?').join(',')})
+       ORDER BY t.name ASC`,
+    )
+    .all(...ids) as { recurrence_id: number; id: number; name: string }[]
+  const porRec = new Map<number, { id: number; name: string }[]>()
+  for (const f of filas) {
+    const lista = porRec.get(f.recurrence_id) ?? []
+    lista.push({ id: f.id, name: f.name })
+    porRec.set(f.recurrence_id, lista)
+  }
+  for (const rec of recs) rec.tags = porRec.get(rec.id) ?? []
+}
+
+/** Los periodos ya resueltos de varias plantillas, en una sola consulta. */
+function resueltosDe(ids: number[]): Map<number, Set<string>> {
+  const mapa = new Map<number, Set<string>>()
+  if (ids.length === 0) return mapa
+  const filas = db
+    .prepare(
+      `SELECT recurrence_id, period FROM recurrence_runs
+       WHERE recurrence_id IN (${ids.map(() => '?').join(',')})`,
+    )
+    .all(...ids) as { recurrence_id: number; period: string }[]
+  for (const f of filas) {
+    const set = mapa.get(f.recurrence_id) ?? new Set<string>()
+    set.add(f.period)
+    mapa.set(f.recurrence_id, set)
+  }
+  return mapa
+}
+
+function filas(profileId: number): any[] {
+  return db
+    .prepare(`${REC_SELECT} WHERE r.profile_id = ? ORDER BY r.archived ASC, r.id ASC`)
+    .all(profileId)
+}
+
+/**
+ * Las plantillas del perfil, cada una con lo que le falta por confirmar y con
+ * su próxima fecha. Las cuentas de periodos se hacen en JS, no en SQL, por la
+ * misma razón que las inversiones en los reportes: no es una suma, es una
+ * secuencia de fechas. Y son pocas plantillas, no la tabla grande (R11).
+ */
+export function listar(profileId: number, hoy = hoyISO()): Recurrencia[] {
+  const rows = filas(profileId)
+  const recs = rows.map(mapRecurrencia)
+  adjuntarEtiquetas(recs)
+  const resueltos = resueltosDe(recs.map((r) => r.id))
+  const horizonte = sumarDias(hoy, HORIZONTE_DIAS)
+
+  recs.forEach((rec, i) => {
+    if (rec.archived) return
+    const regla = reglaDe(rows[i]!)
+    const hechos = resueltos.get(rec.id) ?? new Set<string>()
+    rec.pendientes = ocurrencias(regla, { hasta: hoy }).lista.filter(
+      (o) => !hechos.has(o.periodo),
+    ).length
+    // Lo próximo que viene es lo próximo **sin resolver**: si ya adelantaste
+    // el pago de agosto, lo que sigue es septiembre.
+    rec.proximaFecha =
+      ocurrencias(regla, { desde: hoy, hasta: horizonte }).lista.find(
+        (o) => !hechos.has(o.periodo),
+      )?.fecha ?? null
+  })
+  return recs
+}
+
+export function obtener(profileId: number, id: number): Recurrencia | null {
+  const row: any = db.prepare(`${REC_SELECT} WHERE r.id = ? AND r.profile_id = ?`).get(id, profileId)
+  if (!row) return null
+  const rec = mapRecurrencia(row)
+  adjuntarEtiquetas([rec])
+  return rec
+}
+
+function fila(profileId: number, id: number): any {
+  const row: any = db
+    .prepare('SELECT * FROM recurrences WHERE id = ? AND profile_id = ?')
+    .get(id, profileId)
+  if (!row) throw httpError(404, 'Recurrencia no encontrada')
+  return row
+}
+
+// ── La bandeja: derivada, nunca guardada ──────────────────────────────────
+
+/**
+ * Lo que está vencido y sin resolver, de la propuesta más vieja a la más
+ * nueva: un atraso se pone al día empezando por lo de antes.
+ *
+ * Paginada porque una plantilla vieja puede tener cientos de periodos. Y ojo:
+ * `truncado` avisa que alguna plantilla llegó al tope de `MAX_PERIODOS`, es
+ * decir que hay más atraso del que cabe en una sola pasada.
+ */
+export function bandeja(
+  profileId: number,
+  hoy = hoyISO(),
+  pagina: { limit: number; offset: number } = { limit: 100, offset: 0 },
+): Bandeja {
+  const rows = filas(profileId).filter((r) => r.archived === 0)
+  const recs = rows.map(mapRecurrencia)
+  adjuntarEtiquetas(recs)
+  const resueltos = resueltosDe(recs.map((r) => r.id))
+
+  const todas: Propuesta[] = []
+  let truncado = false
+  rows.forEach((row, i) => {
+    const rec = recs[i]!
+    const hechos = resueltos.get(rec.id) ?? new Set<string>()
+    const { lista, truncado: cortado } = ocurrencias(reglaDe(row), { hasta: hoy })
+    if (cortado) truncado = true
+    for (const o of lista) {
+      if (hechos.has(o.periodo)) continue
+      todas.push({
+        recurrenceId: rec.id,
+        periodo: o.periodo,
+        fecha: o.fecha,
+        accountId: rec.accountId,
+        accountName: rec.accountName,
+        type: rec.type,
+        // El monto sale de la plantilla **hoy**: una propuesta se deriva, no
+        // se guardó nunca, así que si subió la renta la propuesta ya trae el
+        // monto nuevo. Lo ya asentado no se toca.
+        amountCents: rec.amountCents,
+        categoryId: rec.categoryId,
+        categoryName: rec.categoryName,
+        transferAccountId: rec.transferAccountId,
+        transferAccountName: rec.transferAccountName,
+        note: rec.note,
+        tags: rec.tags,
+        descripcion: rec.descripcion,
+        atraso: diasEntre(o.fecha, hoy),
+      })
+    }
+  })
+
+  todas.sort((a, b) => a.fecha.localeCompare(b.fecha) || a.recurrenceId - b.recurrenceId)
+  return {
+    items: todas.slice(pagina.offset, pagina.offset + pagina.limit),
+    total: todas.length,
+    truncado,
+  }
+}
+
+// ── Escrituras: siempre a petición del usuario ────────────────────────────
+
+export interface EntradaRecurrencia {
+  profileId: number
+  accountId: number
+  type: 'ingreso' | 'gasto' | 'transferencia'
+  amountCents: number
+  categoryId?: number | null
+  transferAccountId?: number | null
+  note: string
+  frequency: 'mensual' | 'quincenal' | 'semanal' | 'anual'
+  dayOfMonth?: number | null
+  dayOfMonth2?: number | null
+  monthOfYear?: number | null
+  weekday?: number | null
+  startDate: string
+  endDate?: string | null
+  tagIds?: number[]
+  archived?: boolean
+}
+
+/** Cuentas, categoría y etiquetas tienen que ser todas del mismo perfil. */
+function validarReferencias(input: EntradaRecurrencia): void {
+  ensureAccount(input.profileId, input.accountId)
+  if (input.type === 'transferencia') {
+    if (!input.transferAccountId) throw httpError(400, 'Elige la cuenta destino')
+    if (input.transferAccountId === input.accountId) {
+      throw httpError(400, 'Origen y destino deben ser distintas')
+    }
+    ensureAccount(input.profileId, input.transferAccountId)
+  } else if (input.categoryId) {
+    ensureCategory(input.profileId, input.categoryId, input.type)
+  }
+  if (input.tagIds) ensureTags(input.profileId, input.tagIds)
+}
+
+/** Reemplaza las etiquetas de una plantilla. Llamar dentro de una transacción. */
+function fijarEtiquetas(recurrenceId: number, tagIds: number[]): void {
+  db.prepare('DELETE FROM recurrence_tags WHERE recurrence_id = ?').run(recurrenceId)
+  const insert = db.prepare(
+    'INSERT OR IGNORE INTO recurrence_tags (recurrence_id, tag_id) VALUES (?, ?)',
+  )
+  for (const tagId of new Set(tagIds)) insert.run(recurrenceId, tagId)
+}
+
+/** Los campos del calendario que aplican a cada periodicidad; el resto, nulo. */
+function camposDeFrecuencia(input: EntradaRecurrencia) {
+  const esTransferencia = input.type === 'transferencia'
+  return {
+    categoryId: esTransferencia ? null : (input.categoryId ?? null),
+    transferAccountId: esTransferencia ? (input.transferAccountId ?? null) : null,
+    dayOfMonth: input.frequency === 'semanal' ? null : (input.dayOfMonth ?? null),
+    dayOfMonth2: input.frequency === 'quincenal' ? (input.dayOfMonth2 ?? 31) : null,
+    monthOfYear: input.frequency === 'anual' ? (input.monthOfYear ?? null) : null,
+    weekday: input.frequency === 'semanal' ? (input.weekday ?? null) : null,
+  }
+}
+
+export function crear(input: EntradaRecurrencia): Recurrencia {
+  validarReferencias(input)
+  const c = camposDeFrecuencia(input)
+  const id = inTransaction(() => {
+    const result = db
+      .prepare(
+        `INSERT INTO recurrences
+          (profile_id, account_id, type, amount_cents, category_id, transfer_account_id, note,
+           frequency, day_of_month, day_of_month_2, month_of_year, weekday, start_date, end_date)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        input.profileId,
+        input.accountId,
+        input.type,
+        input.amountCents,
+        c.categoryId,
+        c.transferAccountId,
+        input.note,
+        input.frequency,
+        c.dayOfMonth,
+        c.dayOfMonth2,
+        c.monthOfYear,
+        c.weekday,
+        input.startDate,
+        input.endDate ?? null,
+      )
+    const nuevo = Number(result.lastInsertRowid)
+    if (input.tagIds) fijarEtiquetas(nuevo, input.tagIds)
+    return nuevo
+  })
+  return obtener(input.profileId, id)!
+}
+
+/**
+ * Editar una plantilla **no** toca lo ya asentado: esos movimientos son
+ * historia y el dinero se movió. Las propuestas pendientes sí toman los datos
+ * nuevos, porque se derivan — si te subieron la renta, lo que falta por
+ * confirmar es la renta nueva.
+ */
+export function actualizar(id: number, input: EntradaRecurrencia): Recurrencia {
+  fila(input.profileId, id)
+  validarReferencias(input)
+  const c = camposDeFrecuencia(input)
+  inTransaction(() => {
+    db.prepare(
+      `UPDATE recurrences SET account_id = ?, type = ?, amount_cents = ?, category_id = ?,
+        transfer_account_id = ?, note = ?, frequency = ?, day_of_month = ?, day_of_month_2 = ?,
+        month_of_year = ?, weekday = ?, start_date = ?, end_date = ?, archived = ?
+       WHERE id = ?`,
+    ).run(
+      input.accountId,
+      input.type,
+      input.amountCents,
+      c.categoryId,
+      c.transferAccountId,
+      input.note,
+      input.frequency,
+      c.dayOfMonth,
+      c.dayOfMonth2,
+      c.monthOfYear,
+      c.weekday,
+      input.startDate,
+      input.endDate ?? null,
+      input.archived ? 1 : 0,
+      id,
+    )
+    if (input.tagIds) fijarEtiquetas(id, input.tagIds)
+  })
+  return obtener(input.profileId, id)!
+}
+
+/**
+ * Borrar la plantilla se lleva su bitácora de periodos, pero **deja en el
+ * libro los movimientos ya asentados**: ese dinero se movió. Es el mismo
+ * criterio que el desembolso de una deuda.
+ */
+export function borrar(profileId: number, id: number): { asentados: number } {
+  fila(profileId, id)
+  const row: any = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM recurrence_runs WHERE recurrence_id = ? AND status = 'asentado'`,
+    )
+    .get(id)
+  db.prepare('DELETE FROM recurrences WHERE id = ?').run(id)
+  return { asentados: row.n }
+}
+
+export interface Ajustes {
+  date?: string
+  amountCents?: number
+  categoryId?: number | null
+  transferAccountId?: number | null
+  accountId?: number
+  note?: string
+  tagIds?: number[]
+}
+
+/** Traduce el choque del UNIQUE en un 409 legible en vez de un 500. */
+function comoConflicto<T>(fn: () => T): T {
+  try {
+    return fn()
+  } catch (err) {
+    const mensaje = (err as Error).message ?? ''
+    if (/UNIQUE constraint failed: recurrence_runs/.test(mensaje)) {
+      throw httpError(409, 'Ese periodo ya se había resuelto')
+    }
+    throw err
+  }
+}
+
+function periodoResuelto(recurrenceId: number, periodo: string): any {
+  return db
+    .prepare('SELECT * FROM recurrence_runs WHERE recurrence_id = ? AND period = ?')
+    .get(recurrenceId, periodo)
+}
+
+/** La fecha que le toca a ese periodo, o un 400 si la clave no es de aquí. */
+function fechaDelPeriodo(row: any, periodo: string): string {
+  const fecha = fechaDeOcurrencia(reglaDe(row), periodo)
+  if (!fecha) throw httpError(400, 'Ese periodo no le corresponde a esta recurrencia')
+  return fecha
+}
+
+/**
+ * Asienta una propuesta: crea el movimiento y marca el periodo, **en una sola
+ * transacción**. Si algo falla, no queda ni el movimiento ni la marca.
+ *
+ * Los ajustes son de esta partida, no de la plantilla: pagar la renta de julio
+ * con $200 de más no reescribe la renta de todos los meses.
+ */
+export function asentar(
+  profileId: number,
+  id: number,
+  periodo: string,
+  ajustes: Ajustes = {},
+): Tx {
+  const row = fila(profileId, id)
+  const fecha = fechaDelPeriodo(row, periodo)
+  if (periodoResuelto(id, periodo)) throw httpError(409, 'Ese periodo ya se había resuelto')
+
+  const tipo = row.type as 'ingreso' | 'gasto' | 'transferencia'
+  const accountId = ajustes.accountId ?? row.account_id
+  const transferAccountId =
+    tipo === 'transferencia' ? (ajustes.transferAccountId ?? row.transfer_account_id) : null
+  const categoryId = tipo === 'transferencia' ? null : (ajustes.categoryId ?? row.category_id)
+  const amountCents = ajustes.amountCents ?? row.amount_cents
+  const etiquetas =
+    ajustes.tagIds ??
+    (
+      db
+        .prepare('SELECT tag_id FROM recurrence_tags WHERE recurrence_id = ?')
+        .all(id) as { tag_id: number }[]
+    ).map((t) => t.tag_id)
+
+  validarReferencias({
+    profileId,
+    accountId,
+    type: tipo,
+    amountCents,
+    categoryId,
+    transferAccountId,
+    note: '',
+    frequency: row.frequency,
+    startDate: row.start_date,
+    tagIds: etiquetas,
+  })
+
+  const txId = comoConflicto(() =>
+    inTransaction(() => {
+      const result = db
+        .prepare(
+          `INSERT INTO transactions
+            (profile_id, account_id, type, amount_cents, date, category_id, note, transfer_account_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          profileId,
+          accountId,
+          tipo,
+          amountCents,
+          ajustes.date ?? fecha,
+          categoryId,
+          ajustes.note ?? row.note,
+          transferAccountId,
+        )
+      const nuevo = Number(result.lastInsertRowid)
+      setTxTags(nuevo, etiquetas)
+      db.prepare(
+        `INSERT INTO recurrence_runs (recurrence_id, period, status, tx_id)
+         VALUES (?, ?, 'asentado', ?)`,
+      ).run(id, periodo, nuevo)
+      return nuevo
+    }),
+  )
+
+  const tx = mapTx(getTx(txId))
+  attachTags([tx])
+  return tx as Tx
+}
+
+/** Descartar solo escribe la marca: no se asienta nada en el libro. */
+export function descartar(profileId: number, id: number, periodo: string): void {
+  const row = fila(profileId, id)
+  fechaDelPeriodo(row, periodo)
+  if (periodoResuelto(id, periodo)) throw httpError(409, 'Ese periodo ya se había resuelto')
+  comoConflicto(() =>
+    db
+      .prepare(
+        `INSERT INTO recurrence_runs (recurrence_id, period, status) VALUES (?, ?, 'descartado')`,
+      )
+      .run(id, periodo),
+  )
+}
+
+/**
+ * Deshace un descarte y devuelve el periodo a la bandeja. Solo aplica a los
+ * descartados: un periodo asentado se deshace anulando su movimiento, que es
+ * donde de verdad está el dinero.
+ */
+export function reabrir(profileId: number, id: number, periodo: string): void {
+  fila(profileId, id)
+  const run: any = periodoResuelto(id, periodo)
+  if (!run) throw httpError(404, 'Ese periodo no estaba resuelto')
+  if (run.status !== 'descartado') {
+    throw httpError(
+      409,
+      'Ese periodo se asentó. Para deshacerlo, anula su movimiento en el libro.',
+    )
+  }
+  db.prepare('DELETE FROM recurrence_runs WHERE id = ?').run(run.id)
+}

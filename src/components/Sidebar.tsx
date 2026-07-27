@@ -14,6 +14,8 @@ export type View =
   | 'notas'
   | 'taxonomia'
   | 'importar'
+  | 'recurrencias'
+  | 'calendario'
   | 'ajustes'
 
 export type ThemePref = 'claro' | 'oscuro' | 'auto'
@@ -40,6 +42,8 @@ const NAV_GROUPS: { label: string | null; items: { id: View; label: string }[] }
   {
     label: 'Plan',
     items: [
+      { id: 'recurrencias', label: 'Recurrencias' },
+      { id: 'calendario', label: 'Calendario' },
       { id: 'presupuestos', label: 'Presupuestos' },
       { id: 'metas', label: 'Metas' },
       { id: 'notas', label: 'Notas' },

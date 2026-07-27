@@ -12,14 +12,8 @@
 //     cargo ancla. Si contara los dos, la tarjeta pediría el doble.
 
 import { db, ensureCategory, ensureTarjeta, httpError, inTransaction } from './db.ts'
-import {
-  fechasParcialidades,
-  hoyISO,
-  parcialidades,
-  siguienteDiaDelMes,
-  sumarMeses,
-  ultimoCorte,
-} from '../shared/credito.ts'
+import { fechasParcialidades, parcialidades } from '../shared/credito.ts'
+import { hoyISO, siguienteDiaDelMes, sumarMeses, ultimoCorte } from '../shared/fechas.ts'
 import type { CompraMSI, EstadoTarjeta } from '../shared/types.ts'
 
 /**

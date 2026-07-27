@@ -384,6 +384,64 @@ export const MIGRATIONS: Migration[] = [
       )
     },
   },
+  {
+    id: 9,
+    name: 'recurrencias y su bitácora de periodos resueltos',
+    up: (db) => {
+      // Puramente aditiva: tres tablas nuevas y ni un ALTER. Un libro que ya
+      // existía queda idéntico —sin plantillas, sin propuestas— y esta fase no
+      // puede tocarle un solo movimiento al migrar.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS recurrences (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+          type TEXT NOT NULL CHECK (type IN ('ingreso', 'gasto', 'transferencia')),
+          amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+          category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+          transfer_account_id INTEGER REFERENCES accounts(id) ON DELETE CASCADE,
+          note TEXT NOT NULL DEFAULT '',
+          frequency TEXT NOT NULL
+            CHECK (frequency IN ('mensual', 'quincenal', 'semanal', 'anual')),
+          day_of_month INTEGER CHECK (day_of_month IS NULL OR (day_of_month BETWEEN 1 AND 31)),
+          day_of_month_2 INTEGER CHECK (day_of_month_2 IS NULL OR (day_of_month_2 BETWEEN 1 AND 31)),
+          month_of_year INTEGER CHECK (month_of_year IS NULL OR (month_of_year BETWEEN 1 AND 12)),
+          weekday INTEGER CHECK (weekday IS NULL OR (weekday BETWEEN 1 AND 7)),
+          start_date TEXT NOT NULL,
+          end_date TEXT,
+          archived INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS recurrence_tags (
+          recurrence_id INTEGER NOT NULL REFERENCES recurrences(id) ON DELETE CASCADE,
+          tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+          PRIMARY KEY (recurrence_id, tag_id)
+        );
+
+        -- Aquí vive **solo lo resuelto**, nunca lo pendiente (D7): la bandeja
+        -- se deriva restando estas filas a los periodos vencidos, así que
+        -- ninguna lectura escribe. El UNIQUE es la red de R5: un doble clic o
+        -- dos pestañas no pueden asentar dos veces el mismo periodo.
+        --
+        -- tx_id cae en CASCADE a propósito: si anulas el movimiento que
+        -- asentaste, ese periodo vuelve a estar pendiente. El libro manda.
+        -- Un descarte no tiene movimiento, así que nunca se borra solo.
+        CREATE TABLE IF NOT EXISTS recurrence_runs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          recurrence_id INTEGER NOT NULL REFERENCES recurrences(id) ON DELETE CASCADE,
+          period TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('asentado', 'descartado')),
+          tx_id INTEGER REFERENCES transactions(id) ON DELETE CASCADE,
+          resolved_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+          UNIQUE (recurrence_id, period)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_recurrences_profile ON recurrences(profile_id);
+        CREATE INDEX IF NOT EXISTS idx_recurrence_runs_tx ON recurrence_runs(tx_id);
+      `)
+    },
+  },
 ]
 
 /** Versión de esquema que espera este código. */

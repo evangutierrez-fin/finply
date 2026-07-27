@@ -1,7 +1,8 @@
 import type {
-  Account, Amortizacion, Budget, Category, Comparativa, CompraMSI, Debt, DebtPayment,
-  EstadoTarjeta, Goal, InformeImport, Investment, InvestmentEntryType, LoteImport, MapeoImport,
-  Note, Profile, ReporteAnual, ResultadoImport, Summary, Tag, Tx, TxType,
+  Account, Amortizacion, Bandeja, Budget, Calendario, Category, Comparativa, CompraMSI, Debt,
+  DebtPayment, EstadoTarjeta, Frecuencia, Goal, InformeImport, Investment, InvestmentEntryType,
+  LoteImport, MapeoImport, Note, Profile, Recurrencia, ReporteAnual, ResultadoImport, Summary,
+  Tag, Tx, TxType,
 } from '../shared/types.ts'
 
 /** Error de la API que conserva el código y el cuerpo, para poder reaccionar. */
@@ -143,6 +144,37 @@ export interface MsiDraft {
   months: number
   purchaseDate: string
   categoryId?: number | null
+}
+
+export interface RecurrenciaDraft {
+  profileId: number
+  accountId: number
+  type: TxType
+  amountCents: number
+  categoryId?: number | null
+  transferAccountId?: number | null
+  note?: string
+  frequency: Frecuencia
+  dayOfMonth?: number | null
+  dayOfMonth2?: number | null
+  monthOfYear?: number | null
+  weekday?: number | null
+  startDate: string
+  endDate?: string | null
+  tagIds?: number[]
+  archived?: boolean
+}
+
+/** Cambios de **esta** partida al asentarla. No tocan la plantilla. */
+export interface AsentarDraft {
+  periodo: string
+  date?: string
+  amountCents?: number
+  categoryId?: number | null
+  transferAccountId?: number | null
+  accountId?: number
+  note?: string
+  tagIds?: number[]
 }
 
 export const api = {
@@ -328,6 +360,45 @@ export const api = {
         method: 'DELETE',
       }),
   },
+  recurrencias: {
+    list: (profileId: number) => req<Recurrencia[]>(`/api/recurrencias?profileId=${profileId}`),
+    /**
+     * La bandeja de propuestas. **No existe en la base**: se deriva de las
+     * plantillas menos los periodos ya resueltos, así que pedirla no escribe
+     * nada ni asienta nada.
+     */
+    pendientes: (profileId: number, limit = 100, offset = 0) =>
+      req<Bandeja>(
+        `/api/recurrencias/pendientes?profileId=${profileId}&limit=${limit}&offset=${offset}`,
+      ),
+    create: (data: RecurrenciaDraft) =>
+      req<Recurrencia>('/api/recurrencias', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: number, data: RecurrenciaDraft) =>
+      req<Recurrencia>(`/api/recurrencias/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    /** Los movimientos ya asentados se quedan en el libro; dice cuántos son. */
+    remove: (id: number, profileId: number) =>
+      req<{ ok: true; asentados: number }>(`/api/recurrencias/${id}?profileId=${profileId}`, {
+        method: 'DELETE',
+      }),
+    /** Lo único de esta sección que escribe en el libro, y siempre a petición. */
+    asentar: (id: number, profileId: number, data: AsentarDraft) =>
+      req<Tx>(`/api/recurrencias/${id}/asentar?profileId=${profileId}`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    descartar: (id: number, profileId: number, periodo: string) =>
+      req<{ ok: true }>(`/api/recurrencias/${id}/descartar?profileId=${profileId}`, {
+        method: 'POST',
+        body: JSON.stringify({ periodo }),
+      }),
+    reabrir: (id: number, profileId: number, periodo: string) =>
+      req<{ ok: true }>(`/api/recurrencias/${id}/reabrir?profileId=${profileId}`, {
+        method: 'POST',
+        body: JSON.stringify({ periodo }),
+      }),
+  },
+  calendario: (profileId: number, dias = 30) =>
+    req<Calendario>(`/api/calendario?profileId=${profileId}&dias=${dias}`),
   summary: (profileId: number, month: string) =>
     req<Summary>(`/api/summary?profileId=${profileId}&month=${month}`),
   reportes: {

@@ -36,12 +36,16 @@ const TABLES = [
   'budgets',
   'notes',
   'import_batches',
+  'recurrences',
+  'recurrence_tags',
   // Las compras a meses van antes que los movimientos: el cargo que las ancla
   // las referencia.
   'msi_purchases',
   'msi_installments',
   'transactions',
   'transaction_tags',
+  // Los periodos resueltos van hasta el final: apuntan al movimiento asentado.
+  'recurrence_runs',
 ] as const
 
 export interface Snapshot {

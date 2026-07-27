@@ -179,6 +179,89 @@ export const tarjetasQuery = z.object({
   hoy: isoDate.optional(),
 })
 
+// ── Recurrencias ──────────────────────────────────────────────────────────
+
+/**
+ * La clave de un periodo. Que tenga forma válida no basta: la ruta comprueba
+ * además que sea una clave que **esa** plantilla genere, y ahí es donde se
+ * rechaza un '2026-07-Q1' pedido a una recurrencia mensual.
+ */
+const periodo = z
+  .string()
+  .regex(/^\d{4}(-(\d{2}(-Q[12])?|W\d{2}))?$/, 'Periodo inválido')
+
+export const recurrenceInput = z
+  .object({
+    profileId: z.number().int().positive(),
+    accountId: z.number().int().positive(),
+    type: z.enum(['ingreso', 'gasto', 'transferencia']),
+    amountCents: z.number().int().positive('El monto debe ser mayor a cero'),
+    categoryId: z.number().int().positive().nullish(),
+    transferAccountId: z.number().int().positive().nullish(),
+    note: z.string().trim().max(200).default(''),
+    frequency: z.enum(['mensual', 'quincenal', 'semanal', 'anual']),
+    dayOfMonth: diaDelMes.nullish(),
+    /** Segunda quincena. 31 es "el último día del mes". */
+    dayOfMonth2: diaDelMes.nullish(),
+    monthOfYear: z.number().int().min(1, 'Mes inválido').max(12, 'Mes inválido').nullish(),
+    /** Día de la semana ISO: 1 = lunes … 7 = domingo. */
+    weekday: z.number().int().min(1, 'Día de la semana inválido').max(7, 'Día de la semana inválido').nullish(),
+    startDate: isoDate,
+    endDate: isoDate.nullish(),
+    tagIds: z.array(z.number().int().positive()).max(20).optional(),
+    archived: z.boolean().default(false),
+  })
+  .superRefine((r, ctx) => {
+    if (r.type === 'transferencia') {
+      if (!r.transferAccountId) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Elige la cuenta destino' })
+      } else if (r.transferAccountId === r.accountId) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Origen y destino deben ser distintas' })
+      }
+    }
+    if (r.endDate && r.endDate < r.startDate) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'La fecha de fin es anterior a la de inicio' })
+    }
+    // Dos quincenas el mismo día serían dos propuestas idénticas cada mes.
+    if (r.frequency === 'quincenal' && r.dayOfMonth && r.dayOfMonth2 === r.dayOfMonth) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Las dos quincenas no pueden caer el mismo día' })
+    }
+  })
+
+export const recurrenceQuery = z.object({
+  profileId: z.coerce.number().int().positive(),
+  /** Desde qué día se mira. Por omisión, hoy; las pruebas lo fijan. */
+  hoy: isoDate.optional(),
+})
+
+export const bandejaQuery = recurrenceQuery.extend({
+  limit: z.coerce.number().int().positive().max(200).default(100),
+  offset: z.coerce.number().int().nonnegative().default(0),
+})
+
+/** Ajustes de **esta** partida, que no tocan la plantilla. */
+export const asentarInput = z.object({
+  periodo,
+  date: isoDate.optional(),
+  amountCents: z.number().int().positive('El monto debe ser mayor a cero').optional(),
+  categoryId: z.number().int().positive().nullish(),
+  transferAccountId: z.number().int().positive().nullish(),
+  accountId: z.number().int().positive().optional(),
+  note: z.string().trim().max(200).optional(),
+  tagIds: z.array(z.number().int().positive()).max(20).optional(),
+})
+
+export const periodoInput = z.object({ periodo })
+
+export const calendarioQuery = recurrenceQuery.extend({
+  dias: z.coerce
+    .number()
+    .int()
+    .min(1, 'El calendario va de 1 a 365 días')
+    .max(365, 'El calendario va de 1 a 365 días')
+    .default(30),
+})
+
 export const investmentInput = z.object({
   profileId: z.number().int().positive(),
   name: z.string().trim().min(1, 'La inversión necesita un nombre').max(60),

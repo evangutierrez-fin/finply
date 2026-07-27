@@ -268,6 +268,68 @@ describe('migraciones', () => {
     db.close()
   })
 
+  test('un libro en la versión 8 estrena recurrencias sin estrenar propuestas', () => {
+    const db = baseEnVersion(8)
+    db.exec(`
+      INSERT INTO transactions (id, profile_id, account_id, type, amount_cents, date, note)
+        VALUES (2, 1, 1, 'gasto', 850000, '2026-07-01', 'Renta');
+    `)
+
+    migrate(db)
+
+    assert.equal((db.prepare('PRAGMA user_version').get() as any).user_version, SCHEMA_VERSION)
+
+    // La migración es puramente aditiva: nadie estrena plantillas ni
+    // propuestas, y nada del libro se movió.
+    for (const tabla of ['recurrences', 'recurrence_tags', 'recurrence_runs']) {
+      assert.equal(
+        (db.prepare(`SELECT COUNT(*) AS n FROM ${tabla}`).get() as any).n,
+        0,
+        `${tabla} debió nacer vacía`,
+      )
+    }
+    const movimiento = db.prepare('SELECT * FROM transactions WHERE id = 2').get() as any
+    assert.equal(movimiento.note, 'Renta')
+    assert.equal(movimiento.amount_cents, 850000)
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM transactions').get() as any).n, 2)
+    assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0)
+    db.close()
+  })
+
+  test('anular un movimiento se lleva el periodo que asentó', () => {
+    // Es la cascada que devuelve una propuesta a la bandeja cuando el usuario
+    // anula lo que había asentado. Vive en la base, no en la ruta.
+    const db = baseEnVersion(8)
+    migrate(db)
+    db.exec(`
+      INSERT INTO recurrences (id, profile_id, account_id, type, amount_cents, frequency,
+        day_of_month, start_date)
+        VALUES (1, 1, 1, 'gasto', 850000, 'mensual', 1, '2026-04-01');
+      INSERT INTO transactions (id, profile_id, account_id, type, amount_cents, date, note)
+        VALUES (2, 1, 1, 'gasto', 850000, '2026-07-01', 'Renta');
+      INSERT INTO recurrence_runs (recurrence_id, period, status, tx_id)
+        VALUES (1, '2026-07', 'asentado', 2);
+      INSERT INTO recurrence_runs (recurrence_id, period, status)
+        VALUES (1, '2026-06', 'descartado');
+    `)
+
+    // Y el mismo periodo no cabe dos veces: es la red de R5.
+    assert.throws(
+      () =>
+        db.exec(
+          `INSERT INTO recurrence_runs (recurrence_id, period, status)
+           VALUES (1, '2026-07', 'descartado')`,
+        ),
+      /UNIQUE/,
+    )
+
+    db.exec('DELETE FROM transactions WHERE id = 2')
+    const runs = db.prepare('SELECT * FROM recurrence_runs').all() as any[]
+    assert.equal(runs.length, 1, 'el asentado se fue con su movimiento')
+    assert.equal(runs[0].period, '2026-06', 'el descartado no tiene movimiento y se queda')
+    db.close()
+  })
+
   test('los CHECK de crédito rechazan datos imposibles', () => {
     const db = baseEnVersion(5)
     migrate(db)

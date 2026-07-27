@@ -248,6 +248,99 @@ export interface Comparativa {
   categorias: { name: string; actualCents: number; previoCents: number; deltaCents: number }[]
 }
 
+// ── Recurrencias y calendario ─────────────────────────────────────────────
+//
+// La automatización **propone**; el usuario asienta (R4). No existe un modo
+// que escriba solo. Las propuestas ni siquiera se guardan: se derivan de las
+// plantillas menos los periodos ya resueltos (D7).
+
+export type Frecuencia = 'mensual' | 'quincenal' | 'semanal' | 'anual'
+
+export interface Recurrencia {
+  id: number
+  profileId: number
+  accountId: number
+  accountName: string
+  type: TxType
+  amountCents: number
+  categoryId: number | null
+  categoryName: string | null
+  transferAccountId: number | null
+  transferAccountName: string | null
+  note: string
+  frequency: Frecuencia
+  /** Día del mes; en quincenal es el de la primera. 31 = el último del mes. */
+  dayOfMonth: number | null
+  dayOfMonth2: number | null
+  monthOfYear: number | null
+  /** Día de la semana ISO: 1 = lunes … 7 = domingo. */
+  weekday: number | null
+  startDate: string
+  endDate: string | null
+  archived: boolean
+  tags: { id: number; name: string }[]
+  /** Cómo se lee la periodicidad, ya en español. */
+  descripcion: string
+  /** Lo que viene, si es que viene algo. */
+  proximaFecha: string | null
+  /** Periodos vencidos sin resolver. Es lo que la bandeja va a proponer. */
+  pendientes: number
+}
+
+/**
+ * Una propuesta. No existe en la base: se calcula al vuelo y desaparece en
+ * cuanto el usuario la asienta o la descarta.
+ */
+export interface Propuesta {
+  recurrenceId: number
+  /** Clave del hueco: '2026-07', '2026-07-Q1', '2026-W31', '2026'. */
+  periodo: string
+  fecha: string
+  accountId: number
+  accountName: string
+  type: TxType
+  amountCents: number
+  categoryId: number | null
+  categoryName: string | null
+  transferAccountId: number | null
+  transferAccountName: string | null
+  note: string
+  tags: { id: number; name: string }[]
+  descripcion: string
+  /** Días de atraso respecto a hoy. Cero el mismo día. */
+  atraso: number
+}
+
+export interface Bandeja {
+  items: Propuesta[]
+  /** Propuestas que hay en total, más allá de esta página. */
+  total: number
+  /** Alguna plantilla llegó al tope de periodos: hay más de los que caben. */
+  truncado: boolean
+}
+
+export type TipoEvento = 'recurrencia' | 'corte' | 'pago_tarjeta' | 'deuda' | 'msi'
+
+/** Algo que vence. Todo derivado y de solo lectura (D9). */
+export interface EventoCalendario {
+  fecha: string
+  tipo: TipoEvento
+  titulo: string
+  detalle: string
+  /** `null` cuando el monto aún no se sabe (un corte que no ha ocurrido). */
+  montoCents: number | null
+  /** A qué apunta, para poder navegar hasta ahí. */
+  refId: number | null
+  /** Solo en recurrencias: identifica la propuesta. */
+  periodo?: string
+}
+
+export interface Calendario {
+  desde: string
+  hasta: string
+  eventos: EventoCalendario[]
+}
+
 export type InvestmentKind = 'cetes' | 'acciones' | 'cripto' | 'fondo' | 'inmueble' | 'otro'
 export type InvestmentEntryType = 'aporte' | 'retiro' | 'valuacion'
 

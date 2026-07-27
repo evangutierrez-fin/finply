@@ -5,17 +5,19 @@
 import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  diasDelMes,
-  diasEntre,
-  fechaConDia,
   fechasParcialidades,
   interesDevengado,
   parcialidades,
+  tablaAmortizacion,
+} from '../shared/credito.ts'
+import {
+  diasDelMes,
+  diasEntre,
+  fechaConDia,
   siguienteDiaDelMes,
   sumarMeses,
-  tablaAmortizacion,
   ultimoCorte,
-} from '../shared/credito.ts'
+} from '../shared/fechas.ts'
 
 describe('fechas de corte', () => {
   test('el día se recorta al último del mes', () => {

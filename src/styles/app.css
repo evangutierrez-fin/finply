@@ -1685,7 +1685,105 @@ select.campo-input { cursor: pointer; }
   .tarjetas-resumen { gap: 24px; }
   .libro { display: block; overflow-x: auto; }
   .acciones { opacity: 1; }
+  /* En pantalla angosta cada propuesta se apila y los botones bajan enteros:
+     "Asentar" no puede quedar a medias, es el que escribe en el libro. */
+  .propuesta, .cal-evento { grid-template-columns: 1fr; gap: 10px; }
+  .propuesta-monto, .cal-evento-monto { text-align: left; }
+  .propuesta-acciones { justify-content: flex-start; }
+  .cal-dia { grid-template-columns: 1fr; gap: 8px; }
+  .cal-dia-fecha { flex-direction: row; align-items: baseline; gap: 8px; }
+  .seg-4 { flex-wrap: wrap; }
 }
+
+/* ── recurrencias y calendario ───────────────────────────────────────── */
+.rec-bandeja, .rec-plantillas { margin-bottom: 26px; }
+.rec-bandeja-total { font-size: 13px; color: var(--tinta-2); }
+.rec-lista { display: flex; flex-direction: column; gap: 10px; }
+.rec-al-dia {
+  font-size: 14px;
+  color: var(--tinta-2);
+  border: 1px dashed var(--regla-fuerte);
+  border-radius: var(--radio);
+  padding: 18px 20px;
+  text-align: center;
+}
+.rec-nota-pie { margin-top: 12px; font-size: 13px; color: var(--tinta-2); }
+
+/* Una propuesta: qué es, cuánto, y qué puedes hacer con ella. */
+.propuesta {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 8px 20px;
+  padding: 14px 18px;
+  animation: aparecer 0.3s ease-out backwards;
+}
+.propuesta-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.propuesta-concepto { font-weight: 600; }
+.propuesta-meta { font-size: 13px; color: var(--tinta-2); margin-top: 3px; }
+.propuesta-monto { font-size: 16px; white-space: nowrap; text-align: right; }
+.propuesta-acciones { display: flex; align-items: center; gap: 14px; }
+.propuesta-descartar { color: var(--tinta-2); }
+
+.plantilla { padding: 14px 18px; animation: aparecer 0.3s ease-out backwards; }
+.plantilla-archivada { opacity: 0.62; }
+.plantilla-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.plantilla-concepto { font-weight: 600; }
+.plantilla-meta { font-size: 13px; color: var(--tinta-2); margin-top: 4px; }
+.plantilla-pendientes { color: var(--laton); }
+.plantilla-acciones { display: flex; gap: 16px; margin-top: 10px; }
+
+/* El aviso de D8: cuántas partidas van a esperar por confirmar. */
+.rec-previa {
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--tinta-2);
+  background: var(--tinte-neutro);
+  border: 1px solid var(--regla-fuerte);
+  border-radius: var(--radio);
+  padding: 12px 14px;
+}
+.rec-previa strong { color: var(--tinta); }
+.rec-cadencia .seg { display: flex; margin-bottom: 12px; }
+.rec-dias { margin-top: 0; }
+.rec-nota-dia { margin-top: 8px; font-size: 12.5px; }
+
+.cal-resumen { margin-bottom: 22px; }
+.cal-resumen-nota { font-size: 13px; color: var(--tinta-2); margin-top: 8px; max-width: 62ch; }
+.cal-lista { display: flex; flex-direction: column; gap: 18px; }
+.cal-dia {
+  display: grid;
+  grid-template-columns: 108px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+.cal-dia-fecha { display: flex; flex-direction: column; gap: 2px; padding-top: 12px; }
+.cal-dia-num { font-family: var(--f-mono); font-size: 14px; font-weight: 600; }
+.cal-dia-cuando { font-size: 12px; color: var(--tinta-3); }
+.cal-eventos { display: flex; flex-direction: column; gap: 8px; }
+.cal-evento {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 6px 18px;
+  padding: 12px 16px;
+  animation: aparecer 0.3s ease-out backwards;
+}
+.cal-evento-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.cal-evento-titulo { font-weight: 600; }
+.cal-evento-detalle { font-size: 13px; color: var(--tinta-2); margin-top: 3px; }
+.cal-evento-monto { font-family: var(--f-mono); font-size: 15px; white-space: nowrap; }
+.cal-sin-monto { font-family: var(--f-ui); font-size: 13px; color: var(--tinta-3); }
+/* Cada tipo de vencimiento con su tinta: el ojo los separa sin leer. */
+.cal-chip-pago_tarjeta { color: var(--rojo-osc); border-color: var(--rojo-borde); }
+.cal-chip-deuda { color: var(--rojo-osc); border-color: var(--rojo-borde); }
+.cal-chip-recurrencia { color: var(--verde-osc); border-color: var(--verde); }
+.cal-chip-msi { color: var(--laton); border-color: var(--laton); }
 
 /* ── cierre imprimible ───────────────────────────────────────────────── */
 @media print {
