@@ -1,7 +1,7 @@
 import type {
-  Account, Amortizacion, Budget, Category, CompraMSI, Debt, DebtPayment, EstadoTarjeta, Goal,
-  InformeImport, Investment, InvestmentEntryType, LoteImport, MapeoImport, Note, Profile,
-  ResultadoImport, Summary, Tag, Tx, TxType,
+  Account, Amortizacion, Budget, Category, Comparativa, CompraMSI, Debt, DebtPayment,
+  EstadoTarjeta, Goal, InformeImport, Investment, InvestmentEntryType, LoteImport, MapeoImport,
+  Note, Profile, ReporteAnual, ResultadoImport, Summary, Tag, Tx, TxType,
 } from '../shared/types.ts'
 
 /** Error de la API que conserva el código y el cuerpo, para poder reaccionar. */
@@ -330,6 +330,13 @@ export const api = {
   },
   summary: (profileId: number, month: string) =>
     req<Summary>(`/api/summary?profileId=${profileId}&month=${month}`),
+  reportes: {
+    /** El año completo: series, categorías, etiquetas y totales. */
+    anual: (profileId: number, year: number) =>
+      req<ReporteAnual>(`/api/reportes?profileId=${profileId}&year=${year}`),
+    comparativa: (profileId: number, month: string) =>
+      req<Comparativa>(`/api/reportes/comparativa?profileId=${profileId}&month=${month}`),
+  },
   backup: {
     /** El navegador descarga el archivo directo desde esta ruta. */
     downloadUrl: '/api/respaldo',

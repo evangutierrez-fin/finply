@@ -16,6 +16,7 @@ import budgets from './routes/budgets.ts'
 import goals from './routes/goals.ts'
 import notes from './routes/notes.ts'
 import summary from './routes/summary.ts'
+import reportes from './routes/reportes.ts'
 import backup from './routes/backup.ts'
 
 /**
@@ -42,6 +43,7 @@ export function createApp(): express.Express {
   app.use('/api/goals', goals)
   app.use('/api/notes', notes)
   app.use('/api/summary', summary)
+  app.use('/api/reportes', reportes)
   app.use('/api/respaldo', backup)
 
   app.use('/api', (_req, res) => {

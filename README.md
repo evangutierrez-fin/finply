@@ -66,6 +66,13 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
 - **Inversiones** — CETES, fondos, acciones, cripto o lo que sea: registra
   aportes y retiros (ligables a una cuenta) y valúa cuando quieras. Finply
   calcula el rendimiento y dibuja la evolución del valor.
+- **Reportes históricos** — el año completo en una vista: patrimonio mes a mes,
+  ingresos contra gastos, en qué se fue el año por categoría y por etiqueta,
+  tasa de ahorro y la comparativa de un mes contra el anterior. Con una regla
+  explícita: recibir un préstamo, aportar a una inversión o abonar capital a
+  una deuda **no cuentan** como ingreso ni gasto — mueven tu patrimonio de
+  lugar, no lo crean ni lo consumen. Sin eso, endeudarte mejoraría tu tasa de
+  ahorro. Imprimible como cierre de año.
 - **Presupuestos** — un tope por categoría de gasto **y por mes**, con barra de
   avance, alerta al 80 % y estado de excedido con la cifra exacta. Cada mes
   lleva su propio plan; puedes arrastrar el del mes anterior de un clic.
@@ -144,6 +151,7 @@ server/          Express + node:sqlite
   valores.ts     interpretación de fechas y montos ajenos (módulo puro)
   importar.ts    análisis, ejecución y deshacer de importaciones
   tarjetas.ts    saldo al corte, línea disponible y compras a meses
+  reportes.ts    agregados del año y serie de patrimonio (solo lectura)
   routes/        profiles · accounts · categories · tags · transactions · debts
                  · tarjetas · investments · budgets · goals · notes · summary
                  · backup · importaciones
@@ -152,8 +160,9 @@ shared/
   types.ts       tipos compartidos cliente/servidor
   credito.ts     fechas de corte, amortización y parcialidades (módulo puro)
 src/
-  views/         Resumen · Movimientos · Cuentas · Categorías · Tarjetas
-                 · Deudas · Inversiones · Presupuestos · Metas · Notas · Ajustes
+  views/         Resumen · Movimientos · Cuentas · Categorías · Reportes
+                 · Tarjetas · Deudas · Inversiones · Presupuestos · Metas
+                 · Notas · Ajustes
   components/    formularios, gráficas, sello, barra lateral
   styles/        tokens.css (temas claro/oscuro) + app.css
 test/            pruebas de integridad contra una base temporal
@@ -196,6 +205,8 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 | `POST /api/goals/:id/entries` · `DELETE /api/goals/entries/:id` | Aportes a metas |
 | `GET/POST /api/notes` · `PATCH/DELETE /:id` | Notas (con fijado) |
 | `GET /api/summary?profileId&month` | Resumen del mes + patrimonio en una llamada |
+| `GET /api/reportes?profileId&year` | El año: patrimonio mes a mes, ingresos vs gastos, categorías, etiquetas y tasa de ahorro |
+| `GET /api/reportes/comparativa?profileId&month` | Un mes contra el anterior, categoría por categoría |
 | `GET /api/respaldo` · `GET /info` · `POST /restaurar` | Respaldo completo en JSON |
 
 Reglas de integridad que cuida el backend, todas cubiertas por `npm test`:
@@ -231,8 +242,6 @@ Display: **Besley** (una Clarendon, la letra de la banca del XIX) · UI:
 
 **Siguiente**
 
-- Reportes históricos: patrimonio en el tiempo, 12 meses de ingresos vs gastos,
-  gasto por categoría y por etiqueta en el año, tasa de ahorro
 - Recurrencias (renta, suscripciones) y calendario de vencimientos. El motor
   **propone** partidas y tú las asientas: Finply no escribe en tu libro solo.
 

@@ -1441,6 +1441,49 @@ select.campo-input { cursor: pointer; }
 .splash-nombre { animation: aparecer 0.5s ease-out; font-size: 52px; }
 
 /* ── responsivo ──────────────────────────────────────────────────────── */
+/* ── reportes ────────────────────────────────────────────────────────── */
+.reportes-controles { display: flex; align-items: center; gap: 16px; }
+.reportes-hero { display: flex; flex-direction: column; gap: 14px; padding: 20px 24px; }
+.reportes-hero-dato { display: flex; flex-direction: column; gap: 2px; }
+.reportes-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 14px 24px;
+  padding-top: 14px;
+  border-top: 1px solid var(--regla);
+}
+.reportes-stats dt {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--tinta-2);
+  margin-bottom: 3px;
+}
+.reportes-stats dd { font-size: 17px; }
+/* El supuesto va a la vista, no en una nota al pie que nadie abre (R9). */
+.reportes-supuesto {
+  font-size: 12.5px;
+  color: var(--tinta-2);
+  line-height: 1.6;
+  padding-top: 12px;
+  border-top: 1px solid var(--regla);
+}
+.reportes-nota { font-size: 13px; color: var(--tinta-2); margin-top: 12px; }
+.reportes-nota strong { color: var(--tinta); }
+.comparativa-tabla { margin-top: 14px; }
+.comparativa-tabla td:first-child { font-weight: 500; }
+
+.serie-area { fill: var(--acento); opacity: 0.13; }
+.serie-linea {
+  fill: none;
+  stroke: var(--acento);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.serie-punto { fill: var(--acento); transition: r 0.12s ease; }
+
 /* ── tarjetas de crédito ─────────────────────────────────────────────── */
 .campos-3 {
   display: grid;
@@ -1642,6 +1685,33 @@ select.campo-input { cursor: pointer; }
   .tarjetas-resumen { gap: 24px; }
   .libro { display: block; overflow-x: auto; }
   .acciones { opacity: 1; }
+}
+
+/* ── cierre imprimible ───────────────────────────────────────────────── */
+@media print {
+  /* El papel ya es papel: fondo blanco, tinta negra y nada de sombras. */
+  :root, :root[data-theme='dark'] {
+    --papel: #fff;
+    --hoja: #fff;
+    --hoja-hover: #fff;
+    --tinta: #000;
+    --tinta-2: #333;
+    --tinta-3: #555;
+    --sombra-hoja: none;
+    --sombra-alta: none;
+  }
+  .lomo, .no-imprimir, .sello-capa, .velo { display: none !important; }
+  .pagina { margin-left: 0; padding: 0; }
+  .app::before { display: none; }
+  .vista { gap: 18px; }
+  .hoja {
+    border: 1px solid #999;
+    box-shadow: none;
+    break-inside: avoid;
+  }
+  .dos-columnas, .dos-columnas-desigual { grid-template-columns: 1fr 1fr; }
+  .grafica-svg { max-height: 150px; }
+  @page { margin: 14mm; }
 }
 
 /* ── movimiento reducido ─────────────────────────────────────────────── */

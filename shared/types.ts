@@ -201,6 +201,53 @@ export interface Summary {
   investments: { investedCents: number; valueCents: number; count: number }
 }
 
+// ── Reportes históricos ───────────────────────────────────────────────────
+//
+// Un préstamo recibido no es ingreso y un aporte a una inversión no es gasto:
+// mover dinero entre bolsillos propios no cuenta. De un abono a deuda cuenta
+// solo el interés. Todo lo de aquí sigue esa regla.
+
+export interface MesReporte {
+  month: string
+  incomeCents: number
+  expenseCents: number
+  netCents: number
+}
+
+export interface PuntoPatrimonio {
+  month: string
+  cuentasCents: number
+  inversionesCents: number
+  porCobrarCents: number
+  porPagarCents: number
+  /** Cuentas + inversiones + por cobrar − por pagar, igual que el Resumen. */
+  totalCents: number
+}
+
+export interface ReporteAnual {
+  year: number
+  /** Los doce meses, incluidos los vacíos. */
+  meses: MesReporte[]
+  patrimonio: PuntoPatrimonio[]
+  porCategoria: { name: string; expenseCents: number }[]
+  porEtiqueta: { name: string; expenseCents: number }[]
+  totales: {
+    incomeCents: number
+    expenseCents: number
+    netCents: number
+    /** Fracción de lo que entró que no salió. `null` si no hubo ingresos. */
+    tasaAhorro: number | null
+  }
+}
+
+export interface Comparativa {
+  month: string
+  anterior: string
+  actual: { incomeCents: number; expenseCents: number }
+  previo: { incomeCents: number; expenseCents: number }
+  categorias: { name: string; actualCents: number; previoCents: number; deltaCents: number }[]
+}
+
 export type InvestmentKind = 'cetes' | 'acciones' | 'cripto' | 'fondo' | 'inmueble' | 'otro'
 export type InvestmentEntryType = 'aporte' | 'retiro' | 'valuacion'
 

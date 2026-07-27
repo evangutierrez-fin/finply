@@ -244,6 +244,20 @@ export const notePatch = z.object({
   pinned: z.boolean().optional(),
 })
 
+export const reporteQuery = z.object({
+  profileId: z.coerce.number().int().positive(),
+  year: z.coerce
+    .number()
+    .int()
+    .min(1900, 'Año fuera de rango')
+    .max(2200, 'Año fuera de rango'),
+})
+
+export const comparativaQuery = z.object({
+  profileId: z.coerce.number().int().positive(),
+  month: isoMonth,
+})
+
 export const summaryQuery = z.object({
   profileId: z.coerce.number().int().positive(),
   month: isoMonth,

@@ -5,6 +5,7 @@ export type View =
   | 'resumen'
   | 'movimientos'
   | 'cuentas'
+  | 'reportes'
   | 'tarjetas'
   | 'deudas'
   | 'inversiones'
@@ -25,6 +26,7 @@ const NAV_GROUPS: { label: string | null; items: { id: View; label: string }[] }
       { id: 'movimientos', label: 'Movimientos' },
       { id: 'cuentas', label: 'Cuentas' },
       { id: 'taxonomia', label: 'Categorías' },
+      { id: 'reportes', label: 'Reportes' },
     ],
   },
   {
