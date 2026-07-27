@@ -2,21 +2,94 @@ import { useState } from 'react'
 import { api } from '../api.ts'
 import { useApp } from '../context.ts'
 import { useFetch } from '../hooks.ts'
-import { fmtDate, fmtMoney, isPastDue } from '../format.ts'
+import { fmtDate, fmtDateAnio, fmtMoney, fmtTasa, isPastDue, todayISO } from '../format.ts'
+import { tablaAmortizacion } from '../../shared/credito.ts'
 import { Money } from '../components/Money.tsx'
 import { DebtModal } from '../components/DebtModal.tsx'
 import { AbonoModal } from '../components/AbonoModal.tsx'
 import type { Debt } from '../../shared/types.ts'
 
+/** El plan de pagos, tal como lo calcula el servidor. */
+function TablaAmortizacion({ debt }: { debt: Debt }) {
+  const { data, error } = useFetch(() => api.debts.amortizacion(debt.id), [debt.id])
+
+  if (error) return <p className="aviso" role="alert">{error}</p>
+  if (!data) return <p className="cargando">Calculando…</p>
+
+  return (
+    <div className="amort-wrap">
+      <table className="libro amort-tabla">
+        <caption className="sr-only">
+          Plan de pagos de {debt.counterparty}: capital e intereses mes a mes
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">#</th>
+            <th scope="col">Fecha</th>
+            <th scope="col">Pago</th>
+            <th scope="col">Interés</th>
+            <th scope="col">Capital</th>
+            <th scope="col">Saldo</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.filas.map((f) => (
+            <tr key={f.n}>
+              <td>{f.n}</td>
+              <td>{fmtDateAnio(f.fecha)}</td>
+              <td>{fmtMoney(f.pagoCents)}</td>
+              <td>{fmtMoney(f.interesCents)}</td>
+              <td>{fmtMoney(f.capitalCents)}</td>
+              <td>{fmtMoney(f.saldoCents)}</td>
+            </tr>
+          ))}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colSpan={2}>Totales</td>
+            <td>{fmtMoney(data.totalPagadoCents)}</td>
+            <td>{fmtMoney(data.totalInteresCents)}</td>
+            <td colSpan={2}>{fmtMoney(debt.principalCents)} de capital</td>
+          </tr>
+        </tfoot>
+      </table>
+      <p className="amort-nota">
+        Es el plan sobre el monto original desde la fecha de inicio. Tus abonos reales van por
+        su cuenta, arriba.
+      </p>
+    </div>
+  )
+}
+
 function DebtCard({ debt, index }: { debt: Debt; index: number }) {
   const { bump, stamp } = useApp()
   const [showPayments, setShowPayments] = useState(false)
+  const [showPlan, setShowPlan] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [abono, setAbono] = useState(false)
 
-  const remaining = debt.principalCents - debt.paidCents
-  const pct = Math.min(100, (debt.paidCents / debt.principalCents) * 100)
+  // El pago mensual se calcula aquí mismo —es aritmética pura, la misma del
+  // servidor— para no pedir una tabla por deuda solo para enseñar una cifra.
+  const plan =
+    debt.termMonths !== null
+      ? tablaAmortizacion({
+          principalCents: debt.principalCents,
+          annualRateBp: debt.annualRateBp,
+          termMonths: debt.termMonths,
+          startDate: debt.startDate,
+        })
+      : null
+
+  // Lo que se debe es el saldo insoluto: los intereses pagados no bajan el
+  // principal. Con tasa 0 esto es idéntico a "principal − abonado".
+  const remaining = debt.balanceCents
+  const pct = Math.min(100, (debt.capitalPaidCents / debt.principalCents) * 100)
   const overdue = debt.status === 'abierta' && isPastDue(debt.dueDate)
+  // La fila del plan que sigue según los abonos ya registrados, no según el
+  // calendario: si ya pagaste la de agosto, la siguiente es la de septiembre
+  // aunque agosto no haya terminado. Si su fecha ya pasó, vas tarde.
+  const proximo = plan?.filas[debt.payments.length]
+  const proximoAtrasado = proximo !== undefined && proximo.fecha < todayISO()
 
   const remove = async () => {
     try {
@@ -57,7 +130,21 @@ function DebtCard({ debt, index }: { debt: Debt; index: number }) {
       </header>
       {debt.concept && <p className="deuda-concepto">{debt.concept}</p>}
 
-      <div className="deuda-riel" role="img" aria-label={`Abonado ${fmtMoney(debt.paidCents)} de ${fmtMoney(debt.principalCents)}`}>
+      {(debt.annualRateBp > 0 || plan) && (
+        <p className="deuda-credito">
+          {debt.annualRateBp > 0 && <span className="chip">{fmtTasa(debt.annualRateBp)} anual</span>}
+          {plan && (
+            <>
+              <span className="chip">{debt.termMonths} meses</span>
+              <span className="deuda-cuota">
+                Pago mensual <strong className="cifra-chica">{fmtMoney(plan.pagoMensualCents)}</strong>
+              </span>
+            </>
+          )}
+        </p>
+      )}
+
+      <div className="deuda-riel" role="img" aria-label={`Capital abonado ${fmtMoney(debt.capitalPaidCents)} de ${fmtMoney(debt.principalCents)}`}>
         <span className="deuda-lleno" style={{ width: `${pct}%` }} />
       </div>
       <p className="deuda-cifras">
@@ -67,9 +154,42 @@ function DebtCard({ debt, index }: { debt: Debt; index: number }) {
           <>
             Restan <Money cents={remaining} className="cifra-chica deuda-restan" /> de{' '}
             <Money cents={debt.principalCents} className="cifra-chica" />
+            {debt.interestPaidCents > 0 && (
+              <>
+                {' · '}<Money cents={debt.interestPaidCents} className="cifra-chica" /> pagados
+                de intereses
+              </>
+            )}
           </>
         )}
       </p>
+
+      {(debt.downPaymentCents > 0 || proximo) && (
+        <p className="deuda-detalle">
+          {debt.downPaymentCents > 0 && (
+            <>
+              Enganche <Money cents={debt.downPaymentCents} className="cifra-chica" />
+              {plan && (
+                <>
+                  {' · '}el crédito te cuesta{' '}
+                  <strong className="cifra-chica">
+                    {fmtMoney(debt.downPaymentCents + debt.principalCents + plan.totalInteresCents)}
+                  </strong>{' '}
+                  con intereses
+                </>
+              )}
+              {proximo && <br />}
+            </>
+          )}
+          {proximo && debt.status === 'abierta' && (
+            <>
+              Próximo pago del plan <Money cents={proximo.pagoCents} className="cifra-chica" /> el{' '}
+              {fmtDate(proximo.fecha)}
+              {proximoAtrasado && <strong className="presup-rojo"> · atrasado</strong>}
+            </>
+          )}
+        </p>
+      )}
 
       <footer className="deuda-pie">
         {debt.status === 'abierta' && (
@@ -80,6 +200,11 @@ function DebtCard({ debt, index }: { debt: Debt; index: number }) {
         {debt.payments.length > 0 && (
           <button type="button" className="btn-liga" onClick={() => setShowPayments((s) => !s)}>
             {showPayments ? 'Ocultar abonos' : `Abonos (${debt.payments.length})`}
+          </button>
+        )}
+        {plan && (
+          <button type="button" className="btn-liga" onClick={() => setShowPlan((s) => !s)}>
+            {showPlan ? 'Ocultar plan' : 'Plan de pagos'}
           </button>
         )}
         {confirmDelete ? (
@@ -100,7 +225,14 @@ function DebtCard({ debt, index }: { debt: Debt; index: number }) {
           {debt.payments.map((p) => (
             <li key={p.id}>
               <span className="abono-fecha">{fmtDate(p.date)}</span>
-              <span className="abono-nota">{p.note || 'Abono'}</span>
+              <span className="abono-nota">
+                {p.note || 'Abono'}
+                {p.interestCents > 0 && (
+                  <span className="abono-desglose">
+                    {fmtMoney(p.capitalCents)} a capital · {fmtMoney(p.interestCents)} de interés
+                  </span>
+                )}
+              </span>
               <Money cents={p.amountCents} className="cifra-chica" />
               <button
                 type="button"
@@ -114,6 +246,8 @@ function DebtCard({ debt, index }: { debt: Debt; index: number }) {
           ))}
         </ul>
       )}
+
+      {showPlan && plan && <TablaAmortizacion debt={debt} />}
 
       {abono && <AbonoModal debt={debt} onClose={() => setAbono(false)} onSaved={bump} />}
     </article>
@@ -129,10 +263,10 @@ export function Deudas() {
   const porPagar = (debts ?? []).filter((d) => d.direction === 'por_pagar')
   const totalCobrar = porCobrar
     .filter((d) => d.status === 'abierta')
-    .reduce((s, d) => s + d.principalCents - d.paidCents, 0)
+    .reduce((s, d) => s + d.balanceCents, 0)
   const totalPagar = porPagar
     .filter((d) => d.status === 'abierta')
-    .reduce((s, d) => s + d.principalCents - d.paidCents, 0)
+    .reduce((s, d) => s + d.balanceCents, 0)
 
   return (
     <div className="vista">

@@ -11,12 +11,23 @@ export const profileInput = z.object({
 
 export const profilePatch = profileInput.partial()
 
+const diaDelMes = z
+  .number()
+  .int()
+  .min(1, 'El día va del 1 al 31')
+  .max(31, 'El día va del 1 al 31')
+
 export const accountInput = z.object({
   profileId: z.number().int().positive(),
   name: z.string().trim().min(1, 'La cuenta necesita un nombre').max(60),
   type: z.enum(['efectivo', 'banco', 'tarjeta', 'ahorro', 'otro']).default('efectivo'),
   currency: z.string().trim().length(3).toUpperCase().default('MXN'),
   openingCents: z.number().int().default(0),
+  // Datos de tarjeta. `null` explícito los borra; ausentes los dejan como
+  // estaban, que es la diferencia entre "quítalo" y "no opiné".
+  creditLimitCents: z.number().int().nonnegative('El límite no puede ser negativo').nullish(),
+  cutDay: diaDelMes.nullish(),
+  dueDay: diaDelMes.nullish(),
 })
 
 export const accountPatch = accountInput.omit({ profileId: true }).partial().extend({
@@ -101,16 +112,71 @@ export const debtInput = z.object({
   principalCents: z.number().int().positive('El monto debe ser mayor a cero'),
   startDate: isoDate,
   dueDate: isoDate.nullish(),
+  // Puntos base para no guardar flotantes: 24.5 % anual = 2450. El tope de
+  // 1000 % deja pasar cualquier tarjeta real y ataja un dedazo de un cero.
+  annualRateBp: z
+    .number()
+    .int('La tasa se guarda en puntos base enteros')
+    .min(0, 'La tasa no puede ser negativa')
+    .max(100_000, 'Esa tasa anual es imposible')
+    .default(0),
+  termMonths: z
+    .number()
+    .int()
+    .min(1, 'El plazo va de 1 a 600 meses')
+    .max(600, 'El plazo va de 1 a 600 meses')
+    .nullish(),
+  /**
+   * Cuenta por la que entra (o sale) el dinero de la deuda. Si viene, se
+   * asienta el movimiento del desembolso; si no, la deuda queda como pura
+   * obligación y el libro no se mueve.
+   */
+  accountId: z.number().int().positive().nullish(),
+  /** Enganche: lo que se puso de contado al contratar. No es principal. */
+  downPaymentCents: z.number().int().nonnegative('El enganche no puede ser negativo').default(0),
+  /** Cuenta de la que sale (o a la que entra) el enganche. */
+  downPaymentAccountId: z.number().int().positive().nullish(),
 })
 
 // El estado no se manda: siempre se deriva de los abonos contra el principal.
-export const debtPatch = debtInput.omit({ profileId: true }).partial()
+// Las cuentas solo existen al crear: los movimientos ya asentados se corrigen
+// desde el libro, no desde aquí.
+export const debtPatch = debtInput
+  .omit({ profileId: true, accountId: true, downPaymentAccountId: true })
+  .partial()
 
 export const paymentInput = z.object({
   amountCents: z.number().int().positive('El abono debe ser mayor a cero'),
   date: isoDate,
   note: z.string().trim().max(200).default(''),
   accountId: z.number().int().positive().nullish(),
+  /**
+   * Cuánto del abono fue interés. Ausente, el servidor lo propone con el
+   * interés devengado desde el abono anterior; presente, manda lo que diga el
+   * estado de cuenta del usuario.
+   */
+  interestCents: z.number().int().nonnegative('El interés no puede ser negativo').optional(),
+})
+
+export const msiInput = z.object({
+  profileId: z.number().int().positive(),
+  /** Tiene que ser una tarjeta; la ruta lo verifica contra el libro. */
+  accountId: z.number().int().positive(),
+  concept: z.string().trim().max(120).default(''),
+  totalCents: z.number().int().positive('El monto de la compra debe ser mayor a cero'),
+  months: z
+    .number()
+    .int()
+    .min(2, 'Una compra a meses son al menos 2 parcialidades')
+    .max(60, 'El máximo son 60 meses'),
+  purchaseDate: isoDate,
+  categoryId: z.number().int().positive().nullish(),
+})
+
+export const tarjetasQuery = z.object({
+  profileId: z.coerce.number().int().positive(),
+  /** Desde qué día se mira el estado de cuenta. Por omisión, hoy. */
+  hoy: isoDate.optional(),
 })
 
 export const investmentInput = z.object({

@@ -240,6 +240,150 @@ export const MIGRATIONS: Migration[] = [
       db.exec('CREATE INDEX IF NOT EXISTS idx_tx_batch ON transactions(import_batch_id)')
     },
   },
+  {
+    id: 6,
+    name: 'crédito: tarjetas, tasa de deuda y meses sin intereses',
+    up: (db) => {
+      // Tarjetas. Todo nace nulo: una cuenta sin configurar se comporta
+      // exactamente igual que antes de esta migración.
+      if (!hasColumn(db, 'accounts', 'credit_limit_cents')) {
+        db.exec(
+          `ALTER TABLE accounts ADD COLUMN credit_limit_cents INTEGER
+           CHECK (credit_limit_cents IS NULL OR credit_limit_cents >= 0)`,
+        )
+      }
+      if (!hasColumn(db, 'accounts', 'cut_day')) {
+        db.exec(
+          `ALTER TABLE accounts ADD COLUMN cut_day INTEGER
+           CHECK (cut_day IS NULL OR (cut_day BETWEEN 1 AND 31))`,
+        )
+      }
+      if (!hasColumn(db, 'accounts', 'due_day')) {
+        db.exec(
+          `ALTER TABLE accounts ADD COLUMN due_day INTEGER
+           CHECK (due_day IS NULL OR (due_day BETWEEN 1 AND 31))`,
+        )
+      }
+
+      // Deudas con tasa y plazo. La tasa va en puntos base (24.5 % = 2450)
+      // para no guardar flotantes en la base; 0 es una deuda sin intereses,
+      // que es justo lo que eran todas hasta ahora.
+      if (!hasColumn(db, 'debts', 'annual_rate_bp')) {
+        db.exec(
+          `ALTER TABLE debts ADD COLUMN annual_rate_bp INTEGER NOT NULL DEFAULT 0
+           CHECK (annual_rate_bp >= 0)`,
+        )
+      }
+      if (!hasColumn(db, 'debts', 'term_months')) {
+        db.exec(
+          `ALTER TABLE debts ADD COLUMN term_months INTEGER
+           CHECK (term_months IS NULL OR (term_months BETWEEN 1 AND 600))`,
+        )
+      }
+
+      // Meses sin intereses: la compra es un cargo único a la tarjeta —así
+      // consume tu línea de crédito— y las parcialidades son el calendario de
+      // lo que el banco te factura en cada corte.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS msi_purchases (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+          concept TEXT NOT NULL DEFAULT '',
+          total_cents INTEGER NOT NULL CHECK (total_cents > 0),
+          months INTEGER NOT NULL CHECK (months BETWEEN 2 AND 60),
+          purchase_date TEXT NOT NULL,
+          category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS msi_installments (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          purchase_id INTEGER NOT NULL REFERENCES msi_purchases(id) ON DELETE CASCADE,
+          number INTEGER NOT NULL,
+          due_date TEXT NOT NULL,
+          amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+          UNIQUE (purchase_id, number)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_msi_purchases_account ON msi_purchases(account_id);
+        CREATE INDEX IF NOT EXISTS idx_msi_installments_due
+          ON msi_installments(purchase_id, due_date);
+      `)
+
+      // Ata el cargo de la compra con su calendario: sin esto, el saldo al
+      // corte contaría dos veces la misma compra (el cargo completo y además
+      // sus parcialidades).
+      if (!hasColumn(db, 'transactions', 'msi_purchase_id')) {
+        db.exec(
+          `ALTER TABLE transactions ADD COLUMN msi_purchase_id INTEGER
+           REFERENCES msi_purchases(id) ON DELETE SET NULL`,
+        )
+      }
+      db.exec('CREATE INDEX IF NOT EXISTS idx_tx_msi ON transactions(msi_purchase_id)')
+      // Los pagos a una tarjeta llegan como transferencia; sin índice, cada
+      // consulta de saldo al corte recorría la tabla entera (R11).
+      db.exec(
+        'CREATE INDEX IF NOT EXISTS idx_tx_transfer_account ON transactions(transfer_account_id)',
+      )
+    },
+  },
+  {
+    id: 7,
+    name: 'movimiento del desembolso de una deuda',
+    up: (db) => {
+      // Hasta ahora una deuda solo asentaba movimiento al abonar, nunca al
+      // recibir (o entregar) el dinero: el saldo de la cuenta quedaba corto
+      // por el principal. Esta columna liga la deuda con el movimiento que
+      // trajo —o se llevó— ese dinero.
+      if (!hasColumn(db, 'transactions', 'debt_id')) {
+        db.exec(
+          `ALTER TABLE transactions ADD COLUMN debt_id INTEGER
+           REFERENCES debts(id) ON DELETE SET NULL`,
+        )
+      }
+      db.exec('CREATE INDEX IF NOT EXISTS idx_tx_debt ON transactions(debt_id)')
+    },
+  },
+  {
+    id: 8,
+    name: 'saldo insoluto y enganche',
+    up: (db) => {
+      // Sin esta columna, cada peso abonado bajaba el principal —también la
+      // parte que era interés—, y una deuda con tasa se marcaba saldada mucho
+      // antes de estarlo. Cero en lo que ya existe: las deudas sin intereses
+      // se comportan exactamente igual que antes.
+      if (!hasColumn(db, 'debt_payments', 'interest_cents')) {
+        db.exec(
+          `ALTER TABLE debt_payments ADD COLUMN interest_cents INTEGER NOT NULL DEFAULT 0
+           CHECK (interest_cents >= 0)`,
+        )
+      }
+
+      // Enganche: lo que pusiste de tu bolsa al contratar. No es principal
+      // —no se financia— pero sí es parte de lo que te costó la cosa.
+      if (!hasColumn(db, 'debts', 'down_payment_cents')) {
+        db.exec(
+          `ALTER TABLE debts ADD COLUMN down_payment_cents INTEGER NOT NULL DEFAULT 0
+           CHECK (down_payment_cents >= 0)`,
+        )
+      }
+
+      // Una deuda ya puede tener dos movimientos ligados (el desembolso y el
+      // enganche) y hacen cosas distintas al corregirlos: sin distinguirlos,
+      // editar el enganche reescribiría el principal.
+      if (!hasColumn(db, 'transactions', 'debt_role')) {
+        db.exec(
+          `ALTER TABLE transactions ADD COLUMN debt_role TEXT
+           CHECK (debt_role IS NULL OR debt_role IN ('desembolso', 'enganche'))`,
+        )
+      }
+      db.exec(
+        `UPDATE transactions SET debt_role = 'desembolso'
+         WHERE debt_id IS NOT NULL AND debt_role IS NULL`,
+      )
+    },
+  },
 ]
 
 /** Versión de esquema que espera este código. */

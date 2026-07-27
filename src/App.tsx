@@ -8,6 +8,7 @@ import { ProfileModal } from './components/ProfileModal.tsx'
 import { Resumen } from './views/Resumen.tsx'
 import { Movimientos } from './views/Movimientos.tsx'
 import { Cuentas } from './views/Cuentas.tsx'
+import { Tarjetas } from './views/Tarjetas.tsx'
 import { Deudas } from './views/Deudas.tsx'
 import { Inversiones } from './views/Inversiones.tsx'
 import { Presupuestos } from './views/Presupuestos.tsx'
@@ -20,7 +21,7 @@ import { Importar } from './views/Importar.tsx'
 // 'importar' no tiene entrada en el nav: se llega desde Movimientos, que es
 // donde uno la busca.
 const VIEWS: View[] = [
-  'resumen', 'movimientos', 'cuentas', 'taxonomia', 'importar', 'deudas',
+  'resumen', 'movimientos', 'cuentas', 'taxonomia', 'importar', 'tarjetas', 'deudas',
   'inversiones', 'presupuestos', 'metas', 'notas', 'ajustes',
 ]
 
@@ -227,6 +228,7 @@ export default function App() {
           {view === 'cuentas' && <Cuentas />}
           {view === 'taxonomia' && <Taxonomia />}
           {view === 'importar' && <Importar onVerMovimientos={() => nav('movimientos')} />}
+          {view === 'tarjetas' && <Tarjetas />}
           {view === 'deudas' && <Deudas />}
           {view === 'inversiones' && <Inversiones />}
           {view === 'presupuestos' && <Presupuestos />}

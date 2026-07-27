@@ -24,6 +24,12 @@ export interface Account {
   archived: boolean
   balanceCents: number
   txCount: number
+  /** Solo tarjetas. `null` mientras no se configuren. */
+  creditLimitCents: number | null
+  /** Día del mes en que corta la tarjeta (1–31, recortado en meses cortos). */
+  cutDay: number | null
+  /** Día límite de pago. */
+  dueDay: number | null
 }
 
 export type TxType = 'ingreso' | 'gasto' | 'transferencia'
@@ -59,6 +65,10 @@ export interface Tx {
   transferAccountName: string | null
   debtPaymentId: number | null
   investmentEntryId: number | null
+  /** Si viene, este movimiento es el cargo de una compra a meses. */
+  msiPurchaseId: number | null
+  /** Si viene, este movimiento es el desembolso de una deuda. */
+  debtId: number | null
   tags: { id: number; name: string }[]
 }
 
@@ -71,6 +81,10 @@ export interface DebtPayment {
   amountCents: number
   date: string
   note: string
+  /** Parte del abono que se fue en intereses; 0 en una deuda sin tasa. */
+  interestCents: number
+  /** Lo que sí bajó el principal. */
+  capitalCents: number
 }
 
 export interface Debt {
@@ -83,8 +97,95 @@ export interface Debt {
   startDate: string
   dueDate: string | null
   status: DebtStatus
+  /** Todo lo abonado, capital e intereses juntos. */
   paidCents: number
+  /** Tasa anual en puntos base: 24.5 % = 2450. 0 es sin intereses. */
+  annualRateBp: number
+  /** Plazo en meses. Sin plazo no hay tabla de amortización. */
+  termMonths: number | null
+  /** Lo que se puso de contado al contratar. No es principal. */
+  downPaymentCents: number
+  /** De lo abonado, cuánto se fue en intereses. */
+  interestPaidCents: number
+  /** De lo abonado, cuánto bajó el principal. */
+  capitalPaidCents: number
+  /** Lo que de verdad debes hoy: principal − capital abonado. Nunca negativo. */
+  balanceCents: number
   payments: DebtPayment[]
+}
+
+export interface FilaAmortizacion {
+  n: number
+  fecha: string
+  pagoCents: number
+  interesCents: number
+  capitalCents: number
+  saldoCents: number
+}
+
+/**
+ * El plan original de la deuda, calculado sobre el principal desde su fecha de
+ * inicio. Los abonos reales viven aparte, en `Debt.payments`.
+ */
+export interface Amortizacion {
+  debtId: number
+  pagoMensualCents: number
+  totalPagadoCents: number
+  totalInteresCents: number
+  filas: FilaAmortizacion[]
+}
+
+// ── Tarjetas de crédito y meses sin intereses ─────────────────────────────
+
+export interface ParcialidadMSI {
+  id: number
+  purchaseId: number
+  /** 1..N. */
+  number: number
+  /** Corte en que se factura. */
+  dueDate: string
+  amountCents: number
+}
+
+export interface CompraMSI {
+  id: number
+  profileId: number
+  accountId: number
+  accountName: string
+  concept: string
+  totalCents: number
+  months: number
+  purchaseDate: string
+  categoryId: number | null
+  categoryName: string | null
+  /** El cargo a la tarjeta que ancla la compra. */
+  txId: number | null
+  parcialidades: ParcialidadMSI[]
+}
+
+export interface EstadoTarjeta {
+  accountId: number
+  name: string
+  creditLimitCents: number | null
+  cutDay: number | null
+  dueDay: number | null
+  /** Lo que debes hoy en total, con la compra a meses completa. */
+  deudaCents: number
+  /** Límite menos deuda. `null` sin límite configurado. */
+  disponibleCents: number | null
+  /** Último corte que ya ocurrió. `null` sin día de corte configurado. */
+  fechaCorte: string | null
+  fechaLimitePago: string | null
+  /** Lo facturado hasta el corte, ya descontando lo pagado hasta esa fecha. */
+  saldoAlCorteCents: number | null
+  /** Abonos posteriores al corte. */
+  pagadoDesdeCorteCents: number | null
+  /** Lo que falta pagar del corte para no generar intereses. */
+  paraNoGenerarInteresesCents: number | null
+  /** Parcialidades de MSI que aún no se facturan. */
+  msiPorFacturarCents: number
+  /** Lo que sumarán las parcialidades en el próximo corte. */
+  msiProximoCorteCents: number
 }
 
 export interface Summary {

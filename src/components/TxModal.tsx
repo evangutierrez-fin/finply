@@ -85,9 +85,19 @@ export function TxModal({
     [accounts, tx],
   )
 
-  // Los movimientos que nacieron de un abono o una inversión mantienen su tipo;
-  // monto y fecha se sincronizan con ese registro en el servidor.
-  const linked = Boolean(tx && (tx.debtPaymentId || tx.investmentEntryId))
+  // Los movimientos que nacieron de un abono, una inversión o una compra a
+  // meses mantienen su tipo; monto y fecha se sincronizan con ese registro en
+  // el servidor.
+  const linked = Boolean(
+    tx && (tx.debtPaymentId || tx.investmentEntryId || tx.msiPurchaseId || tx.debtId),
+  )
+  const ligadoA = tx?.debtPaymentId
+    ? 'un abono de deuda'
+    : tx?.investmentEntryId
+      ? 'una inversión'
+      : tx?.debtId
+        ? 'el desembolso de una deuda'
+        : 'una compra a meses'
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -152,8 +162,10 @@ export function TxModal({
         </div>
         {linked && (
           <p className="forma-nota">
-            Este movimiento está ligado a {tx?.debtPaymentId ? 'un abono de deuda' : 'una inversión'}:
-            monto y fecha se sincronizan con ese registro y el tipo no puede cambiar.
+            Este movimiento está ligado a {ligadoA}: monto y fecha se sincronizan con ese
+            registro y el tipo no puede cambiar.
+            {tx?.msiPurchaseId && ' Cambiar el monto rehace las parcialidades.'}
+            {tx?.debtId && ' Anularlo no borra la deuda; solo quita el movimiento del libro.'}
           </p>
         )}
 

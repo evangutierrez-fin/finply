@@ -10,6 +10,7 @@ import tags from './routes/tags.ts'
 import importaciones from './routes/importaciones.ts'
 import transactions from './routes/transactions.ts'
 import debts from './routes/debts.ts'
+import tarjetas from './routes/tarjetas.ts'
 import investments from './routes/investments.ts'
 import budgets from './routes/budgets.ts'
 import goals from './routes/goals.ts'
@@ -35,6 +36,7 @@ export function createApp(): express.Express {
   app.use('/api/importaciones', importaciones)
   app.use('/api/transactions', transactions)
   app.use('/api/debts', debts)
+  app.use('/api/tarjetas', tarjetas)
   app.use('/api/investments', investments)
   app.use('/api/budgets', budgets)
   app.use('/api/goals', goals)

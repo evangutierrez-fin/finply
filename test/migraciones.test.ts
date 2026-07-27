@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { migrate, SCHEMA_VERSION } from '../server/migrations.ts'
+import { MIGRATIONS, migrate, SCHEMA_VERSION } from '../server/migrations.ts'
 
 const dirs: string[] = []
 after(() => {
@@ -74,6 +74,20 @@ function baseVieja(): DatabaseSync {
       VALUES (1, 1, 1, 'gasto', 25000, '2026-07-10', 1, 'Despensa');
     INSERT INTO budgets (id, profile_id, category_id, amount_cents) VALUES (1, 1, 1, 350000);
   `)
+  return db
+}
+
+/**
+ * Una base parada en la versión anterior, armada corriendo las migraciones
+ * publicadas hasta ahí. Es el estado real desde el que actualiza quien ya
+ * venía usando Finply, sin tener que pegar el esquema viejo a mano.
+ */
+function baseEnVersion(version: number): DatabaseSync {
+  const db = baseVieja()
+  db.exec('PRAGMA foreign_keys = OFF')
+  for (const m of MIGRATIONS.filter((m) => m.id <= version)) m.up(db)
+  db.exec(`PRAGMA user_version = ${version}`)
+  db.exec('PRAGMA foreign_keys = ON')
   return db
 }
 
@@ -151,6 +165,114 @@ describe('migraciones', () => {
     migrate(db, { backupDir })
 
     assert.ok(!existsSync(backupDir) || readdirSync(backupDir).length === 0)
+    db.close()
+  })
+
+  test('un libro en la versión 5 llega a crédito sin perder nada', () => {
+    const db = baseEnVersion(5)
+    // Lo que ese libro ya tenía: una tarjeta y una deuda sin tasa.
+    db.exec(`
+      INSERT INTO accounts (id, profile_id, name, type, opening_cents)
+        VALUES (2, 1, 'Tarjeta', 'tarjeta', -50000);
+      INSERT INTO debts (id, profile_id, direction, counterparty, principal_cents, start_date)
+        VALUES (1, 1, 'por_pagar', 'Nu', 330000, '2026-06-01');
+      INSERT INTO transactions (id, profile_id, account_id, type, amount_cents, date, note)
+        VALUES (2, 1, 2, 'gasto', 12000, '2026-07-02', 'Gasolina');
+    `)
+
+    migrate(db)
+
+    assert.equal((db.prepare('PRAGMA user_version').get() as any).user_version, SCHEMA_VERSION)
+
+    // Las columnas nuevas nacen vacías: una cuenta sin configurar se comporta
+    // igual que antes de migrar.
+    const tarjeta = db.prepare('SELECT * FROM accounts WHERE id = 2').get() as any
+    assert.equal(tarjeta.opening_cents, -50000)
+    assert.equal(tarjeta.credit_limit_cents, null)
+    assert.equal(tarjeta.cut_day, null)
+    assert.equal(tarjeta.due_day, null)
+
+    // Las deudas de antes son deudas sin intereses, que es lo que eran.
+    const deuda = db.prepare('SELECT * FROM debts WHERE id = 1').get() as any
+    assert.equal(deuda.principal_cents, 330000)
+    assert.equal(deuda.annual_rate_bp, 0)
+    assert.equal(deuda.term_months, null)
+
+    // Y los movimientos siguen intactos, ahora con la columna de MSI en nulo.
+    const movimiento = db.prepare('SELECT * FROM transactions WHERE id = 2').get() as any
+    assert.equal(movimiento.note, 'Gasolina')
+    assert.equal(movimiento.amount_cents, 12000)
+    assert.equal(movimiento.msi_purchase_id, null)
+    assert.equal(movimiento.debt_id, null)
+
+    for (const tabla of ['msi_purchases', 'msi_installments']) {
+      assert.doesNotThrow(() => db.prepare(`SELECT COUNT(*) FROM ${tabla}`).get(), `falta ${tabla}`)
+    }
+    assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0)
+    db.close()
+  })
+
+  test('un libro en la versión 6 gana el desembolso sin tocar lo que ya había', () => {
+    const db = baseEnVersion(6)
+    db.exec(`
+      INSERT INTO debts (id, profile_id, direction, counterparty, principal_cents, start_date)
+        VALUES (1, 1, 'por_pagar', 'Gustavo', 330000, '2026-06-01');
+    `)
+
+    migrate(db)
+
+    assert.equal((db.prepare('PRAGMA user_version').get() as any).user_version, SCHEMA_VERSION)
+    // Las deudas de antes no estrenan movimiento: no hay forma de saber si el
+    // usuario ya registró ese dinero a mano.
+    const movimientos = db.prepare('SELECT * FROM transactions').all() as any[]
+    assert.equal(movimientos.length, 1)
+    assert.equal(movimientos[0].debt_id, null)
+    assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0)
+    db.close()
+  })
+
+  test('un libro en la versión 7 estrena saldo insoluto sin cambiar cuentas', () => {
+    const db = baseEnVersion(7)
+    db.exec(`
+      INSERT INTO debts (id, profile_id, direction, counterparty, principal_cents, start_date)
+        VALUES (1, 1, 'por_pagar', 'Gustavo', 330000, '2026-06-01');
+      INSERT INTO debt_payments (id, debt_id, amount_cents, date, note)
+        VALUES (1, 1, 130000, '2026-07-01', 'Primer abono');
+      INSERT INTO transactions (id, profile_id, account_id, type, amount_cents, date, note, debt_id)
+        VALUES (2, 1, 1, 'ingreso', 330000, '2026-06-01', 'Préstamo', 1);
+    `)
+
+    migrate(db)
+
+    // Los abonos viejos son 100 % capital: la deuda sigue valiendo lo mismo
+    // que antes de migrar, al centavo.
+    const abono = db.prepare('SELECT * FROM debt_payments WHERE id = 1').get() as any
+    assert.equal(abono.amount_cents, 130000)
+    assert.equal(abono.interest_cents, 0)
+
+    const deuda = db.prepare('SELECT * FROM debts WHERE id = 1').get() as any
+    assert.equal(deuda.down_payment_cents, 0)
+    const insoluto = db
+      .prepare(
+        `SELECT principal_cents - COALESCE((SELECT SUM(amount_cents - interest_cents)
+          FROM debt_payments WHERE debt_id = 1), 0) AS saldo FROM debts WHERE id = 1`,
+      )
+      .get() as any
+    assert.equal(insoluto.saldo, 200000)
+
+    // Y el movimiento que ya estaba ligado queda marcado como desembolso: es
+    // lo único que podía ser antes de que existiera el enganche.
+    const movimiento = db.prepare('SELECT * FROM transactions WHERE id = 2').get() as any
+    assert.equal(movimiento.debt_role, 'desembolso')
+    assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0)
+    db.close()
+  })
+
+  test('los CHECK de crédito rechazan datos imposibles', () => {
+    const db = baseEnVersion(5)
+    migrate(db)
+    assert.throws(() => db.exec('UPDATE accounts SET cut_day = 45 WHERE id = 1'), /CHECK/)
+    assert.throws(() => db.exec('UPDATE accounts SET credit_limit_cents = -1 WHERE id = 1'), /CHECK/)
     db.close()
   })
 

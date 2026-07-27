@@ -1441,6 +1441,173 @@ select.campo-input { cursor: pointer; }
 .splash-nombre { animation: aparecer 0.5s ease-out; font-size: 52px; }
 
 /* ── responsivo ──────────────────────────────────────────────────────── */
+/* ── tarjetas de crédito ─────────────────────────────────────────────── */
+.campos-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+  align-items: end;
+}
+.tarjeta-campos { border: 1px solid var(--regla); border-radius: var(--radio); padding: 14px 16px 16px; }
+.tarjeta-campos .forma-nota { margin: 4px 0 14px; }
+
+.tarjetas-resumen {
+  display: flex;
+  gap: 48px;
+  flex-wrap: wrap;
+  padding: 18px 22px;
+}
+.tarjetas-resumen-dato { display: flex; flex-direction: column; gap: 4px; }
+
+.tarjetas-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+.tarjeta-carta {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: aparecer 0.35s ease-out backwards;
+}
+.tarjeta-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+.tarjeta-head h2 { font-size: 15px; font-weight: 600; }
+.tarjeta-deuda { font-size: 24px; font-weight: 500; }
+.tarjeta-riel {
+  height: 9px;
+  background: var(--papel);
+  border: 1px solid var(--regla);
+  border-radius: 5px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+.tarjeta-lleno {
+  display: block;
+  height: 100%;
+  border-radius: 5px;
+  background: var(--acento);
+  transition: width 0.4s ease;
+}
+.tarjeta-linea { font-size: 13px; color: var(--tinta-2); }
+.tarjeta-linea strong { color: var(--tinta); }
+
+/* El bloque del corte es el estado de cuenta en chiquito: lo que el banco
+   te va a cobrar y hasta cuándo. */
+.tarjeta-corte {
+  margin-top: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--regla);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.tarjeta-corte-fila {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.tarjeta-pngi {
+  padding-top: 8px;
+  border-top: 1px solid var(--regla);
+}
+.tarjeta-pngi .rotulo { color: var(--tinta); }
+.tarjeta-pngi .cifra { font-size: 16px; font-weight: 600; }
+.tarjeta-nota { font-size: 12.5px; color: var(--tinta-2); margin-top: 6px; }
+.tarjeta-pie {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--regla);
+}
+.tarjeta-msi-resumen { font-size: 12.5px; color: var(--tinta-2); }
+
+/* ── compras a meses ─────────────────────────────────────────────────── */
+.msi-lista { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; }
+.msi-fila {
+  border-top: 1px solid var(--regla);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.msi-fila-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+.msi-concepto { font-size: 14px; font-weight: 500; }
+.msi-riel {
+  height: 6px;
+  background: var(--papel);
+  border: 1px solid var(--regla);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.msi-lleno { display: block; height: 100%; background: var(--laton); transition: width 0.4s ease; }
+.msi-cifras { font-size: 12.5px; color: var(--tinta-2); }
+.msi-cifras strong { color: var(--tinta); }
+/* `.deuda-borrar` empuja a la derecha con margin-left:auto; aquí la acción
+   pertenece a la fila de la compra, alineada con su texto. */
+.msi-borrar { align-self: flex-start; margin-left: 0; }
+.msi-previa { margin-top: 2px; }
+
+/* ── plan de pagos de una deuda ──────────────────────────────────────── */
+.deuda-credito {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.deuda-cuota { font-size: 12.5px; color: var(--tinta-2); }
+.deuda-cuota strong { color: var(--tinta); }
+.deuda-detalle {
+  font-size: 12.5px;
+  color: var(--tinta-2);
+  margin-top: 6px;
+  line-height: 1.7;
+}
+.deuda-detalle strong { color: var(--tinta); }
+.abono-desglose {
+  display: block;
+  font-family: var(--f-mono);
+  font-size: 10.5px;
+  color: var(--tinta-3);
+  margin-top: 2px;
+}
+/* Un plazo a 60 meses no puede empujar la página a lo ancho. */
+.amort-wrap {
+  margin-top: 14px;
+  max-height: 340px;
+  overflow: auto;
+  border: 1px solid var(--regla);
+  border-radius: var(--radio);
+}
+.amort-tabla { box-shadow: none; border: none; font-size: 13px; }
+.amort-tabla th { position: sticky; top: 0; background: var(--hoja); z-index: 1; }
+.amort-tabla td { font-family: var(--f-mono); font-size: 12px; padding: 7px 10px; }
+.amort-tabla td:first-child { color: var(--tinta-2); }
+.amort-tabla td:nth-child(2) { white-space: nowrap; }
+.amort-tabla th:not(:first-child):not(:nth-child(2)),
+.amort-tabla td:not(:first-child):not(:nth-child(2)) { text-align: right; }
+.amort-tabla tfoot td {
+  border-top: 1px solid var(--tinta);
+  font-weight: 600;
+  color: var(--tinta);
+}
+.amort-nota { font-size: 12px; color: var(--tinta-2); padding: 10px 12px; }
+
 @media (max-width: 960px) {
   .lomo {
     position: static;
@@ -1470,7 +1637,9 @@ select.campo-input { cursor: pointer; }
   .app::before { display: none; }
   .dos-columnas, .dos-columnas-desigual, .deudas-cols { grid-template-columns: 1fr; }
   .hero { flex-direction: column; align-items: stretch; }
-  .campos-2 { grid-template-columns: 1fr; }
+  .campos-2, .campos-3 { grid-template-columns: 1fr; }
+  .tarjetas-grid { grid-template-columns: 1fr; }
+  .tarjetas-resumen { gap: 24px; }
   .libro { display: block; overflow-x: auto; }
   .acciones { opacity: 1; }
 }

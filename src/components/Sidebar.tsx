@@ -5,6 +5,7 @@ export type View =
   | 'resumen'
   | 'movimientos'
   | 'cuentas'
+  | 'tarjetas'
   | 'deudas'
   | 'inversiones'
   | 'presupuestos'
@@ -29,6 +30,7 @@ const NAV_GROUPS: { label: string | null; items: { id: View; label: string }[] }
   {
     label: 'Patrimonio',
     items: [
+      { id: 'tarjetas', label: 'Tarjetas' },
       { id: 'deudas', label: 'Deudas' },
       { id: 'inversiones', label: 'Inversiones' },
     ],

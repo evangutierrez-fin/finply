@@ -1,16 +1,33 @@
 import { Router } from 'express'
-import { db, inTransaction, mapDebt, refreshDebtStatus } from '../db.ts'
+import {
+  db, debtBalance, ensureAccount, inTransaction, mapDebt, refreshDebtStatus,
+} from '../db.ts'
+import { interesDevengado, tablaAmortizacion } from '../../shared/credito.ts'
 import { debtInput, debtPatch, paymentInput } from '../validators.ts'
 
 const router = Router()
 
 const DEBT_SELECT = `
-  SELECT d.*, COALESCE((SELECT SUM(p.amount_cents) FROM debt_payments p WHERE p.debt_id = d.id), 0) AS paid_cents
+  SELECT d.*,
+    COALESCE((SELECT SUM(p.amount_cents) FROM debt_payments p WHERE p.debt_id = d.id), 0)
+      AS paid_cents,
+    COALESCE((SELECT SUM(p.interest_cents) FROM debt_payments p WHERE p.debt_id = d.id), 0)
+      AS interest_paid_cents,
+    COALESCE((SELECT SUM(p.amount_cents - p.interest_cents) FROM debt_payments p
+      WHERE p.debt_id = d.id), 0) AS capital_paid_cents
   FROM debts d
 `
 
 function mapPayment(row: any) {
-  return { id: row.id, debtId: row.debt_id, amountCents: row.amount_cents, date: row.date, note: row.note }
+  return {
+    id: row.id,
+    debtId: row.debt_id,
+    amountCents: row.amount_cents,
+    date: row.date,
+    note: row.note,
+    interestCents: row.interest_cents ?? 0,
+    capitalCents: row.amount_cents - (row.interest_cents ?? 0),
+  }
 }
 
 function debtWithPayments(id: number) {
@@ -55,23 +72,104 @@ router.get('/', (req, res) => {
   res.json(debts)
 })
 
+// Apuntar una deuda. Si trae cuenta, también se asienta el desembolso: entra
+// dinero si te prestaron (por_pagar), sale si prestaste tú (por_cobrar). Sin
+// cuenta, la deuda queda como pura obligación y el libro no se mueve — que es
+// lo correcto cuando el dinero nunca pasó por una de tus cuentas.
 router.post('/', (req, res) => {
   const input = debtInput.parse(req.body)
-  const result = db
-    .prepare(
-      `INSERT INTO debts (profile_id, direction, counterparty, concept, principal_cents, start_date, due_date)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      input.profileId,
-      input.direction,
-      input.counterparty,
-      input.concept,
-      input.principalCents,
-      input.startDate,
-      input.dueDate ?? null,
-    )
-  res.status(201).json(debtWithPayments(Number(result.lastInsertRowid)))
+  if (input.accountId) ensureAccount(input.profileId, input.accountId)
+  if (input.downPaymentAccountId) ensureAccount(input.profileId, input.downPaymentAccountId)
+  if (input.downPaymentAccountId && input.downPaymentCents === 0) {
+    return res.status(400).json({ error: 'Elegiste cuenta para el enganche pero no su monto' })
+  }
+
+  const id = inTransaction(() => {
+    const result = db
+      .prepare(
+        `INSERT INTO debts (profile_id, direction, counterparty, concept, principal_cents,
+          start_date, due_date, annual_rate_bp, term_months, down_payment_cents)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        input.profileId,
+        input.direction,
+        input.counterparty,
+        input.concept,
+        input.principalCents,
+        input.startDate,
+        input.dueDate ?? null,
+        input.annualRateBp,
+        input.termMonths ?? null,
+        input.downPaymentCents,
+      )
+    const debtId = Number(result.lastInsertRowid)
+
+    // Sin categoría a propósito: un préstamo no es un gasto ni un ingreso de
+    // los que se presupuestan, y forzarle una categoría ensuciaría el reporte
+    // por categoría del mes.
+    const asentar = (
+      accountId: number,
+      tipo: 'ingreso' | 'gasto',
+      cents: number,
+      nota: string,
+      rol: 'desembolso' | 'enganche',
+    ) =>
+      db
+        .prepare(
+          `INSERT INTO transactions
+            (profile_id, account_id, type, amount_cents, date, note, debt_id, debt_role)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(input.profileId, accountId, tipo, cents, input.startDate, nota, debtId, rol)
+
+    const entraElPrestamo = input.direction === 'por_pagar'
+    if (input.accountId) {
+      asentar(
+        input.accountId,
+        entraElPrestamo ? 'ingreso' : 'gasto',
+        input.principalCents,
+        input.concept || `Préstamo · ${input.counterparty}`,
+        'desembolso',
+      )
+    }
+    // El enganche va al revés que el desembolso: si te prestaron, lo pones tú.
+    if (input.downPaymentAccountId && input.downPaymentCents > 0) {
+      asentar(
+        input.downPaymentAccountId,
+        entraElPrestamo ? 'gasto' : 'ingreso',
+        input.downPaymentCents,
+        `Enganche · ${input.counterparty}`,
+        'enganche',
+      )
+    }
+    return debtId
+  })
+
+  res.status(201).json(debtWithPayments(id))
+})
+
+/**
+ * El plan de pagos: cuánto de cada mensualidad es interés y cuánto capital.
+ * Se calcula sobre el principal original desde la fecha de inicio —es el plan,
+ * no el historial—; los abonos reales viven en `payments`.
+ */
+router.get('/:id/amortizacion', (req, res) => {
+  const id = Number(req.params.id)
+  const debt: any = db.prepare('SELECT * FROM debts WHERE id = ?').get(id)
+  if (!debt) return res.status(404).json({ error: 'Deuda no encontrada' })
+  if (!debt.term_months) {
+    return res.status(400).json({
+      error: 'Esta deuda no tiene plazo. Ponle un plazo en meses para ver la tabla de pagos.',
+    })
+  }
+  const tabla = tablaAmortizacion({
+    principalCents: debt.principal_cents,
+    annualRateBp: debt.annual_rate_bp,
+    termMonths: debt.term_months,
+    startDate: debt.start_date,
+  })
+  res.json({ debtId: id, ...tabla })
 })
 
 router.patch('/:id', (req, res) => {
@@ -82,7 +180,8 @@ router.patch('/:id', (req, res) => {
   inTransaction(() => {
     db.prepare(
       `UPDATE debts SET direction = ?, counterparty = ?, concept = ?, principal_cents = ?,
-        start_date = ?, due_date = ? WHERE id = ?`,
+        start_date = ?, due_date = ?, annual_rate_bp = ?, term_months = ?,
+        down_payment_cents = ? WHERE id = ?`,
     ).run(
       input.direction ?? existing.direction,
       input.counterparty ?? existing.counterparty,
@@ -90,6 +189,10 @@ router.patch('/:id', (req, res) => {
       input.principalCents ?? existing.principal_cents,
       input.startDate ?? existing.start_date,
       input.dueDate === undefined ? existing.due_date : input.dueDate,
+      input.annualRateBp ?? existing.annual_rate_bp,
+      // Ausente lo deja como estaba; `null` explícito quita el plazo.
+      input.termMonths === undefined ? existing.term_months : input.termMonths,
+      input.downPaymentCents ?? existing.down_payment_cents,
       id,
     )
     // El estado siempre se deriva de los abonos: cambiar el principal puede
@@ -119,10 +222,31 @@ router.post('/:id/payments', (req, res) => {
       .get(input.accountId, debt.profile_id)
     if (!account) return res.status(400).json({ error: 'La cuenta no pertenece a este perfil' })
   }
+  // Cuánto del abono se va en intereses. Se propone con el interés devengado
+  // desde el abono anterior sobre el saldo insoluto; si el usuario mandó el
+  // dato de su estado de cuenta, ese manda. Nunca más que el propio abono:
+  // el capital no puede ser negativo.
+  const anterior: any = db
+    .prepare('SELECT MAX(date) AS fecha FROM debt_payments WHERE debt_id = ? AND date <= ?')
+    .get(id, input.date)
+  const interes = Math.min(
+    input.interestCents ??
+      interesDevengado(
+        debtBalance(id),
+        debt.annual_rate_bp,
+        anterior?.fecha ?? debt.start_date,
+        input.date,
+      ),
+    input.amountCents,
+  )
+
   inTransaction(() => {
     const payment = db
-      .prepare('INSERT INTO debt_payments (debt_id, amount_cents, date, note) VALUES (?, ?, ?, ?)')
-      .run(id, input.amountCents, input.date, input.note)
+      .prepare(
+        `INSERT INTO debt_payments (debt_id, amount_cents, date, note, interest_cents)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(id, input.amountCents, input.date, input.note, interes)
     if (input.accountId) {
       const txType = debt.direction === 'por_cobrar' ? 'ingreso' : 'gasto'
       const note = input.note || `Abono · ${debt.counterparty}`

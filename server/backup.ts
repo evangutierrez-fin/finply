@@ -36,6 +36,10 @@ const TABLES = [
   'budgets',
   'notes',
   'import_batches',
+  // Las compras a meses van antes que los movimientos: el cargo que las ancla
+  // las referencia.
+  'msi_purchases',
+  'msi_installments',
   'transactions',
   'transaction_tags',
 ] as const

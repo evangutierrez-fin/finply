@@ -4,6 +4,7 @@ import {
   refreshDebtStatus, setTxTags, TX_SELECT,
 } from '../db.ts'
 import { armarCsv, celdaTexto, montoCsv } from '../csv.ts'
+import { sincronizarCompraMSI } from '../tarjetas.ts'
 import { txInput, txQuery } from '../validators.ts'
 
 const router = Router()
@@ -191,10 +192,15 @@ router.patch('/:id', (req, res) => {
   if (input.profileId !== existing.profile_id) {
     return res.status(400).json({ error: 'Un movimiento no puede cambiar de perfil' })
   }
-  const linked = existing.debt_payment_id || existing.investment_entry_id
+  const linked =
+    existing.debt_payment_id ||
+    existing.investment_entry_id ||
+    existing.msi_purchase_id ||
+    existing.debt_id
   if (linked && input.type !== existing.type) {
     return res.status(400).json({
-      error: 'Este movimiento está ligado a una deuda o inversión; su tipo no puede cambiar',
+      error:
+        'Este movimiento está ligado a una deuda, inversión o compra a meses; su tipo no puede cambiar',
     })
   }
   ensureReferences(input)
@@ -217,11 +223,12 @@ router.patch('/:id', (req, res) => {
     // `tagIds` ausente deja las etiquetas como estaban; un arreglo vacío las quita.
     if (input.tagIds) setTxTags(id, input.tagIds)
     if (existing.debt_payment_id) {
-      db.prepare('UPDATE debt_payments SET amount_cents = ?, date = ? WHERE id = ?').run(
-        input.amountCents,
-        input.date,
-        existing.debt_payment_id,
-      )
+      // El interés que el usuario ya fijó se respeta, pero nunca puede pasar
+      // del abono: el capital no puede quedar negativo.
+      db.prepare(
+        `UPDATE debt_payments SET amount_cents = ?, date = ?,
+          interest_cents = MIN(interest_cents, ?) WHERE id = ?`,
+      ).run(input.amountCents, input.date, input.amountCents, existing.debt_payment_id)
       const payment: any = db
         .prepare('SELECT debt_id FROM debt_payments WHERE id = ?')
         .get(existing.debt_payment_id)
@@ -233,6 +240,31 @@ router.patch('/:id', (req, res) => {
         input.date,
         existing.investment_entry_id,
       )
+    }
+    // El desembolso y su deuda son el mismo dinero: corregir el movimiento
+    // corrige el principal, o los dos dirían cosas distintas. El enganche
+    // corrige el enganche, que no es principal — por eso hacen falta roles.
+    if (existing.debt_id && existing.debt_role === 'enganche') {
+      db.prepare('UPDATE debts SET down_payment_cents = ? WHERE id = ?').run(
+        input.amountCents,
+        existing.debt_id,
+      )
+    } else if (existing.debt_id) {
+      db.prepare('UPDATE debts SET principal_cents = ?, start_date = ? WHERE id = ?').run(
+        input.amountCents,
+        input.date,
+        existing.debt_id,
+      )
+      refreshDebtStatus(existing.debt_id)
+    }
+    // Cambiar el cargo de una compra a meses rehace su calendario: si no, las
+    // parcialidades dejarían de sumar el total de la compra.
+    if (existing.msi_purchase_id) {
+      sincronizarCompraMSI(existing.msi_purchase_id, {
+        totalCents: input.amountCents,
+        purchaseDate: input.date,
+        accountId: input.accountId,
+      })
     }
   })
   const tx = mapTx(getTx(id))
@@ -261,6 +293,14 @@ router.delete('/:id', (req, res) => {
     if (existing.investment_entry_id) {
       db.prepare('DELETE FROM investment_entries WHERE id = ?').run(existing.investment_entry_id)
     }
+    // Sin cargo no hay compra: el calendario de parcialidades se va con él
+    // (las parcialidades caen por cascada).
+    if (existing.msi_purchase_id) {
+      db.prepare('DELETE FROM msi_purchases WHERE id = ?').run(existing.msi_purchase_id)
+    }
+    // Ojo: el desembolso de una deuda NO se comporta así. Una deuda con su
+    // historial de abonos no puede evaporarse porque anules un movimiento;
+    // la deuda es el registro principal y aquí solo se pierde la liga.
   })
   res.json({ ok: true })
 })

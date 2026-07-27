@@ -162,7 +162,22 @@ export function mapAccount(row: any) {
     archived: row.archived === 1,
     balanceCents: row.balance_cents ?? 0,
     txCount: row.tx_count ?? 0,
+    creditLimitCents: row.credit_limit_cents ?? null,
+    cutDay: row.cut_day ?? null,
+    dueDay: row.due_day ?? null,
   }
+}
+
+/** La cuenta existe, es del perfil y es una tarjeta. */
+export function ensureTarjeta(profileId: number, accountId: number): any {
+  const row: any = db
+    .prepare('SELECT * FROM accounts WHERE id = ? AND profile_id = ?')
+    .get(accountId, profileId)
+  if (!row) throw httpError(400, 'La cuenta no pertenece a este perfil')
+  if (row.type !== 'tarjeta') {
+    throw httpError(400, 'Las compras a meses se registran en una cuenta de tipo tarjeta')
+  }
+  return row
 }
 
 export function mapProfile(row: any) {
@@ -191,6 +206,8 @@ export function mapTx(row: any) {
     transferAccountName: row.transfer_account_name ?? null,
     debtPaymentId: row.debt_payment_id,
     investmentEntryId: row.investment_entry_id ?? null,
+    msiPurchaseId: row.msi_purchase_id ?? null,
+    debtId: row.debt_id ?? null,
     tags: [] as { id: number; name: string }[],
   }
 }
@@ -254,6 +271,14 @@ export function mapDebt(row: any) {
     dueDate: row.due_date,
     status: row.status,
     paidCents: row.paid_cents ?? 0,
+    annualRateBp: row.annual_rate_bp ?? 0,
+    termMonths: row.term_months ?? null,
+    downPaymentCents: row.down_payment_cents ?? 0,
+    interestPaidCents: row.interest_paid_cents ?? 0,
+    capitalPaidCents: row.capital_paid_cents ?? 0,
+    // Lo que de verdad debes: solo el capital abonado baja el principal. Con
+    // piso en cero, porque pagar de más no vuelve acreedor al deudor.
+    balanceCents: Math.max(0, row.principal_cents - (row.capital_paid_cents ?? 0)),
     payments: [] as unknown[],
   }
 }
@@ -270,14 +295,35 @@ export function getTx(id: number): any {
   return db.prepare(`${TX_SELECT} WHERE t.id = ?`).get(id)
 }
 
-/** Recalcula el estado de una deuda según sus abonos. */
+/**
+ * Recalcula el estado de una deuda según el **capital** abonado, no según el
+ * total pagado: la parte de cada abono que fue interés no baja el principal.
+ * En una deuda sin tasa `interest_cents` es cero y esto da lo mismo de antes.
+ */
 export function refreshDebtStatus(debtId: number): void {
   db.prepare(
     `UPDATE debts SET status = CASE
-      WHEN (SELECT COALESCE(SUM(amount_cents), 0) FROM debt_payments WHERE debt_id = ?) >= principal_cents
+      WHEN (SELECT COALESCE(SUM(amount_cents - interest_cents), 0)
+            FROM debt_payments WHERE debt_id = ?) >= principal_cents
       THEN 'saldada' ELSE 'abierta' END
     WHERE id = ?`,
   ).run(debtId, debtId)
+}
+
+/**
+ * Saldo insoluto de una deuda: principal menos el capital abonado. Es contra
+ * esto que se calcula el interés del siguiente abono.
+ */
+export function debtBalance(debtId: number): number {
+  const row: any = db
+    .prepare(
+      `SELECT d.principal_cents
+         - COALESCE((SELECT SUM(p.amount_cents - p.interest_cents)
+            FROM debt_payments p WHERE p.debt_id = d.id), 0) AS saldo
+       FROM debts d WHERE d.id = ?`,
+    )
+    .get(debtId)
+  return row ? Math.max(0, row.saldo) : 0
 }
 
 /** Recalcula el estado de una meta según sus aportes. */

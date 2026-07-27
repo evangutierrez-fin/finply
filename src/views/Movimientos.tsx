@@ -244,6 +244,8 @@ export function Movimientos() {
                     </span>
                     {tx.categoryName && tx.note && <span className="mov-cat">{tx.categoryName}</span>}
                     {tx.debtPaymentId && <span className="mov-cat">Abono de deuda</span>}
+                    {tx.msiPurchaseId && <span className="mov-cat">Compra a meses</span>}
+                    {tx.debtId && <span className="mov-cat">Desembolso de deuda</span>}
                     {tx.tags.length > 0 && (
                       <span className="mov-etiquetas">
                         {tx.tags.map((t) => (

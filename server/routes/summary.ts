@@ -55,7 +55,9 @@ router.get('/', (req, res) => {
         COUNT(*) AS abiertas
       FROM (
         SELECT d.direction,
-          d.principal_cents - COALESCE((SELECT SUM(p.amount_cents) FROM debt_payments p WHERE p.debt_id = d.id), 0) AS remaining
+          -- Saldo insoluto: solo el capital abonado baja el principal.
+          d.principal_cents - COALESCE((SELECT SUM(p.amount_cents - p.interest_cents)
+            FROM debt_payments p WHERE p.debt_id = d.id), 0) AS remaining
         FROM debts d
         WHERE d.profile_id = ? AND d.status = 'abierta'
       )`,

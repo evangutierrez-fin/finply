@@ -1,7 +1,7 @@
 import type {
-  Account, Budget, Category, Debt, DebtPayment, Goal, InformeImport, Investment,
-  InvestmentEntryType, LoteImport, MapeoImport, Note, Profile, ResultadoImport,
-  Summary, Tag, Tx, TxType,
+  Account, Amortizacion, Budget, Category, CompraMSI, Debt, DebtPayment, EstadoTarjeta, Goal,
+  InformeImport, Investment, InvestmentEntryType, LoteImport, MapeoImport, Note, Profile,
+  ResultadoImport, Summary, Tag, Tx, TxType,
 } from '../shared/types.ts'
 
 /** Error de la API que conserva el código y el cuerpo, para poder reaccionar. */
@@ -113,6 +113,36 @@ export interface DebtDraft {
   principalCents: number
   startDate: string
   dueDate?: string | null
+  /** Puntos base: 24.5 % anual = 2450. */
+  annualRateBp?: number
+  /** `null` quita el plazo; ausente lo deja como estaba. */
+  termMonths?: number | null
+  /**
+   * Solo al crear: cuenta por la que entra o sale el dinero. Con ella se
+   * asienta el movimiento del desembolso; sin ella el libro no se mueve.
+   */
+  accountId?: number | null
+  /** Enganche puesto de contado al contratar. No es principal. */
+  downPaymentCents?: number
+  /** Solo al crear: cuenta de la que sale (o a la que entra) el enganche. */
+  downPaymentAccountId?: number | null
+}
+
+/** Datos de crédito de una cuenta. `null` los borra; ausente no opina. */
+export interface CreditoDraft {
+  creditLimitCents?: number | null
+  cutDay?: number | null
+  dueDay?: number | null
+}
+
+export interface MsiDraft {
+  profileId: number
+  accountId: number
+  concept: string
+  totalCents: number
+  months: number
+  purchaseDate: string
+  categoryId?: number | null
 }
 
 export const api = {
@@ -126,14 +156,27 @@ export const api = {
   },
   accounts: {
     list: (profileId: number) => req<Account[]>(`/api/accounts?profileId=${profileId}`),
-    create: (data: {
-      profileId: number; name: string; type: string; openingCents: number
-    }) => req<Account>('/api/accounts', { method: 'POST', body: JSON.stringify(data) }),
+    create: (
+      data: { profileId: number; name: string; type: string; openingCents: number } & CreditoDraft,
+    ) => req<Account>('/api/accounts', { method: 'POST', body: JSON.stringify(data) }),
     update: (
       id: number,
-      data: Partial<{ name: string; type: string; openingCents: number; archived: boolean }>,
+      data: Partial<{ name: string; type: string; openingCents: number; archived: boolean }> &
+        CreditoDraft,
     ) => req<Account>(`/api/accounts/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     remove: (id: number) => req<{ ok: true }>(`/api/accounts/${id}`, { method: 'DELETE' }),
+  },
+  tarjetas: {
+    /** Estado de cuenta de cada tarjeta: corte, pago y línea disponible. */
+    estado: (profileId: number) => req<EstadoTarjeta[]>(`/api/tarjetas?profileId=${profileId}`),
+    msi: {
+      list: (profileId: number) => req<CompraMSI[]>(`/api/tarjetas/msi?profileId=${profileId}`),
+      create: (data: MsiDraft) =>
+        req<CompraMSI>('/api/tarjetas/msi', { method: 'POST', body: JSON.stringify(data) }),
+      /** Borra también el cargo que la ancla en el libro. */
+      remove: (id: number, profileId: number) =>
+        req<{ ok: true }>(`/api/tarjetas/msi/${id}?profileId=${profileId}`, { method: 'DELETE' }),
+    },
   },
   categories: {
     list: (profileId: number) => req<Category[]>(`/api/categories?profileId=${profileId}`),
@@ -196,9 +239,18 @@ export const api = {
     update: (id: number, data: Partial<DebtDraft & { status: string }>) =>
       req<Debt>(`/api/debts/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     remove: (id: number) => req<{ ok: true }>(`/api/debts/${id}`, { method: 'DELETE' }),
+    /** El plan de pagos: capital contra interés mes por mes. Exige plazo. */
+    amortizacion: (id: number) => req<Amortizacion>(`/api/debts/${id}/amortizacion`),
     addPayment: (
       debtId: number,
-      data: { amountCents: number; date: string; note?: string; accountId?: number | null },
+      data: {
+        amountCents: number
+        date: string
+        note?: string
+        accountId?: number | null
+        /** Ausente, el servidor propone el interés devengado. */
+        interestCents?: number
+      },
     ) => req<Debt>(`/api/debts/${debtId}/payments`, { method: 'POST', body: JSON.stringify(data) }),
     removePayment: (payment: DebtPayment) =>
       req<Debt>(`/api/debts/payments/${payment.id}`, { method: 'DELETE' }),

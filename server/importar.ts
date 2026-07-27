@@ -430,18 +430,22 @@ export function deshacer(profileId: number, batchId: number): { borradas: number
     .get(batchId, profileId)
   if (!lote) throw httpError(404, 'Lote de importación no encontrado')
 
-  // Una partida importada no puede haberse ligado a una deuda o inversión,
-  // pero si algún día pasara, borrarla descuadraría ese registro.
+  // Una partida importada no puede haberse ligado a una deuda, una inversión
+  // o una compra a meses, pero si algún día pasara, borrarla descuadraría ese
+  // registro.
   const ligadas: any = db
     .prepare(
       `SELECT COUNT(*) AS n FROM transactions
-       WHERE import_batch_id = ? AND (debt_payment_id IS NOT NULL OR investment_entry_id IS NOT NULL)`,
+       WHERE import_batch_id = ? AND (debt_payment_id IS NOT NULL
+         OR investment_entry_id IS NOT NULL OR msi_purchase_id IS NOT NULL
+         OR debt_id IS NOT NULL)`,
     )
     .get(batchId)
   if (ligadas.n > 0) {
     throw httpError(
       409,
-      `${ligadas.n} partida(s) del lote quedaron ligadas a una deuda o inversión. Anúlalas desde ahí.`,
+      `${ligadas.n} partida(s) del lote quedaron ligadas a una deuda, inversión o compra a meses. ` +
+        'Anúlalas desde ahí.',
     )
   }
 

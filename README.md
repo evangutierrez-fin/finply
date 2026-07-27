@@ -38,9 +38,31 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   monto ya interpretados, que es donde se esconden los errores— y solo entonces
   se escribe, en una sola transacción y atado a un lote que puedes deshacer
   completo. Los duplicados se detectan y se omiten por omisión.
-- **Deudas y retornos** — apunta lo que te deben y lo que debes, registra
-  abonos (opcionalmente ligados a una cuenta: el movimiento se asienta solo),
-  y la deuda se salda automáticamente al completarse.
+- **Deudas y retornos** — apunta lo que te deben y lo que debes. Al apuntarla
+  puedes elegir la cuenta por la que **entró o salió el dinero** y Finply
+  asienta ese movimiento, para que el saldo no se quede corto por el monto del
+  préstamo; si el dinero nunca pasó por tus cuentas, «solo apuntar» deja la
+  deuda como pura obligación. Los abonos funcionan igual, y la deuda se salda
+  automáticamente al completarse. Con tasa anual y plazo,
+  Finply arma la **tabla de amortización**: cuánto de cada mensualidad es
+  interés y cuánto capital, cuadrada al centavo contra el monto original.
+- **Saldo insoluto de verdad** — en una deuda con tasa, cada abono se divide en
+  interés y capital, y **solo el capital baja lo que debes**. Finply propone el
+  interés devengado por los días transcurridos y tú lo corriges con la cifra de
+  tu estado de cuenta, que es la que manda. Sin eso, un crédito a 48 meses se
+  daría por saldado once pagos antes de tiempo.
+- **Enganche** — el 20 % que pusiste del auto se apunta con la deuda, con su
+  movimiento opcional en la cuenta de la que salió. No es principal (no se
+  financia), pero sí es parte de lo que te costó: Finply te dice qué costó el
+  bien y qué te cuesta el crédito con intereses.
+- **Tarjetas de crédito** — límite, día de corte y día de pago. Finply calcula
+  el **saldo al corte** (lo de después del corte no cuenta) y el **pago para no
+  generar intereses**, descontando lo que ya abonaste y con la fecha límite a
+  la vista. Un corte 31 cae el 28 en febrero, como en el banco.
+- **Meses sin intereses** — una compra a N meses asienta un cargo por el total
+  —tu línea de crédito se usa completa desde el primer día, que es lo que de
+  verdad pasa— y genera las N parcialidades, cada una en su corte. El saldo al
+  corte suma solo las parcialidades ya facturadas: nunca la compra dos veces.
 - **Inversiones** — CETES, fondos, acciones, cripto o lo que sea: registra
   aportes y retiros (ligables a una cuenta) y valúa cuando quieras. Finply
   calcula el rendimiento y dibuja la evolución del valor.
@@ -121,14 +143,17 @@ server/          Express + node:sqlite
   csv.ts         lectura/escritura de CSV y saneo de inyección de fórmulas
   valores.ts     interpretación de fechas y montos ajenos (módulo puro)
   importar.ts    análisis, ejecución y deshacer de importaciones
+  tarjetas.ts    saldo al corte, línea disponible y compras a meses
   routes/        profiles · accounts · categories · tags · transactions · debts
-                 · investments · budgets · goals · notes · summary · backup
-                 · importaciones
+                 · tarjetas · investments · budgets · goals · notes · summary
+                 · backup · importaciones
   seed.ts        datos demo deterministas
-shared/types.ts  tipos compartidos cliente/servidor
+shared/
+  types.ts       tipos compartidos cliente/servidor
+  credito.ts     fechas de corte, amortización y parcialidades (módulo puro)
 src/
-  views/         Resumen · Movimientos · Cuentas · Categorías · Deudas
-                 · Inversiones · Presupuestos · Metas · Notas · Ajustes
+  views/         Resumen · Movimientos · Cuentas · Categorías · Tarjetas
+                 · Deudas · Inversiones · Presupuestos · Metas · Notas · Ajustes
   components/    formularios, gráficas, sello, barra lateral
   styles/        tokens.css (temas claro/oscuro) + app.css
 test/            pruebas de integridad contra una base temporal
@@ -158,8 +183,11 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 | `GET /api/transactions/export.csv` | Export CSV del filtro completo, sin paginar |
 | `POST /api/importaciones/previsualizar` | Analiza un CSV y devuelve el informe. No escribe nada |
 | `GET/POST /api/importaciones` · `DELETE /:id` | Lotes de importación y deshacer |
-| `GET/POST /api/debts` · `PATCH/DELETE /:id` | Deudas por cobrar / por pagar |
-| `POST /api/debts/:id/payments` · `DELETE /api/debts/payments/:id` | Abonos (con movimiento ligado opcional) |
+| `GET/POST /api/debts` · `PATCH/DELETE /:id` | Deudas por cobrar / por pagar, con tasa, plazo y enganche (`accountId` y `downPaymentAccountId` asientan sus movimientos) |
+| `GET /api/debts/:id/amortizacion` | Tabla de pagos: capital contra interés mes a mes |
+| `POST /api/debts/:id/payments` · `DELETE /api/debts/payments/:id` | Abonos (con movimiento ligado opcional; `interestCents` fija el desglose, si no se propone) |
+| `GET /api/tarjetas?profileId` | Estado de cada tarjeta: corte, pago para no generar intereses y línea disponible |
+| `GET/POST /api/tarjetas/msi` · `DELETE /msi/:id` | Compras a meses sin intereses y sus parcialidades |
 | `GET/POST /api/investments` · `PATCH/DELETE /:id` | Inversiones con rendimiento calculado |
 | `POST /api/investments/:id/entries` · `DELETE /api/investments/entries/:id` | Aportes, retiros y valuaciones |
 | `GET/POST /api/budgets` · `DELETE /:id` | Presupuestos por categoría y mes (upsert) con gastado del mes |
@@ -172,12 +200,18 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 
 Reglas de integridad que cuida el backend, todas cubiertas por `npm test`:
 una cuenta con movimientos solo se archiva (no se borra); anular un movimiento
-ligado a un abono de deuda o a un aporte de inversión anula también ese
-registro (y viceversa); editar uno de esos movimientos sincroniza monto y fecha
-con su abono o aporte, y su tipo no puede cambiar; el estado de una deuda
-siempre se deriva de sus abonos contra el principal; y un movimiento nunca
-cruza de perfil, ni toma la cuenta o la categoría de otro libro —ni una
-categoría de ingreso para un gasto—. El libro siempre cuadra.
+ligado a un abono de deuda, a un aporte de inversión o a una compra a meses
+anula también ese registro (y viceversa); editar uno de esos movimientos
+sincroniza monto y fecha con su abono, aporte o calendario de parcialidades, y
+su tipo no puede cambiar; el desembolso y el enganche de una deuda son la
+excepción a la cascada —anularlos no borra la deuda, porque una deuda con
+abonos no puede evaporarse por anular un movimiento—; el estado de una deuda
+siempre se deriva del **capital** abonado contra el principal, nunca del total
+pagado; las parcialidades de una compra a meses suman
+exactamente su total y la amortización cuadra al centavo contra el monto
+original; y un movimiento nunca cruza de perfil, ni toma la cuenta o la
+categoría de otro libro —ni una categoría de ingreso para un gasto—. El libro
+siempre cuadra.
 
 ## Sistema de diseño
 
@@ -197,9 +231,8 @@ Display: **Besley** (una Clarendon, la letra de la banca del XIX) · UI:
 
 **Siguiente**
 
-- Tarjetas de crédito con límite, día de corte y día de pago
-- Deudas con tasa y tabla de amortización · meses sin intereses
-- Reportes históricos: patrimonio en el tiempo, 12 meses de ingresos vs gastos
+- Reportes históricos: patrimonio en el tiempo, 12 meses de ingresos vs gastos,
+  gasto por categoría y por etiqueta en el año, tasa de ahorro
 - Recurrencias (renta, suscripciones) y calendario de vencimientos. El motor
   **propone** partidas y tú las asientas: Finply no escribe en tu libro solo.
 

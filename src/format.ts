@@ -20,6 +20,21 @@ export function parseAmount(raw: string): number | null {
   return cents > 0 ? cents : null
 }
 
+/** '24.5' | '24,5' | '0' → puntos base, o null si no es una tasa. */
+export function parseTasa(raw: string): number | null {
+  const clean = raw.replace(/[%\s]/g, '').replace(',', '.')
+  if (clean === '') return 0
+  if (!/^\d{1,4}(\.\d{1,2})?$/.test(clean)) return null
+  const bp = Math.round(parseFloat(clean) * 100)
+  return bp <= 100_000 ? bp : null
+}
+
+/** 2450 → '24.5 %'. */
+export function fmtTasa(bp: number): string {
+  const pct = bp / 100
+  return `${Number.isInteger(pct) ? pct : pct.toFixed(2).replace(/0$/, '')} %`
+}
+
 export const MESES = [
   'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
   'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
@@ -28,6 +43,12 @@ export const MESES = [
 export function fmtDate(iso: string): string {
   const [, m, d] = iso.split('-')
   return `${Number(d)} ${MESES[Number(m) - 1]!.slice(0, 3)}`
+}
+
+/** Como fmtDate pero con el año corto: un plan a 48 meses cruza varios. */
+export function fmtDateAnio(iso: string): string {
+  const [y] = iso.split('-')
+  return `${fmtDate(iso)} ${y!.slice(2)}`
 }
 
 export function monthLabel(month: string): string {
