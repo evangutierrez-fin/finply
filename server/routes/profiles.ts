@@ -12,8 +12,8 @@ router.get('/', (_req, res) => {
 router.post('/', (req, res) => {
   const input = profileInput.parse(req.body)
   const result = db
-    .prepare('INSERT INTO profiles (name, kind, accent) VALUES (?, ?, ?)')
-    .run(input.name, input.kind, input.accent)
+    .prepare('INSERT INTO profiles (name, kind, accent, accent_hex, accent_hex_dark) VALUES (?, ?, ?, ?, ?)')
+    .run(input.name, input.kind, input.accent, input.accentHex ?? null, input.accentHexDark ?? null)
   const id = Number(result.lastInsertRowid)
   seedCategories(id, input.kind)
   const row = db.prepare('SELECT * FROM profiles WHERE id = ?').get(id)
@@ -25,10 +25,16 @@ router.patch('/:id', (req, res) => {
   const input = profilePatch.parse(req.body)
   const existing: any = db.prepare('SELECT * FROM profiles WHERE id = ?').get(id)
   if (!existing) return res.status(404).json({ error: 'Perfil no encontrado' })
-  db.prepare('UPDATE profiles SET name = ?, kind = ?, accent = ? WHERE id = ?').run(
+  // La tinta distingue "no opiné" de "quítala", igual que las etiquetas de un
+  // movimiento: ausente la deja como estaba, `null` explícito vuelve al preset.
+  db.prepare(
+    'UPDATE profiles SET name = ?, kind = ?, accent = ?, accent_hex = ?, accent_hex_dark = ? WHERE id = ?',
+  ).run(
     input.name ?? existing.name,
     input.kind ?? existing.kind,
     input.accent ?? existing.accent,
+    input.accentHex === undefined ? existing.accent_hex : input.accentHex,
+    input.accentHexDark === undefined ? existing.accent_hex_dark : input.accentHexDark,
     id,
   )
   const row = db.prepare('SELECT * FROM profiles WHERE id = ?').get(id)

@@ -137,10 +137,16 @@ function filas(profileId: number): any[] {
  * misma razón que las inversiones en los reportes: no es una suma, es una
  * secuencia de fechas. Y son pocas plantillas, no la tabla grande (R11).
  */
-export function listar(profileId: number, hoy = hoyISO()): Recurrencia[] {
+export function listar(
+  profileId: number,
+  hoy = hoyISO(),
+  opciones: { etiquetas?: boolean } = {},
+): Recurrencia[] {
   const rows = filas(profileId)
   const recs = rows.map(mapRecurrencia)
-  adjuntarEtiquetas(recs)
+  // Las alertas del Resumen no enseñan etiquetas, así que no las piden: una
+  // consulta menos por carga, que es de lo que trata R11.
+  if (opciones.etiquetas !== false) adjuntarEtiquetas(recs)
   const resueltos = resueltosDe(recs.map((r) => r.id))
   const horizonte = sumarDias(hoy, HORIZONTE_DIAS)
 

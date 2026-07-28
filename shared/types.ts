@@ -9,6 +9,13 @@ export interface Profile {
   name: string
   kind: ProfileKind
   accent: Accent
+  /**
+   * Tinta propia del perfil, si eligió una. `null` usa el preset de `accent`.
+   * Son **dos** colores porque son dos temas: ningún color alcanza AA sobre el
+   * papel claro y el oscuro a la vez (medido, no supuesto).
+   */
+  accentHex: string | null
+  accentHexDark: string | null
   createdAt: string
 }
 
@@ -339,6 +346,64 @@ export interface Calendario {
   desde: string
   hasta: string
   eventos: EventoCalendario[]
+}
+
+// ── Alertas y análisis ────────────────────────────────────────────────────
+//
+// Las alertas son **derivadas y no se descartan** (D10): se calculan al vuelo
+// y se apagan solas cuando el hecho deja de ser cierto. No hay tabla, no hay
+// "ya lo vi" que pueda quedarse viejo, y ninguna lectura escribe.
+
+export type TipoAlerta = 'presupuesto' | 'tarjeta' | 'recurrencia' | 'deuda' | 'meta'
+
+/** `alta` es lo que cuesta dinero si se ignora; `media`, lo que conviene ver. */
+export type Severidad = 'alta' | 'media'
+
+export interface Alerta {
+  tipo: TipoAlerta
+  severidad: Severidad
+  titulo: string
+  detalle: string
+  /** `null` cuando la alerta no es de un monto (una meta que va lenta). */
+  montoCents: number | null
+  refId: number | null
+  /** A qué sección lleva el clic. */
+  vista: 'presupuestos' | 'tarjetas' | 'recurrencias' | 'deudas' | 'metas'
+}
+
+export interface CategoriaParte {
+  name: string
+  expenseCents: number
+  /** Fracción del gasto del periodo, de 0 a 1. */
+  parte: number
+}
+
+/**
+ * El panel de análisis. Mira **meses cerrados**: el mes en curso va a medias y
+ * arrastraría hacia abajo cualquier promedio.
+ */
+export interface Analisis {
+  /** Primer y último mes cerrado que entraron, 'AAAA-MM'. */
+  desde: string
+  hasta: string
+  /** Cuántos meses cerrados hay de verdad; puede ser menos que los pedidos. */
+  meses: number
+  incomeCents: number
+  expenseCents: number
+  /** La misma que los reportes, calculada con el mismo código (D6). */
+  tasaAhorro: number | null
+  /** Gasto nacido de una recurrencia, por la liga que dejó la Fase 5 (D11). */
+  recurrenteCents: number
+  /** Todo lo demás. Incluye lo recurrente registrado a mano: se dice en la vista. */
+  discrecionalCents: number
+  /** Gasto operativo promedio por mes cerrado. `null` sin meses cerrados. */
+  gastoPromedioCents: number | null
+  /** Efectivo, banco y ahorro de cuentas activas. La tarjeta no es colchón. */
+  liquidoCents: number
+  /** Líquido entre gasto promedio. `null` si no hay de qué dividir. */
+  mesesColchon: number | null
+  /** Categorías del periodo con su parte del gasto, de mayor a menor. */
+  concentracion: CategoriaParte[]
 }
 
 export type InvestmentKind = 'cetes' | 'acciones' | 'cripto' | 'fondo' | 'inmueble' | 'otro'

@@ -330,6 +330,35 @@ describe('migraciones', () => {
     db.close()
   })
 
+  test('un libro en la versión 9 estrena tinta propia sin estrenar color', () => {
+    const db = baseEnVersion(9)
+    db.exec(`
+      INSERT INTO profiles (id, name, kind, accent) VALUES (2, 'Negocio', 'negocio', 'vino');
+      INSERT INTO transactions (id, profile_id, account_id, type, amount_cents, date, note)
+        VALUES (2, 1, 1, 'gasto', 850000, '2026-07-01', 'Renta');
+    `)
+
+    migrate(db)
+
+    assert.equal((db.prepare('PRAGMA user_version').get() as any).user_version, SCHEMA_VERSION)
+
+    // Aditiva de verdad: los perfiles que ya existían siguen con su preset y
+    // las columnas nuevas nacen nulas, así que nadie cambia de color al
+    // actualizar.
+    const perfiles = db.prepare('SELECT * FROM profiles ORDER BY id').all() as any[]
+    assert.equal(perfiles.length, 2)
+    assert.equal(perfiles[0].accent, 'verde')
+    assert.equal(perfiles[1].accent, 'vino')
+    for (const p of perfiles) {
+      assert.equal(p.accent_hex, null, 'la tinta propia nace vacía')
+      assert.equal(p.accent_hex_dark, null)
+    }
+    const movimiento = db.prepare('SELECT * FROM transactions WHERE id = 2').get() as any
+    assert.equal(movimiento.amount_cents, 850000, 'y el libro no se movió')
+    assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0)
+    db.close()
+  })
+
   test('los CHECK de crédito rechazan datos imposibles', () => {
     const db = baseEnVersion(5)
     migrate(db)

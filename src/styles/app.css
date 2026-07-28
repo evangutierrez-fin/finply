@@ -170,6 +170,10 @@ input, select { font: inherit; color: inherit; }
 .dot-laton { background: var(--laton); }
 .dot-cobalto { background: var(--cobalto); }
 .dot-vino { background: var(--vino); }
+/* Tinta propia: el punto de cada perfil trae la suya en dos variables, para
+   que la lista de perfiles se vea bien en los dos temas a la vez. */
+.dot-propia { background: var(--dot-claro); }
+:root[data-theme='dark'] .dot-propia { background: var(--dot-oscuro); }
 
 .perfil-textos { display: flex; flex-direction: column; min-width: 0; }
 .perfil-nombre {
@@ -531,6 +535,17 @@ input, select { font: inherit; color: inherit; }
     var(--hoja) 2.2px 3.6px
   );
   border: 1px solid var(--viz-salida);
+}
+/* Recurrente contra discrecional: sólido contra rayado, igual que el par
+   entrada/salida. El color nunca es lo único que separa dos series (R10). */
+.muestra-recurrente { background: var(--acento); }
+.muestra-discrecional {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--tinta-3) 0 2.2px,
+    var(--hoja) 2.2px 3.6px
+  );
+  border: 1px solid var(--tinta-3);
 }
 .grafica-dato strong { font-weight: 650; }
 .grafica-vacia {
@@ -990,6 +1005,59 @@ select.campo-input { cursor: pointer; }
 }
 .tinta-swatch:hover { transform: scale(1.12); }
 .tinta-swatch.activa { box-shadow: 0 0 0 2px var(--hoja), 0 0 0 4px var(--tinta); }
+
+/* ── tinta propia ─────────────────────────────────────────────────────── */
+.tinta-swatch-propia {
+  background: var(--tinta-propia, var(--tinte-neutro));
+  color: var(--tinta-2);
+  font-size: 12px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.tinta-swatch-propia.activa { color: var(--boton-texto); }
+
+.tinta-propia-panel { padding-top: 6px; }
+.tinta-campo { display: flex; flex-direction: column; gap: 6px; }
+.tinta-campo-fila { display: flex; gap: 8px; align-items: center; }
+.tinta-color {
+  width: 38px;
+  height: 34px;
+  padding: 2px;
+  border: 1px solid var(--regla-fuerte);
+  border-radius: var(--radio);
+  background: var(--hoja);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.tinta-hex { font-family: var(--f-mono); font-size: 12px; text-transform: lowercase; }
+
+/* La muestra se pinta contra el papel del tema que le toca, no contra el
+   tema activo: es la única forma de ver de día cómo se leerá de noche. */
+.tinta-muestra {
+  display: block;
+  padding: 7px 10px;
+  border-radius: var(--radio);
+  font-weight: 620;
+  font-size: 13px;
+  color: var(--tinta-propia);
+}
+.tinta-muestra-claro { background: #f7f8ee; }
+.tinta-muestra-oscuro { background: #212b21; }
+
+.tinta-medida {
+  font-family: var(--f-mono);
+  font-size: 11px;
+  color: var(--tinta-2);
+}
+.tinta-medida.falla { color: var(--rojo-osc); font-weight: 620; }
+.tinta-nota {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--tinta-2);
+  margin-top: 10px;
+}
 
 .forma-pie {
   display: flex;
@@ -1786,6 +1854,98 @@ select.campo-input { cursor: pointer; }
 .cal-chip-msi { color: var(--laton); border-color: var(--laton); }
 
 /* ── cierre imprimible ───────────────────────────────────────────────── */
+/* ── alertas del Resumen ─────────────────────────────────────────────────
+   Derivadas y sin descartar (D10): por eso ninguna trae una ✕. Cerrar una
+   sería esconder algo que sigue siendo cierto. La severidad se lee por la
+   forma del punto —relleno contra anillo— además de por el color, para que no
+   dependa de distinguir rojo de latón. */
+.alertas-lista { display: flex; flex-direction: column; gap: 8px; }
+
+.alerta-cuerpo {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 14px;
+  text-align: left;
+  background: var(--hoja);
+  border: 1px solid var(--regla);
+  border-left: 3px solid var(--tinta-3);
+  border-radius: var(--radio);
+  cursor: pointer;
+  transition: transform 0.13s ease, box-shadow 0.13s ease, background 0.13s ease;
+}
+.alerta-cuerpo:hover { transform: translateX(2px); box-shadow: var(--sombra-hoja); }
+
+.alerta-punto {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.alerta-alta .alerta-cuerpo { border-left-color: var(--rojo); background: var(--rojo-tinte); }
+.alerta-alta .alerta-punto { background: var(--rojo); }
+.alerta-media .alerta-cuerpo { border-left-color: var(--laton); }
+.alerta-media .alerta-punto { border: 2px solid var(--laton); }
+
+.alerta-textos { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.alerta-titulo { font-weight: 620; font-size: 14px; }
+.alerta-detalle { font-size: 12.5px; color: var(--tinta-2); }
+.alerta-alta .alerta-detalle { color: var(--rojo-osc); }
+.alerta-monto { font-size: 14px; font-weight: 620; white-space: nowrap; }
+
+/* ── panel de análisis ───────────────────────────────────────────────── */
+.analisis-hero {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) 2fr;
+  gap: 24px;
+  align-items: center;
+}
+.analisis-hero-dato { display: flex; flex-direction: column; gap: 2px; }
+.analisis-hero-pie { font-size: 12px; color: var(--tinta-2); line-height: 1.5; }
+.analisis-hero .reportes-supuesto { grid-column: 1 / -1; }
+
+.analisis-stats { display: flex; flex-wrap: wrap; gap: 28px; }
+.analisis-stats dt {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--tinta-2);
+  margin-bottom: 3px;
+}
+.analisis-stats dd { font-size: 19px; font-weight: 620; }
+
+.origen-riel {
+  display: flex;
+  height: 16px;
+  border-radius: 2px;
+  overflow: hidden;
+  border: 1px solid var(--regla-fuerte);
+}
+.origen-recurrente { background: var(--acento); }
+.origen-discrecional {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--tinta-3) 0 2.6px,
+    var(--hoja) 2.6px 4.2px
+  );
+}
+.origen-leyenda { display: flex; gap: 32px; margin-top: 14px; flex-wrap: wrap; }
+.origen-leyenda dt {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--tinta-2);
+  margin-bottom: 4px;
+}
+.origen-leyenda dd { display: flex; align-items: baseline; gap: 8px; font-size: 16px; }
+.origen-parte { font-family: var(--f-mono); font-size: 12px; color: var(--tinta-2); }
+
+@media (max-width: 860px) {
+  .analisis-hero { grid-template-columns: 1fr; }
+}
+
 @media print {
   /* El papel ya es papel: fondo blanco, tinta negra y nada de sombras. */
   :root, :root[data-theme='dark'] {

@@ -1,11 +1,31 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import type { Profile } from '../../shared/types.ts'
+
+/** El punto del perfil: su preset, o su tinta propia si eligió una. */
+function TintaDot({ profile }: { profile: Profile }) {
+  if (profile.accentHex && profile.accentHexDark) {
+    return (
+      <span
+        className="tinta-dot dot-propia"
+        aria-hidden="true"
+        style={
+          {
+            '--dot-claro': profile.accentHex,
+            '--dot-oscuro': profile.accentHexDark,
+          } as CSSProperties
+        }
+      />
+    )
+  }
+  return <span className={`tinta-dot dot-${profile.accent}`} aria-hidden="true" />
+}
 
 export type View =
   | 'resumen'
   | 'movimientos'
   | 'cuentas'
   | 'reportes'
+  | 'analisis'
   | 'tarjetas'
   | 'deudas'
   | 'inversiones'
@@ -29,6 +49,7 @@ const NAV_GROUPS: { label: string | null; items: { id: View; label: string }[] }
       { id: 'cuentas', label: 'Cuentas' },
       { id: 'taxonomia', label: 'Categorías' },
       { id: 'reportes', label: 'Reportes' },
+      { id: 'analisis', label: 'Análisis' },
     ],
   },
   {
@@ -116,7 +137,7 @@ export function Sidebar({
           aria-expanded={open}
           aria-haspopup="listbox"
         >
-          <span className={`tinta-dot dot-${profile.accent}`} aria-hidden="true" />
+          <TintaDot profile={profile} />
           <span className="perfil-textos">
             <span className="perfil-nombre">{profile.name}</span>
             <span className="perfil-tipo">{KIND_LABEL[profile.kind]}</span>
@@ -137,7 +158,7 @@ export function Sidebar({
                   if (p.id !== profile.id) onSelectProfile(p.id)
                 }}
               >
-                <span className={`tinta-dot dot-${p.accent}`} aria-hidden="true" />
+                <TintaDot profile={p} />
                 <span className="perfil-textos">
                   <span className="perfil-nombre">{p.name}</span>
                   <span className="perfil-tipo">{KIND_LABEL[p.kind]}</span>

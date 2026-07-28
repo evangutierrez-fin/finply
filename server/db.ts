@@ -186,6 +186,9 @@ export function mapProfile(row: any) {
     name: row.name,
     kind: row.kind,
     accent: row.accent,
+    // Nulos mientras el perfil use un preset, que es como nacen todos.
+    accentHex: row.accent_hex ?? null,
+    accentHexDark: row.accent_hex_dark ?? null,
     createdAt: row.created_at,
   }
 }

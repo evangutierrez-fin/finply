@@ -1,8 +1,8 @@
 import type {
-  Account, Amortizacion, Bandeja, Budget, Calendario, Category, Comparativa, CompraMSI, Debt,
-  DebtPayment, EstadoTarjeta, Frecuencia, Goal, InformeImport, Investment, InvestmentEntryType,
-  LoteImport, MapeoImport, Note, Profile, Recurrencia, ReporteAnual, ResultadoImport, Summary,
-  Tag, Tx, TxType,
+  Account, Alerta, Amortizacion, Analisis, Bandeja, Budget, Calendario, Category, Comparativa,
+  CompraMSI, Debt, DebtPayment, EstadoTarjeta, Frecuencia, Goal, InformeImport, Investment,
+  InvestmentEntryType, LoteImport, MapeoImport, Note, Profile, Recurrencia, ReporteAnual,
+  ResultadoImport, Summary, Tag, Tx, TxType,
 } from '../shared/types.ts'
 
 /** Error de la API que conserva el código y el cuerpo, para poder reaccionar. */
@@ -177,13 +177,24 @@ export interface AsentarDraft {
   tagIds?: number[]
 }
 
+/**
+ * Tinta propia del perfil. Van las dos o ninguna: `null` en ambas vuelve al
+ * preset. El servidor rechaza la que no alcance AA en su tema.
+ */
+export interface TintaDraft {
+  accentHex?: string | null
+  accentHexDark?: string | null
+}
+
 export const api = {
   profiles: {
     list: () => req<Profile[]>('/api/profiles'),
-    create: (data: { name: string; kind: string; accent: string }) =>
+    create: (data: { name: string; kind: string; accent: string } & TintaDraft) =>
       req<Profile>('/api/profiles', { method: 'POST', body: JSON.stringify(data) }),
-    update: (id: number, data: Partial<{ name: string; kind: string; accent: string }>) =>
-      req<Profile>(`/api/profiles/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    update: (
+      id: number,
+      data: Partial<{ name: string; kind: string; accent: string }> & TintaDraft,
+    ) => req<Profile>(`/api/profiles/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     remove: (id: number) => req<{ ok: true }>(`/api/profiles/${id}`, { method: 'DELETE' }),
   },
   accounts: {
@@ -399,6 +410,15 @@ export const api = {
   },
   calendario: (profileId: number, dias = 30) =>
     req<Calendario>(`/api/calendario?profileId=${profileId}&dias=${dias}`),
+  /**
+   * Las alertas de hoy. **Derivadas**: no se guardan, no se descartan y
+   * pedirlas no escribe nada. Se apagan solas cuando el hecho deja de ser
+   * cierto.
+   */
+  alertas: (profileId: number) => req<Alerta[]>(`/api/alertas?profileId=${profileId}`),
+  /** El panel sobre los últimos `meses` **cerrados**; el mes en curso no entra. */
+  analisis: (profileId: number, meses = 6) =>
+    req<Analisis>(`/api/analisis?profileId=${profileId}&meses=${meses}`),
   summary: (profileId: number, month: string) =>
     req<Summary>(`/api/summary?profileId=${profileId}&month=${month}`),
   reportes: {

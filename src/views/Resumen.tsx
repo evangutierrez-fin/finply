@@ -1,22 +1,55 @@
 import { api } from '../api.ts'
 import { useApp } from '../context.ts'
 import { useFetch } from '../hooks.ts'
-import { currentMonth, fmtDate, monthLabel } from '../format.ts'
+import { currentMonth, fmtDate, fmtMoney, monthLabel } from '../format.ts'
 import { CountUpMoney, Money } from '../components/Money.tsx'
 import { CategoryBars, MonthBars } from '../components/Charts.tsx'
-import type { Tx } from '../../shared/types.ts'
+import type { View } from '../components/Sidebar.tsx'
+import type { Alerta, Tx } from '../../shared/types.ts'
 
 function txSignedCents(tx: Tx): number {
   return tx.type === 'gasto' ? -tx.amountCents : tx.amountCents
 }
 
-export function Resumen({ onNav }: { onNav: (view: 'movimientos' | 'cuentas' | 'deudas') => void }) {
+/**
+ * Las alertas no se descartan (D10): se apagan solas cuando el hecho deja de
+ * ser cierto. Por eso no hay una ✕ en ninguna — cerrar una sería esconder algo
+ * que sigue pasando.
+ */
+function Alertas({ alertas, onNav }: { alertas: Alerta[]; onNav: (view: View) => void }) {
+  if (alertas.length === 0) return null
+  return (
+    <section className="alertas" aria-label="Avisos">
+      <ul className="alertas-lista">
+        {alertas.map((a, i) => (
+          <li key={`${a.tipo}-${a.refId}-${i}`} className={`alerta alerta-${a.severidad}`}>
+            <button type="button" className="alerta-cuerpo" onClick={() => onNav(a.vista)}>
+              <span className="alerta-punto" aria-hidden="true" />
+              <span className="alerta-textos">
+                <span className="alerta-titulo">{a.titulo}</span>
+                <span className="alerta-detalle">{a.detalle}</span>
+              </span>
+              {a.montoCents !== null && (
+                <span className="cifra alerta-monto">{fmtMoney(a.montoCents)}</span>
+              )}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+export function Resumen({ onNav }: { onNav: (view: View) => void }) {
   const { profile, refreshKey, openTx } = useApp()
   const month = currentMonth()
   const { data, error } = useFetch(
     () => api.summary(profile.id, month),
     [profile.id, refreshKey],
   )
+  // En su propia petición: si el cálculo de una alerta falla, el Resumen sigue
+  // siendo el Resumen.
+  const { data: alertas } = useFetch(() => api.alertas(profile.id), [profile.id, refreshKey])
 
   if (error) return <p className="aviso" role="alert">{error}</p>
   if (!data) return <div className="cargando" aria-label="Cargando" />
@@ -42,6 +75,8 @@ export function Resumen({ onNav }: { onNav: (view: 'movimientos' | 'cuentas' | '
         <h1>Resumen</h1>
         <span className="vista-mes">{monthLabel(month)}</span>
       </header>
+
+      <Alertas alertas={alertas ?? []} onNav={onNav} />
 
       <section className="hero">
         <div className="hero-total">

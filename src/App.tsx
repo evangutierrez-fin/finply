@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Accent, Profile, ProfileKind, Tx } from '../shared/types.ts'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import type { Profile, ProfileKind, Tx } from '../shared/types.ts'
 import { api } from './api.ts'
 import { AppCtx } from './context.ts'
 import { Sidebar, type ThemePref, type View } from './components/Sidebar.tsx'
 import { TxModal } from './components/TxModal.tsx'
 import { ProfileModal } from './components/ProfileModal.tsx'
+import { TintaPicker, tintaInicial, tintaPayload, tintaValida } from './components/TintaPicker.tsx'
 import { Resumen } from './views/Resumen.tsx'
+import { Analisis } from './views/Analisis.tsx'
 import { Movimientos } from './views/Movimientos.tsx'
 import { Cuentas } from './views/Cuentas.tsx'
 import { Reportes } from './views/Reportes.tsx'
@@ -24,8 +26,8 @@ import { Importar } from './views/Importar.tsx'
 // 'importar' no tiene entrada en el nav: se llega desde Movimientos, que es
 // donde uno la busca.
 const VIEWS: View[] = [
-  'resumen', 'movimientos', 'cuentas', 'taxonomia', 'reportes', 'importar', 'tarjetas', 'deudas',
-  'inversiones', 'recurrencias', 'calendario', 'presupuestos', 'metas', 'notas', 'ajustes',
+  'resumen', 'movimientos', 'cuentas', 'taxonomia', 'reportes', 'analisis', 'importar', 'tarjetas',
+  'deudas', 'inversiones', 'recurrencias', 'calendario', 'presupuestos', 'metas', 'notas', 'ajustes',
 ]
 
 const THEME_CYCLE: Record<ThemePref, ThemePref> = { claro: 'oscuro', oscuro: 'auto', auto: 'claro' }
@@ -35,26 +37,20 @@ function viewFromHash(): View {
   return (VIEWS as string[]).includes(hash) ? (hash as View) : 'resumen'
 }
 
-const ACCENTS: { id: Accent; label: string }[] = [
-  { id: 'verde', label: 'Verde banca' },
-  { id: 'laton', label: 'Latón' },
-  { id: 'cobalto', label: 'Cobalto' },
-  { id: 'vino', label: 'Vino' },
-]
-
 function Onboarding({ onCreated }: { onCreated: (profile: Profile) => void }) {
   const [name, setName] = useState('')
   const [kind, setKind] = useState<ProfileKind>('personal')
-  const [accent, setAccent] = useState<Accent>('verde')
+  const [tinta, setTinta] = useState(() => tintaInicial('verde', null, null))
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim()) return setError('Ponle nombre a tu primer perfil')
+    if (!tintaValida(tinta)) return setError('Esa tinta no se lee: ajústala hasta que cumpla AA')
     setSaving(true)
     try {
-      onCreated(await api.profiles.create({ name: name.trim(), kind, accent }))
+      onCreated(await api.profiles.create({ name: name.trim(), kind, ...tintaPayload(tinta) }))
     } catch (err) {
       setError((err as Error).message)
       setSaving(false)
@@ -91,21 +87,7 @@ function Onboarding({ onCreated }: { onCreated: (profile: Profile) => void }) {
                 </label>
               </div>
             </fieldset>
-            <fieldset className="campo campo-fieldset">
-              <legend className="campo-label">Tinta</legend>
-              <div className="tintas">
-                {ACCENTS.map((a) => (
-                  <button
-                    key={a.id}
-                    type="button"
-                    className={`tinta-swatch dot-${a.id}${accent === a.id ? ' activa' : ''}`}
-                    aria-label={a.label}
-                    aria-pressed={accent === a.id}
-                    onClick={() => setAccent(a.id)}
-                  />
-                ))}
-              </div>
-            </fieldset>
+            <TintaPicker valor={tinta} onChange={setTinta} />
           </div>
           {error && <p className="forma-error" role="alert">{error}</p>}
           <button type="submit" className="btn btn-primario" disabled={saving}>
@@ -210,9 +192,25 @@ export default function App() {
     )
   }
 
+  // Tinta propia: se pasan los dos colores como variables y el CSS elige el del
+  // tema activo. Hacerlo en CSS y no en React es lo que hace que cambiar de
+  // claro a oscuro se vea al instante, sin volver a pintar el árbol entero.
+  const tinta =
+    profile.accentHex && profile.accentHexDark
+      ? ({
+          '--acento-claro': profile.accentHex,
+          '--acento-oscuro': profile.accentHexDark,
+        } as CSSProperties)
+      : undefined
+
   return (
     <AppCtx.Provider value={{ profile, refreshKey, bump, stamp, openTx }}>
-      <div className="app" data-accent={profile.accent}>
+      <div
+        className="app"
+        data-accent={profile.accent}
+        data-tinta={tinta ? 'propia' : undefined}
+        style={tinta}
+      >
         <Sidebar
           profiles={profiles}
           profile={profile}
@@ -232,6 +230,7 @@ export default function App() {
           {view === 'taxonomia' && <Taxonomia />}
           {view === 'importar' && <Importar onVerMovimientos={() => nav('movimientos')} />}
           {view === 'reportes' && <Reportes />}
+          {view === 'analisis' && <Analisis />}
           {view === 'tarjetas' && <Tarjetas />}
           {view === 'deudas' && <Deudas />}
           {view === 'inversiones' && <Inversiones />}

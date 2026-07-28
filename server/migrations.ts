@@ -442,6 +442,26 @@ export const MIGRATIONS: Migration[] = [
       `)
     },
   },
+  {
+    id: 10,
+    name: 'tinta personalizada por perfil',
+    up: (db) => {
+      // Aditiva y sin CHECK: dos columnas nulas. NULL significa "usa el preset
+      // de `accent`", que es lo que tenían todos los perfiles hasta hoy, así
+      // que un libro que ya existía se ve exactamente igual después de migrar.
+      //
+      // Son **dos** colores porque son dos temas: se midió sobre una malla de
+      // 140,608 colores y ni uno solo alcanza AA contra el papel claro y el
+      // oscuro a la vez. El contraste se valida en la ruta, no aquí: un CHECK
+      // en SQLite no puede calcular una razón de luminancia.
+      if (!hasColumn(db, 'profiles', 'accent_hex')) {
+        db.exec('ALTER TABLE profiles ADD COLUMN accent_hex TEXT')
+      }
+      if (!hasColumn(db, 'profiles', 'accent_hex_dark')) {
+        db.exec('ALTER TABLE profiles ADD COLUMN accent_hex_dark TEXT')
+      }
+    },
+  },
 ]
 
 /** Versión de esquema que espera este código. */

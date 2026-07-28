@@ -22,8 +22,12 @@ function correrMes(month: string, delta: number): string {
 /**
  * Cuánto de un movimiento cuenta como ingreso o gasto. Los que solo mueven
  * patrimonio valen cero; de un abono a deuda, solo su parte de interés.
+ *
+ * Se exporta porque el panel de análisis mide lo mismo: si tuviera su propia
+ * versión de la regla, el usuario acabaría viendo dos tasas de ahorro
+ * distintas de los mismos movimientos.
  */
-const MONTO_OPERATIVO = `
+export const MONTO_OPERATIVO = `
   CASE
     WHEN t.debt_id IS NOT NULL THEN 0
     WHEN t.investment_entry_id IS NOT NULL THEN 0
@@ -32,7 +36,7 @@ const MONTO_OPERATIVO = `
   END`
 
 /** El JOIN que `MONTO_OPERATIVO` necesita para ver el desglose del abono. */
-const DESDE_MOVIMIENTOS = `
+export const DESDE_MOVIMIENTOS = `
   FROM transactions t
   LEFT JOIN debt_payments dp ON dp.id = t.debt_payment_id
 `
@@ -46,7 +50,7 @@ function mesesDelAnio(year: number): string[] {
  * Ingresos y gastos operativos por mes. Devuelve solo los meses con datos: el
  * relleno de los vacíos se hace arriba, contra la lista completa de meses.
  */
-function ingresoGastoPorMes(profileId: number, desde: string, hasta: string) {
+export function ingresoGastoPorMes(profileId: number, desde: string, hasta: string) {
   const filas: any[] = db
     .prepare(
       `SELECT substr(t.date, 1, 7) AS mes,
@@ -64,7 +68,7 @@ function ingresoGastoPorMes(profileId: number, desde: string, hasta: string) {
 }
 
 /** Gasto operativo por categoría en un rango de meses. */
-function gastoPorCategoria(profileId: number, desde: string, hasta: string) {
+export function gastoPorCategoria(profileId: number, desde: string, hasta: string) {
   return db
     .prepare(
       `SELECT COALESCE(c.name, 'Sin categoría') AS name,

@@ -1,12 +1,49 @@
 import { z } from 'zod'
+import { AA_TEXTO, evaluarTinta, normalizarHex } from '../shared/color.ts'
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Fecha inválida (AAAA-MM-DD)')
 const isoMonth = z.string().regex(/^\d{4}-\d{2}$/, 'Mes inválido (AAAA-MM)')
+
+/**
+ * Una tinta personalizada para un tema. `null` vuelve al preset.
+ *
+ * El contraste **se calcula**, no se compara contra una lista de colores
+ * permitidos, y se mide en el tema donde va a usarse: R10 no se cumple
+ * autorizando colores bonitos, se cumple midiendo. La misma función corre en
+ * el cliente mientras el usuario elige, así que el número que ve es el que
+ * decide aquí.
+ */
+function tinta(tema: 'claro' | 'oscuro') {
+  return z
+    .string()
+    .transform((raw, ctx) => {
+      const hex = normalizarHex(raw)
+      if (!hex) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Ese color no es un hex (#1d5c3d)' })
+        return z.NEVER
+      }
+      const { ratio, cumple, contra } = evaluarTinta(hex, tema)
+      if (!cumple) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            `Esa tinta contrasta ${ratio}:1 con ${contra} del tema ${tema} y hacen falta ` +
+            `${AA_TEXTO}:1 para leerla. Prueba una ${tema === 'claro' ? 'más oscura' : 'más clara'}.`,
+        })
+        return z.NEVER
+      }
+      return hex
+    })
+    .nullish()
+}
 
 export const profileInput = z.object({
   name: z.string().trim().min(1, 'El perfil necesita un nombre').max(60),
   kind: z.enum(['personal', 'negocio']).default('personal'),
   accent: z.enum(['verde', 'laton', 'cobalto', 'vino']).default('verde'),
+  /** Ausentes dejan la tinta como estaba; `null` explícito vuelve al preset. */
+  accentHex: tinta('claro'),
+  accentHexDark: tinta('oscuro'),
 })
 
 export const profilePatch = profileInput.partial()
@@ -339,6 +376,18 @@ export const reporteQuery = z.object({
 export const comparativaQuery = z.object({
   profileId: z.coerce.number().int().positive(),
   month: isoMonth,
+})
+
+export const analisisQuery = z.object({
+  profileId: z.coerce.number().int().positive(),
+  /** Meses **cerrados** hacia atrás. El mes en curso nunca entra. */
+  meses: z.coerce
+    .number()
+    .int()
+    .min(1, 'El análisis va de 1 a 36 meses')
+    .max(36, 'El análisis va de 1 a 36 meses')
+    .default(6),
+  hoy: isoDate.optional(),
 })
 
 export const summaryQuery = z.object({

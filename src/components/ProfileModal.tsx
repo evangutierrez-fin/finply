@@ -1,14 +1,8 @@
 import { useState } from 'react'
-import type { Accent, Profile, ProfileKind } from '../../shared/types.ts'
+import type { Profile, ProfileKind } from '../../shared/types.ts'
 import { api } from '../api.ts'
 import { Modal } from './Modal.tsx'
-
-const ACCENTS: { id: Accent; label: string }[] = [
-  { id: 'verde', label: 'Verde banca' },
-  { id: 'laton', label: 'Latón' },
-  { id: 'cobalto', label: 'Cobalto' },
-  { id: 'vino', label: 'Vino' },
-]
+import { TintaPicker, tintaInicial, tintaPayload, tintaValida } from './TintaPicker.tsx'
 
 export function ProfileModal({
   profile,
@@ -25,7 +19,9 @@ export function ProfileModal({
 }) {
   const [name, setName] = useState(profile?.name ?? '')
   const [kind, setKind] = useState<ProfileKind>(profile?.kind ?? 'personal')
-  const [accent, setAccent] = useState<Accent>(profile?.accent ?? 'verde')
+  const [tinta, setTinta] = useState(() =>
+    tintaInicial(profile?.accent ?? 'verde', profile?.accentHex ?? null, profile?.accentHexDark ?? null),
+  )
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -33,12 +29,15 @@ export function ProfileModal({
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim()) return setError('El perfil necesita un nombre')
+    // El servidor rechaza igual una tinta ilegible; esto solo evita el viaje.
+    if (!tintaValida(tinta)) return setError('Esa tinta no se lee: ajústala hasta que cumpla AA')
     setSaving(true)
     setError(null)
     try {
+      const datos = { name: name.trim(), kind, ...tintaPayload(tinta) }
       const saved = profile
-        ? await api.profiles.update(profile.id, { name: name.trim(), kind, accent })
-        : await api.profiles.create({ name: name.trim(), kind, accent })
+        ? await api.profiles.update(profile.id, datos)
+        : await api.profiles.create(datos)
       onSaved(saved)
       onClose()
     } catch (err) {
@@ -97,21 +96,7 @@ export function ProfileModal({
               </label>
             </div>
           </fieldset>
-          <fieldset className="campo campo-fieldset">
-            <legend className="campo-label">Tinta</legend>
-            <div className="tintas">
-              {ACCENTS.map((a) => (
-                <button
-                  key={a.id}
-                  type="button"
-                  className={`tinta-swatch dot-${a.id}${accent === a.id ? ' activa' : ''}`}
-                  aria-label={a.label}
-                  aria-pressed={accent === a.id}
-                  onClick={() => setAccent(a.id)}
-                />
-              ))}
-            </div>
-          </fieldset>
+          <TintaPicker valor={tinta} onChange={setTinta} />
         </div>
         {error && <p className="forma-error" role="alert">{error}</p>}
         <footer className="forma-pie forma-pie-doble">

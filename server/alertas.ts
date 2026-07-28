@@ -1,0 +1,347 @@
+// Alertas del Resumen: lo que conviene saber hoy, calculado hoy.
+//
+// El modelo, decidido en D10: las alertas son **derivadas y no se descartan**.
+// Se calculan al vuelo, se apagan solas en cuanto el hecho deja de ser cierto y
+// no dejan una sola fila en la base. No hay tabla de "ya lo vi" que pueda
+// quedarse vieja ni un GET con efectos. Es la misma línea de la bandeja de
+// recurrencias (D7).
+//
+// Aquí vive además lo que el calendario de la Fase 5 no puede mostrar: **lo
+// vencido**. Aquel mira hacia adelante a propósito, así que una fecha límite de
+// tarjeta que ya pasó sin cubrirse o una mensualidad de deuda atrasada no
+// salían en ningún lado. Salen aquí, y en rojo.
+//
+// R11: son cinco familias de alerta y no pueden ser diez consultas por carga
+// del Resumen. Todo lo grande —movimientos, abonos, aportes— se agrega en SQL,
+// y lo que ya calculan `estadoTarjetas` y `recurrencias.listar` se **reusa**,
+// no se reescribe. Hay una prueba que cuenta las consultas.
+
+import { db } from './db.ts'
+import { estadoTarjetas } from './tarjetas.ts'
+import { listar as listarRecurrencias } from './recurrencias.ts'
+import { tablaAmortizacion } from '../shared/credito.ts'
+import { diasEntre, hoyISO } from '../shared/fechas.ts'
+import type { Alerta } from '../shared/types.ts'
+
+/**
+ * Con cuántos días de anticipación se avisa un vencimiento. El operador es
+ * `<=`: faltando exactamente estos días la alerta **ya** aparece. Hay prueba
+ * de los dos lados de la frontera.
+ */
+const DIAS_AVISO = 5
+
+/** Los cargos recurrentes se avisan más pegados: el calendario ya los lista. */
+const DIAS_AVISO_RECURRENCIA = 3
+
+/**
+ * Presupuestos rebasados del mes en curso.
+ *
+ * El umbral es **estrictamente mayor**: gastar exactamente el tope no es
+ * excederlo —cerraste justo, que es lo que el presupuesto pedía—; un centavo
+ * más sí. Se mide con la misma expresión que usa `GET /api/budgets`, para que
+ * la alerta y la vista de Presupuestos no puedan decir cosas distintas.
+ */
+function dePresupuestos(profileId: number, mes: string): Alerta[] {
+  const filas: any[] = db
+    .prepare(
+      `SELECT b.id, b.amount_cents, c.name AS category_name,
+        COALESCE((SELECT SUM(t.amount_cents) FROM transactions t
+          WHERE t.profile_id = b.profile_id AND t.category_id = b.category_id
+            AND t.type = 'gasto' AND substr(t.date, 1, 7) = b.month), 0) AS spent_cents
+       FROM budgets b
+       JOIN categories c ON c.id = b.category_id
+       WHERE b.profile_id = ? AND b.month = ?
+       ORDER BY c.name ASC`,
+    )
+    .all(profileId, mes)
+
+  return filas
+    .filter((f) => f.spent_cents > f.amount_cents)
+    .map((f) => ({
+      tipo: 'presupuesto' as const,
+      severidad: 'media' as const,
+      titulo: `${f.category_name}: te pasaste del tope`,
+      detalle: `Llevas ${pesos(f.spent_cents)} de ${pesos(f.amount_cents)} este mes`,
+      montoCents: f.spent_cents - f.amount_cents,
+      refId: f.id,
+      vista: 'presupuestos' as const,
+    }))
+}
+
+/**
+ * Tarjetas: la **fecha límite de pago**, antes y después.
+ *
+ * Es la fecha que cuesta dinero, no la del corte: el corte solo cierra el
+ * periodo y ya vive en el calendario. Dos estados, nunca los dos a la vez:
+ * vencida y sin cubrir (alta), o por vencer dentro de `DIAS_AVISO` (media).
+ * Reusa `estadoTarjetas`, que ya calcula el saldo al corte y lo que falta para
+ * no generar intereses en dos consultas agregadas.
+ */
+function deTarjetas(profileId: number, hoy: string): Alerta[] {
+  const alertas: Alerta[] = []
+  for (const t of estadoTarjetas(profileId, hoy)) {
+    const falta = t.paraNoGenerarInteresesCents ?? 0
+    if (!t.fechaLimitePago || falta <= 0) continue
+
+    if (t.fechaLimitePago < hoy) {
+      const dias = diasEntre(t.fechaLimitePago, hoy)
+      alertas.push({
+        tipo: 'tarjeta',
+        severidad: 'alta',
+        titulo: `Se te pasó la fecha límite de ${t.name}`,
+        detalle: `Venció hace ${dias} ${dias === 1 ? 'día' : 'días'} y quedaron ${pesos(falta)} del corte sin cubrir`,
+        montoCents: falta,
+        refId: t.accountId,
+        vista: 'tarjetas',
+      })
+      continue
+    }
+    const dias = diasEntre(hoy, t.fechaLimitePago)
+    if (dias <= DIAS_AVISO) {
+      alertas.push({
+        tipo: 'tarjeta',
+        severidad: 'media',
+        titulo: `Vence el pago de ${t.name}`,
+        detalle:
+          dias === 0
+            ? `Hoy es la fecha límite: ${pesos(falta)} para no generar intereses`
+            : `${dias === 1 ? 'Mañana' : `En ${dias} días`}: ${pesos(falta)} para no generar intereses`,
+        montoCents: falta,
+        refId: t.accountId,
+        vista: 'tarjetas',
+      })
+    }
+  }
+  return alertas
+}
+
+/**
+ * Recurrencias: lo que está por confirmar y lo que se cobra pronto.
+ *
+ * Se agregan en **dos alertas como mucho**, no una por plantilla: cinco
+ * suscripciones no pueden ser cinco renglones rojos. Reusa `listar`, que ya
+ * cuenta los periodos vencidos sin resolver y la próxima fecha de cada
+ * plantilla; recalcularlo aquí sería tener dos aritméticas que deben coincidir.
+ */
+function deRecurrencias(profileId: number, hoy: string): Alerta[] {
+  const recs = listarRecurrencias(profileId, hoy, { etiquetas: false })
+  const alertas: Alerta[] = []
+
+  const conPendientes = recs.filter((r) => r.pendientes > 0)
+  const pendientes = conPendientes.reduce((s, r) => s + r.pendientes, 0)
+  if (pendientes > 0) {
+    const monto = conPendientes.reduce((s, r) => s + r.pendientes * r.amountCents, 0)
+    alertas.push({
+      tipo: 'recurrencia',
+      severidad: 'media',
+      titulo: `${pendientes} ${pendientes === 1 ? 'partida' : 'partidas'} por confirmar`,
+      detalle:
+        conPendientes.length === 1
+          ? `De ${etiqueta(conPendientes[0]!.note, conPendientes[0]!.type)}, sin asentar en el libro`
+          : `De ${conPendientes.length} plantillas, sin asentar en el libro`,
+      montoCents: monto,
+      refId: conPendientes.length === 1 ? conPendientes[0]!.id : null,
+      vista: 'recurrencias',
+    })
+  }
+
+  const proximas = recs.filter(
+    (r) =>
+      r.proximaFecha !== null &&
+      r.proximaFecha >= hoy &&
+      diasEntre(hoy, r.proximaFecha) <= DIAS_AVISO_RECURRENCIA,
+  )
+  if (proximas.length > 0) {
+    const monto = proximas.reduce((s, r) => s + r.amountCents, 0)
+    const una = proximas.length === 1 ? proximas[0]! : null
+    alertas.push({
+      tipo: 'recurrencia',
+      severidad: 'media',
+      titulo: una
+        ? `${etiqueta(una.note, una.type)} ${una.type === 'ingreso' ? 'entra' : 'se cobra'} ${cuando(hoy, una.proximaFecha!)}`
+        : `${proximas.length} movimientos recurrentes en ${DIAS_AVISO_RECURRENCIA} días`,
+      detalle: una ? una.descripcion : `Suman ${pesos(monto)} entre todos`,
+      montoCents: monto,
+      refId: una?.id ?? null,
+      vista: 'recurrencias',
+    })
+  }
+  return alertas
+}
+
+/**
+ * Deudas atrasadas. Dos formas de ir tarde, y las dos estaban sin cubrir:
+ *
+ *   · la **fecha pactada** ya pasó y todavía se debe algo;
+ *   · el **plan** tiene una mensualidad vencida — la fila que sigue a los
+ *     abonos hechos cayó antes de hoy. Es la misma fila que muestra la vista de
+ *     Deudas y la misma que busca el calendario, solo que mirando hacia atrás.
+ *
+ * El umbral es estricto: lo que vence **hoy** no está atrasado.
+ */
+function deDeudas(profileId: number, hoy: string): Alerta[] {
+  const deudas: any[] = db
+    .prepare(
+      `SELECT d.id, d.direction, d.counterparty, d.concept, d.due_date, d.term_months,
+        d.annual_rate_bp, d.principal_cents, d.start_date,
+        (SELECT COUNT(*) FROM debt_payments p WHERE p.debt_id = d.id) AS abonos,
+        d.principal_cents - COALESCE((SELECT SUM(p.amount_cents - p.interest_cents)
+          FROM debt_payments p WHERE p.debt_id = d.id), 0) AS saldo
+       FROM debts d WHERE d.profile_id = ? AND d.status = 'abierta'
+       ORDER BY d.id ASC`,
+    )
+    .all(profileId)
+
+  const alertas: Alerta[] = []
+  for (const d of deudas) {
+    const saldo = Math.max(0, d.saldo)
+    if (saldo <= 0) continue
+    const suyo = d.direction === 'por_pagar'
+    const quien = d.counterparty
+
+    if (d.due_date && d.due_date < hoy) {
+      const dias = diasEntre(d.due_date, hoy)
+      alertas.push({
+        tipo: 'deuda',
+        severidad: 'alta',
+        titulo: suyo ? `Venció lo de ${quien}` : `Te deben y ya venció: ${quien}`,
+        detalle: `La fecha pactada pasó hace ${dias} ${dias === 1 ? 'día' : 'días'}${d.concept ? ` · ${d.concept}` : ''}`,
+        montoCents: saldo,
+        refId: d.id,
+        vista: 'deudas',
+      })
+      continue
+    }
+    if (!d.term_months) continue
+
+    // La amortización es pura: no toca la base, aunque se llame por deuda.
+    const plan = tablaAmortizacion({
+      principalCents: d.principal_cents,
+      annualRateBp: d.annual_rate_bp,
+      termMonths: d.term_months,
+      startDate: d.start_date,
+    })
+    const siguiente = plan.filas[d.abonos]
+    if (siguiente && siguiente.fecha < hoy) {
+      const dias = diasEntre(siguiente.fecha, hoy)
+      alertas.push({
+        tipo: 'deuda',
+        severidad: 'alta',
+        titulo: suyo ? `Vas atrasado con ${quien}` : `${quien} va atrasado contigo`,
+        detalle: `El pago ${siguiente.n} de ${d.term_months} venció hace ${dias} ${dias === 1 ? 'día' : 'días'}`,
+        montoCents: siguiente.pagoCents,
+        refId: d.id,
+        vista: 'deudas',
+      })
+    }
+  }
+  return alertas
+}
+
+/**
+ * Metas en riesgo: cuando el tiempo corre más rápido que el dinero.
+ *
+ * La aritmética, que va escrita en la vista (R9): se compara la fracción de
+ * plazo transcurrida contra la fracción ya ahorrada, medidas desde el día en
+ * que se creó la meta hasta su fecha límite. Se hace con enteros
+ * —`transcurrido × objetivo` contra `total × ahorrado`— para que la frontera
+ * sea exacta y no dependa de cómo redondee un flotante: ir **justo** al ritmo
+ * no es ir en riesgo; un centavo por debajo, sí.
+ *
+ * Sin fecha límite no hay riesgo que medir: una meta sin plazo no llega tarde.
+ */
+function deMetas(profileId: number, hoy: string): Alerta[] {
+  const metas: any[] = db
+    .prepare(
+      `SELECT g.id, g.name, g.target_cents, g.due_date, substr(g.created_at, 1, 10) AS inicio,
+        COALESCE((SELECT SUM(e.amount_cents) FROM goal_entries e WHERE e.goal_id = g.id), 0) AS ahorrado
+       FROM goals g
+       WHERE g.profile_id = ? AND g.status = 'activa' AND g.due_date IS NOT NULL
+       ORDER BY g.due_date ASC, g.id ASC`,
+    )
+    .all(profileId)
+
+  const alertas: Alerta[] = []
+  for (const g of metas) {
+    const falta = g.target_cents - g.ahorrado
+    if (falta <= 0) continue
+
+    if (g.due_date < hoy) {
+      const dias = diasEntre(g.due_date, hoy)
+      alertas.push({
+        tipo: 'meta',
+        severidad: 'alta',
+        titulo: `Se pasó la fecha de "${g.name}"`,
+        detalle: `Venció hace ${dias} ${dias === 1 ? 'día' : 'días'} y faltan ${pesos(falta)}`,
+        montoCents: falta,
+        refId: g.id,
+        vista: 'metas',
+      })
+      continue
+    }
+
+    const total = diasEntre(g.inicio, g.due_date)
+    // Una meta creada el mismo día en que vence no tiene plazo que repartir:
+    // no se puede decir si va lenta, así que no se dice.
+    if (total <= 0) continue
+    const transcurrido = Math.min(Math.max(diasEntre(g.inicio, hoy), 0), total)
+    if (transcurrido * g.target_cents > total * g.ahorrado) {
+      alertas.push({
+        tipo: 'meta',
+        severidad: 'media',
+        titulo: `"${g.name}" va más lenta que su plazo`,
+        detalle: `Llevas ${porcentaje(g.ahorrado, g.target_cents)} del monto con ${porcentaje(transcurrido, total)} del tiempo corrido`,
+        montoCents: falta,
+        refId: g.id,
+        vista: 'metas',
+      })
+    }
+  }
+  return alertas
+}
+
+// ── Formato ───────────────────────────────────────────────────────────────
+
+function pesos(cents: number): string {
+  return new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(cents / 100)
+}
+
+function porcentaje(parte: number, total: number): string {
+  return `${Math.round((parte / total) * 100)} %`
+}
+
+function etiqueta(note: string, type: string): string {
+  return note || (type === 'ingreso' ? 'Un ingreso recurrente' : 'Un gasto recurrente')
+}
+
+function cuando(hoy: string, fecha: string): string {
+  const dias = diasEntre(hoy, fecha)
+  if (dias === 0) return 'hoy'
+  if (dias === 1) return 'mañana'
+  return `en ${dias} días`
+}
+
+/** Lo urgente primero; dentro de una severidad, el orden en que se generaron. */
+const ORDEN: Record<Alerta['tipo'], number> = {
+  tarjeta: 0,
+  deuda: 1,
+  presupuesto: 2,
+  recurrencia: 3,
+  meta: 4,
+}
+
+/**
+ * Todo lo que hoy merece un aviso, de lo más urgente a lo menos. De solo
+ * lectura: aquí no se escribe una sola fila.
+ */
+export function alertas(profileId: number, hoy = hoyISO()): Alerta[] {
+  const lista = [
+    ...deTarjetas(profileId, hoy),
+    ...deDeudas(profileId, hoy),
+    ...dePresupuestos(profileId, hoy.slice(0, 7)),
+    ...deRecurrencias(profileId, hoy),
+    ...deMetas(profileId, hoy),
+  ]
+  const peso = (a: Alerta) => (a.severidad === 'alta' ? 0 : 1)
+  return lista.sort((a, b) => peso(a) - peso(b) || ORDEN[a.tipo] - ORDEN[b.tipo])
+}

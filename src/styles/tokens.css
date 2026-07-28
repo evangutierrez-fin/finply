@@ -69,6 +69,15 @@
 [data-accent='cobalto'] { --acento: var(--cobalto); }
 [data-accent='vino'] { --acento: var(--vino); }
 
+/* Tinta propia del perfil (migración 10). Son dos colores porque son dos
+   temas: ningún color alcanza AA sobre el papel claro y el oscuro a la vez
+   —medido sobre 140,608 colores, cero lo logran—. Elige el CSS y no React,
+   así el cambio de tema se ve al instante. Gana sobre [data-accent] porque
+   lleva la clase .app además del atributo. El servidor no guarda una tinta
+   que no cumpla contraste (R10). */
+.app[data-tinta='propia'] { --acento: var(--acento-claro); }
+:root[data-theme='dark'] .app[data-tinta='propia'] { --acento: var(--acento-oscuro); }
+
 /* ── modo oscuro: lámpara de banquero ────────────────────────────────── */
 :root[data-theme='dark'] {
   color-scheme: dark;

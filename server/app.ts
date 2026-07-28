@@ -17,6 +17,8 @@ import goals from './routes/goals.ts'
 import notes from './routes/notes.ts'
 import summary from './routes/summary.ts'
 import reportes from './routes/reportes.ts'
+import alertas from './routes/alertas.ts'
+import analisis from './routes/analisis.ts'
 import recurrencias from './routes/recurrencias.ts'
 import calendario from './routes/calendario.ts'
 import backup from './routes/backup.ts'
@@ -46,6 +48,8 @@ export function createApp(): express.Express {
   app.use('/api/notes', notes)
   app.use('/api/summary', summary)
   app.use('/api/reportes', reportes)
+  app.use('/api/alertas', alertas)
+  app.use('/api/analisis', analisis)
   app.use('/api/recurrencias', recurrencias)
   app.use('/api/calendario', calendario)
   app.use('/api/respaldo', backup)

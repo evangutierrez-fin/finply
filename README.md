@@ -85,6 +85,17 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   una deuda **no cuentan** como ingreso ni gasto — mueven tu patrimonio de
   lugar, no lo crean ni lo consumen. Sin eso, endeudarte mejoraría tu tasa de
   ahorro. Imprimible como cierre de año.
+- **Alertas que no se descartan** — en el Resumen: la fecha límite de una
+  tarjeta que ya venció sin cubrirse, la que vence en cinco días, un
+  presupuesto rebasado, las partidas recurrentes por confirmar, una deuda
+  atrasada y una meta que va más lenta que su plazo. No se calculan una vez y
+  se guardan: se derivan cada vez que abres, así que **se apagan solas** en
+  cuanto pagas o corriges. No hay «marcar como visto» porque no hace falta.
+- **Panel de análisis** — sobre los últimos 3, 6 o 12 meses **cerrados** (el
+  mes en curso va a medias y arrastraría los promedios): tasa de ahorro,
+  meses de colchón —tu líquido entre tu gasto promedio; una tarjeta no es
+  colchón—, gasto recurrente contra discrecional y qué tan concentrado está tu
+  gasto en una sola categoría. Los supuestos van escritos junto a las cifras.
 - **Presupuestos** — un tope por categoría de gasto **y por mes**, con barra de
   avance, alerta al 80 % y estado de excedido con la cifra exacta. Cada mes
   lleva su propio plan; puedes arrastrar el del mes anterior de un clic.
@@ -97,6 +108,13 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   en `data/respaldos/` cada vez que arranca y conserva las últimas siete.
 - **Modo claro / oscuro / auto** — el tema oscuro es una superficie propia
   ("lámpara de banquero"), no una inversión automática de colores.
+- **Tinta propia, con el contraste medido** — además de los cuatro presets,
+  cada perfil puede llevar su propio color. Son **dos** colores, uno por tema,
+  y no por gusto: ningún color alcanza AA sobre el papel claro y el oscuro a la
+  vez (probado sobre 140,608 colores, cero lo logran). Finply te enseña la
+  razón de contraste mientras eliges —`6.45:1 · cumple AA`— y **no guarda** una
+  tinta que no se pueda leer. Los colores de las gráficas no se tocan: ese par
+  está validado para daltonismo.
 - **Diseño accesible** — pares de colores de gráfica validados para daltonismo
   en ambos temas (con textura como codificación secundaria), foco visible por
   teclado y respeto a `prefers-reduced-motion`.
@@ -166,19 +184,23 @@ server/          Express + node:sqlite
   reportes.ts    agregados del año y serie de patrimonio (solo lectura)
   recurrencias.ts plantillas y bandeja derivada de propuestas
   calendario.ts  lo que vence en los próximos días (solo lectura)
+  alertas.ts     lo que hoy merece un aviso, derivado (solo lectura)
+  analisis.ts    colchón, origen del gasto y concentración (solo lectura)
   routes/        profiles · accounts · categories · tags · transactions · debts
                  · tarjetas · investments · budgets · goals · notes · summary
-                 · reportes · recurrencias · calendario · backup · importaciones
+                 · reportes · alertas · analisis · recurrencias · calendario
+                 · backup · importaciones
   seed.ts        datos demo deterministas
 shared/
   types.ts       tipos compartidos cliente/servidor
   fechas.ts      aritmética de fechas: recorte de día, meses y semana ISO (puro)
   credito.ts     amortización, parcialidades e interés devengado (puro)
   recurrencias.ts periodos de una plantilla y su clave estable (puro)
+  color.ts       contraste WCAG y veredicto por tema (puro)
 src/
   views/         Resumen · Movimientos · Cuentas · Categorías · Reportes
-                 · Tarjetas · Deudas · Inversiones · Recurrencias · Calendario
-                 · Presupuestos · Metas · Notas · Ajustes
+                 · Análisis · Tarjetas · Deudas · Inversiones · Recurrencias
+                 · Calendario · Presupuestos · Metas · Notas · Ajustes
   components/    formularios, gráficas, sello, barra lateral
   styles/        tokens.css (temas claro/oscuro) + app.css
 test/            pruebas de integridad contra una base temporal
@@ -228,6 +250,8 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 | `POST /api/recurrencias/:id/asentar` | Crea el movimiento y marca el periodo, en una transacción. 409 si ya se resolvió |
 | `POST /api/recurrencias/:id/descartar` · `/reabrir` | Descartar no mueve el libro; reabrir deshace un descarte |
 | `GET /api/calendario?profileId&dias` | Lo que vence: recurrencias, cortes y pagos de tarjeta, deudas y parcialidades |
+| `GET /api/alertas?profileId` | Lo vencido y lo que está por vencer. **Derivadas**: no se guardan ni se descartan |
+| `GET /api/analisis?profileId&meses` | Meses de colchón, tasa de ahorro, gasto recurrente contra discrecional y concentración |
 | `GET /api/respaldo` · `GET /info` · `POST /restaurar` | Respaldo completo en JSON |
 
 Reglas de integridad que cuida el backend, todas cubiertas por `npm test`:
@@ -262,20 +286,24 @@ El libro siempre cuadra.
 Display: **Besley** (una Clarendon, la letra de la banca del XIX) · UI:
 **Instrument Sans** · Cifras: **Spline Sans Mono** con números tabulares.
 
+La tinta de un perfil —preset o propia— se valida con la razón de contraste
+WCAG real contra las superficies de su tema, no contra una lista de colores
+permitidos: [shared/color.ts](shared/color.ts) es un módulo puro que usan el
+servidor para rechazar y el cliente para enseñar el número mientras eliges.
+El mínimo es AA para texto normal (4.5:1) y se mide contra la peor superficie
+donde aparece, que en el tema oscuro es la hoja, no el fondo.
+
 ## Hoja de ruta
 
 **Siguiente**
 
-- Alertas en el tablero: presupuesto excedido, corte de tarjeta cerca, pago
-  vencido, meta en riesgo. Panel de análisis: gasto recurrente contra
-  discrecional, concentración por categoría, meses de colchón.
+- Inversiones con unidades, precio por unidad y rendimiento anualizado
+  (XIRR/TWR), histórico de valuaciones y simulador de escenarios con los
+  supuestos a la vista. **Sin cotizaciones en línea**: valuación manual o CSV
+  de precios, porque tus datos no salen de tu máquina.
 
 **Después**
 
-- Personalización de color con validación de contraste
-- Inversiones con unidades, precio y rendimiento anualizado; simulador
-  financiero. **Sin cotizaciones en línea**: valuación manual o CSV de precios,
-  porque tus datos no salen de tu máquina.
 - Funciones de negocio agnósticas del giro: contrapartes, facturas con
   vencimiento, antigüedad de saldos, IVA y deducibles, centros de costo,
   estado de resultados y punto de equilibrio
