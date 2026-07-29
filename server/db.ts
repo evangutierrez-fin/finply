@@ -192,6 +192,7 @@ export function mapProfile(row: any) {
     // Nulos mientras el perfil use un preset, que es como nacen todos.
     accentHex: row.accent_hex ?? null,
     accentHexDark: row.accent_hex_dark ?? null,
+    dimensionLabel: row.dimension_label ?? 'Proyecto',
     createdAt: row.created_at,
   }
 }
@@ -214,6 +215,13 @@ export function mapTx(row: any) {
     investmentEntryId: row.investment_entry_id ?? null,
     msiPurchaseId: row.msi_purchase_id ?? null,
     debtId: row.debt_id ?? null,
+    invoiceId: row.invoice_id ?? null,
+    counterpartyId: row.counterparty_id ?? null,
+    counterpartyName: row.counterparty_name ?? null,
+    costCenterId: row.cost_center_id ?? null,
+    costCenterName: row.cost_center_name ?? null,
+    taxCents: row.tax_cents ?? 0,
+    deductible: row.deductible === 1,
     tags: [] as { id: number; name: string }[],
   }
 }
@@ -290,11 +298,14 @@ export function mapDebt(row: any) {
 }
 
 export const TX_SELECT = `
-  SELECT t.*, a.name AS account_name, c.name AS category_name, ta.name AS transfer_account_name
+  SELECT t.*, a.name AS account_name, c.name AS category_name, ta.name AS transfer_account_name,
+    cp.name AS counterparty_name, cc.name AS cost_center_name
   FROM transactions t
   JOIN accounts a ON a.id = t.account_id
   LEFT JOIN categories c ON c.id = t.category_id
   LEFT JOIN accounts ta ON ta.id = t.transfer_account_id
+  LEFT JOIN counterparties cp ON cp.id = t.counterparty_id
+  LEFT JOIN cost_centers cc ON cc.id = t.cost_center_id
 `
 
 export function getTx(id: number): any {

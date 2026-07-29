@@ -2044,3 +2044,105 @@ select.campo-input { cursor: pointer; }
 .ruta-mejor { border-color: var(--acento); }
 .ruta-cifra { display: flex; flex-direction: column; gap: 2px; }
 .chip-acento { color: var(--acento); border-color: var(--acento); }
+
+/* ── perfil de negocio ───────────────────────────────────────────────── */
+.tabla {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.tabla th {
+  font-family: var(--f-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--tinta-2);
+  text-align: left;
+  padding: 10px 8px 8px;
+  border-bottom: 1px solid var(--regla-fuerte);
+}
+.tabla td {
+  padding: 9px 8px;
+  border-bottom: 1px solid var(--regla);
+  vertical-align: baseline;
+}
+.tabla tr:last-child td { border-bottom: none; }
+.tabla .col-num, .tabla th.col-num { text-align: right; white-space: nowrap; }
+.tabla-sub { font-size: 12px; color: var(--tinta-2); margin-top: 2px; }
+/* Archivada o cancelada: se apaga, pero se sigue leyendo. Borrarla de la
+   vista escondería justamente lo que el usuario fue a buscar. */
+.fila-archivada td { opacity: 0.55; }
+
+.aging { display: flex; flex-direction: column; gap: 9px; }
+.aging li {
+  display: grid;
+  grid-template-columns: 110px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+.aging-label { color: var(--tinta-2); font-size: 12.5px; }
+.aging-riel {
+  height: 9px;
+  background: var(--papel);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.aging-lleno { display: block; height: 100%; background: var(--acento); border-radius: 999px; }
+/* Lo vencido lleva rayado además del color: en escala de grises se sigue
+   distinguiendo de lo que está al corriente (R10). */
+.aging-lleno-vencido {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--rojo) 0 2.4px,
+    var(--hoja) 2.4px 4px
+  );
+  border: 1px solid var(--rojo);
+}
+.aging-vencido .aging-label { color: var(--rojo-osc); }
+.aging-chip { margin-left: 8px; }
+
+.lista-simple { display: flex; flex-direction: column; gap: 2px; }
+.lista-simple li {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--regla);
+  font-size: 13.5px;
+}
+.lista-simple li:last-child { border-bottom: none; }
+
+.resultados td:first-child { width: 100%; }
+.resultados-grupo th {
+  padding-top: 16px;
+  border-bottom: none;
+  color: var(--tinta-2);
+}
+.resultados-detalle { padding-left: 18px; color: var(--tinta-2); }
+.resultados-subtotal td { border-top: 1px solid var(--regla); font-weight: 500; }
+.resultados-fuerte td {
+  font-family: var(--f-display);
+  font-size: 16px;
+  font-weight: 600;
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+.resultados-utilidad td { border-top: 2px solid var(--regla-fuerte); border-bottom: none; }
+
+.taxo-rol {
+  font-family: var(--f-ui);
+  font-size: 12px;
+  color: var(--tinta-2);
+  background: var(--papel);
+  border: 1px solid var(--regla);
+  border-radius: 6px;
+  padding: 3px 6px;
+}
+
+.campo-casilla { flex-direction: row; align-items: center; gap: 8px; }
+.campo-ayuda { display: block; margin-top: 6px; font-size: 12px; color: var(--tinta-2); }
+.vista-mes-nav { display: inline-flex; align-items: center; gap: 12px; }
+.stat-rojo { color: var(--rojo-osc); }

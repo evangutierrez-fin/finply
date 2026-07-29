@@ -50,6 +50,7 @@ function deRecurrencias(profileId: number, desde: string, hasta: string): Evento
         detalle: `${row.account_name} · ${describirRecurrencia(regla)}`,
         montoCents: row.amount_cents,
         refId: row.id,
+        direccion: row.type === 'ingreso' ? 'entra' : 'sale',
         periodo: o.periodo,
       })
     }
@@ -80,6 +81,7 @@ function deTarjetas(profileId: number, desde: string, hasta: string): EventoCale
         detalle: 'Para no generar intereses del corte anterior',
         montoCents: t.paraNoGenerarInteresesCents,
         refId: t.accountId,
+        direccion: 'sale',
       })
     }
     if (!t.cutDay) continue
@@ -96,6 +98,10 @@ function deTarjetas(profileId: number, desde: string, hasta: string): EventoCale
             : 'Cierra el periodo de la tarjeta',
         montoCents: t.msiProximoCorteCents > 0 ? t.msiProximoCorteCents : null,
         refId: t.accountId,
+        // Un corte no mueve dinero: solo cierra el periodo. Se marca como
+        // salida por coherencia del tipo, y el flujo proyectado lo ignora
+        // porque su monto es informativo, no un cargo a la caja.
+        direccion: 'sale',
       })
     }
     // Si el próximo corte es el que ya ocurrió —hoy es justo el día de corte—,
@@ -110,6 +116,7 @@ function deTarjetas(profileId: number, desde: string, hasta: string): EventoCale
           detalle: 'El monto se define en el corte de este periodo',
           montoCents: null,
           refId: t.accountId,
+          direccion: 'sale',
         })
       }
     }
@@ -159,6 +166,7 @@ function deDeudas(profileId: number, desde: string, hasta: string): EventoCalend
           detalle: `Pago ${proximo.n} de ${d.term_months} del plan${d.concept ? ` · ${d.concept}` : ''}`,
           montoCents: proximo.pagoCents,
           refId: d.id,
+          direccion: suyo ? 'sale' : 'entra',
         })
       }
       continue
@@ -173,6 +181,7 @@ function deDeudas(profileId: number, desde: string, hasta: string): EventoCalend
         // lo que vence.
         montoCents: Math.max(0, d.saldo),
         refId: d.id,
+        direccion: suyo ? 'sale' : 'entra',
       })
     }
   }
@@ -198,15 +207,54 @@ function deMSI(profileId: number, desde: string, hasta: string): EventoCalendari
     detalle: `Parcialidad ${f.number} de ${f.months} · ${f.account_name}`,
     montoCents: f.amount_cents,
     refId: f.purchase_id,
+    direccion: 'sale' as const,
   }))
+}
+
+/**
+ * Facturas abiertas con saldo, que vencen dentro de la ventana. Entran aquí
+ * por lo mismo que entraron las deudas (D9): el calendario junta lo que Finply
+ * ya sabe que va a caer, y una factura por cobrar es exactamente eso.
+ *
+ * El saldo se calcula en SQL contra los movimientos ligados, no recorriendo
+ * cobros en JS (R11).
+ */
+function deFacturas(profileId: number, desde: string, hasta: string): EventoCalendario[] {
+  const filas: any[] = db
+    .prepare(
+      `SELECT f.id, f.direction, f.folio, f.concept, f.due_date,
+        f.subtotal_cents + f.tax_cents
+          - COALESCE((SELECT SUM(t.amount_cents) FROM transactions t WHERE t.invoice_id = f.id), 0)
+          AS saldo,
+        c.name AS contraparte
+       FROM invoices f
+       JOIN counterparties c ON c.id = f.counterparty_id
+       WHERE f.profile_id = ? AND f.status = 'abierta'
+         AND f.due_date IS NOT NULL AND f.due_date BETWEEN ? AND ?`,
+    )
+    .all(profileId, desde, hasta)
+
+  return filas
+    .filter((f) => f.saldo > 0)
+    .map((f) => ({
+      fecha: f.due_date,
+      tipo: 'factura' as const,
+      titulo:
+        f.direction === 'emitida' ? `Cobrar a ${f.contraparte}` : `Pagar a ${f.contraparte}`,
+      detalle: [f.folio && `Folio ${f.folio}`, f.concept].filter(Boolean).join(' · ') || 'Factura',
+      montoCents: f.saldo as number,
+      refId: f.id as number,
+      direccion: (f.direction === 'emitida' ? 'entra' : 'sale') as 'entra' | 'sale',
+    }))
 }
 
 const ORDEN: Record<EventoCalendario['tipo'], number> = {
   pago_tarjeta: 0,
   deuda: 1,
-  recurrencia: 2,
-  msi: 3,
-  corte: 4,
+  factura: 2,
+  recurrencia: 3,
+  msi: 4,
+  corte: 5,
 }
 
 /** Todo lo que vence en los próximos `dias` días, del más cercano al último. */
@@ -217,6 +265,7 @@ export function calendario(profileId: number, hoy = hoyISO(), dias = 30): Calend
     ...deTarjetas(profileId, hoy, hasta),
     ...deDeudas(profileId, hoy, hasta),
     ...deMSI(profileId, hoy, hasta),
+    ...deFacturas(profileId, hoy, hasta),
   ]
   // Dentro de un mismo día manda lo que cuesta dinero si se te pasa.
   eventos.sort(

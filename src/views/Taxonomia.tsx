@@ -8,7 +8,7 @@ import { useState } from 'react'
 import { ApiError, api } from '../api.ts'
 import { useApp } from '../context.ts'
 import { useFetch } from '../hooks.ts'
-import type { Category, Tag } from '../../shared/types.ts'
+import type { Category, RolCategoria, Tag } from '../../shared/types.ts'
 
 type Pendiente = { categoria: Category; txCount: number }
 
@@ -62,6 +62,7 @@ export function Taxonomia() {
     [profile.id, refreshKey],
   )
   const [error, setError] = useState<string | null>(null)
+  const esNegocio = profile.kind === 'negocio'
   const [pendiente, setPendiente] = useState<Pendiente | null>(null)
   const [destino, setDestino] = useState(0)
   const [nuevaEtiqueta, setNuevaEtiqueta] = useState('')
@@ -180,6 +181,31 @@ export function Taxonomia() {
                       }
                     }}
                   />
+                  {/* El papel solo aplica al gasto: un ingreso no es ni fijo
+                      ni variable, es la venta contra la que se miden. */}
+                  {esNegocio && grupo.kind === 'gasto' && (
+                    <select
+                      className="taxo-rol"
+                      aria-label={`Papel de ${c.name} en el estado de resultados`}
+                      value={c.role ?? ''}
+                      onChange={(e) =>
+                        void correr(
+                          () =>
+                            api.categories.setRole(
+                              c.id,
+                              c.name,
+                              (e.target.value || null) as RolCategoria | null,
+                            ),
+                          'Clasificada',
+                        )
+                      }
+                    >
+                      <option value="">Sin clasificar</option>
+                      <option value="costo_venta">Costo de ventas</option>
+                      <option value="gasto_fijo">Gasto fijo</option>
+                      <option value="gasto_variable">Gasto variable</option>
+                    </select>
+                  )}
                   <span className="taxo-cuenta">
                     {c.txCount} movimiento{c.txCount === 1 ? '' : 's'}
                   </span>
@@ -191,6 +217,12 @@ export function Taxonomia() {
           </ul>
           <p className="ajustes-nota">
             Las categorías nuevas se crean al registrar un movimiento.
+            {esNegocio && grupo.kind === 'gasto' && (
+              <>
+                {' '}El papel de cada una es lo que arma tu estado de resultados y tu punto de
+                equilibrio. Lo que dejes sin clasificar no se reparte a ojo: aparece aparte.
+              </>
+            )}
           </p>
         </section>
       ))}

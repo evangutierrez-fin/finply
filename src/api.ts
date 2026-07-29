@@ -1,8 +1,9 @@
 import type {
   Account, Alerta, Amortizacion, Analisis, Bandeja, Budget, Calendario, Category, Comparativa,
-  CompraMSI, Debt, DebtPayment, EstadoTarjeta, Frecuencia, Goal, InformeImport, InformePrecios,
-  Investment, InvestmentEntryType, LoteImport, MapeoImport, Note, Profile, Recurrencia,
-  ReporteAnual, ResultadoImport, Simulacion, Summary, Tag, Tx, TxType,
+  Aging, CentroCosto, CompraMSI, Contraparte, Debt, DebtPayment, EstadoResultados, EstadoTarjeta,
+  Factura, FlujoProyectado, Frecuencia, Goal, InformeImport, InformePrecios, Investment,
+  InvestmentEntryType, LoteImport, MapeoImport, Note, Profile, Recurrencia, ReporteAnual,
+  ResultadoImport, RolCategoria, Simulacion, Summary, Tag, Tx, TxType,
 } from '../shared/types.ts'
 
 /** Error de la API que conserva el código y el cuerpo, para poder reaccionar. */
@@ -92,6 +93,13 @@ export interface TxDraft {
   transferAccountId?: number | null
   /** Ausente deja las etiquetas como estaban; arreglo vacío las quita. */
   tagIds?: number[]
+  /** Perfil de negocio. Todo opcional: un movimiento personal no los manda. */
+  counterpartyId?: number | null
+  costCenterId?: number | null
+  invoiceId?: number | null
+  /** Impuesto contenido en el monto, no sumado a él. */
+  taxCents?: number
+  deductible?: boolean
 }
 
 export interface ImportDraft {
@@ -189,11 +197,11 @@ export interface TintaDraft {
 export const api = {
   profiles: {
     list: () => req<Profile[]>('/api/profiles'),
-    create: (data: { name: string; kind: string; accent: string } & TintaDraft) =>
+    create: (data: { name: string; kind: string; accent: string; dimensionLabel?: string } & TintaDraft) =>
       req<Profile>('/api/profiles', { method: 'POST', body: JSON.stringify(data) }),
     update: (
       id: number,
-      data: Partial<{ name: string; kind: string; accent: string }> & TintaDraft,
+      data: Partial<{ name: string; kind: string; accent: string; dimensionLabel: string }> & TintaDraft,
     ) => req<Profile>(`/api/profiles/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     remove: (id: number) => req<{ ok: true }>(`/api/profiles/${id}`, { method: 'DELETE' }),
   },
@@ -227,6 +235,12 @@ export const api = {
       req<Category>('/api/categories', { method: 'POST', body: JSON.stringify(data) }),
     rename: (id: number, name: string) =>
       req<Category>(`/api/categories/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
+    /** El papel en el estado de resultados. `null` la deja sin clasificar. */
+    setRole: (id: number, name: string, role: RolCategoria | null) =>
+      req<Category>(`/api/categories/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name, role }),
+      }),
     /** Sin `reassignTo` ni `force`, una categoría en uso responde 409 con txCount. */
     remove: (id: number, options: { reassignTo?: number; force?: boolean } = {}) => {
       const search = new URLSearchParams()
@@ -321,6 +335,56 @@ export const api = {
     ) => req<Investment>(`/api/investments/${id}/entries`, { method: 'POST', body: JSON.stringify(data) }),
     removeEntry: (entryId: number) =>
       req<Investment>(`/api/investments/entries/${entryId}`, { method: 'DELETE' }),
+  },
+  contrapartes: {
+    list: (profileId: number) => req<Contraparte[]>(`/api/contrapartes?profileId=${profileId}`),
+    create: (data: { profileId: number; name: string; role?: string; taxId?: string; note?: string }) =>
+      req<Contraparte>('/api/contrapartes', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: number, data: Partial<{ name: string; role: string; taxId: string; note: string; archived: boolean }>) =>
+      req<Contraparte>(`/api/contrapartes/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    remove: (id: number) => req<{ ok: true }>(`/api/contrapartes/${id}`, { method: 'DELETE' }),
+  },
+  centros: {
+    list: (profileId: number) => req<CentroCosto[]>(`/api/centros?profileId=${profileId}`),
+    create: (data: { profileId: number; name: string }) =>
+      req<CentroCosto>('/api/centros', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: number, data: Partial<{ name: string; archived: boolean }>) =>
+      req<CentroCosto>(`/api/centros/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    remove: (id: number) => req<{ ok: true }>(`/api/centros/${id}`, { method: 'DELETE' }),
+  },
+  facturas: {
+    list: (profileId: number, opciones: { direction?: string; pendientes?: boolean } = {}) => {
+      const q = new URLSearchParams({ profileId: String(profileId) })
+      if (opciones.direction) q.set('direction', opciones.direction)
+      if (opciones.pendientes) q.set('pendientes', 'true')
+      return req<Factura[]>(`/api/facturas?${q}`)
+    },
+    aging: (profileId: number) => req<Aging>(`/api/facturas/aging?profileId=${profileId}`),
+    create: (data: {
+      profileId: number
+      counterpartyId: number
+      direction: string
+      folio?: string
+      concept?: string
+      issueDate: string
+      dueDate?: string | null
+      subtotalCents: number
+      taxCents?: number
+      costCenterId?: number | null
+    }) => req<Factura>('/api/facturas', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: number, data: Record<string, unknown>) =>
+      req<Factura>(`/api/facturas/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    remove: (id: number) => req<{ ok: true }>(`/api/facturas/${id}`, { method: 'DELETE' }),
+    cobrar: (
+      id: number,
+      data: { accountId: number; amountCents: number; date: string; note?: string; categoryId?: number | null },
+    ) => req<Factura>(`/api/facturas/${id}/cobros`, { method: 'POST', body: JSON.stringify(data) }),
+  },
+  negocio: {
+    resultados: (profileId: number, desde: string, hasta: string) =>
+      req<EstadoResultados>(`/api/negocio/resultados?profileId=${profileId}&desde=${desde}&hasta=${hasta}`),
+    flujo: (profileId: number, dias: number) =>
+      req<FlujoProyectado>(`/api/negocio/flujo?profileId=${profileId}&dias=${dias}`),
   },
   precios: {
     analizar: (data: { profileId: number; texto: string; fecha?: string | null }) =>

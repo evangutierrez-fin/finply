@@ -22,6 +22,7 @@ export function ProfileModal({
   const [tinta, setTinta] = useState(() =>
     tintaInicial(profile?.accent ?? 'verde', profile?.accentHex ?? null, profile?.accentHexDark ?? null),
   )
+  const [dimensionLabel, setDimensionLabel] = useState(profile?.dimensionLabel ?? 'Proyecto')
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -34,7 +35,12 @@ export function ProfileModal({
     setSaving(true)
     setError(null)
     try {
-      const datos = { name: name.trim(), kind, ...tintaPayload(tinta) }
+      const datos = {
+        name: name.trim(),
+        kind,
+        dimensionLabel: dimensionLabel.trim() || 'Proyecto',
+        ...tintaPayload(tinta),
+      }
       const saved = profile
         ? await api.profiles.update(profile.id, datos)
         : await api.profiles.create(datos)
@@ -98,6 +104,22 @@ export function ProfileModal({
           </fieldset>
           <TintaPicker valor={tinta} onChange={setTinta} />
         </div>
+        {kind === 'negocio' && (
+          <label className="campo">
+            <span className="campo-label">Cómo llamas a tu dimensión libre</span>
+            <input
+              className="campo-input"
+              value={dimensionLabel}
+              onChange={(e) => setDimensionLabel(e.target.value)}
+              placeholder="Proyecto"
+              maxLength={24}
+            />
+            <span className="campo-ayuda">
+              Cada movimiento puede pertenecer a uno. Un taller diría "Obra", una cadena diría
+              "Sucursal", una consultora diría "Cliente": Finply no lo decide por ti.
+            </span>
+          </label>
+        )}
         {error && <p className="forma-error" role="alert">{error}</p>}
         <footer className="forma-pie forma-pie-doble">
           {profile && canDelete ? (

@@ -45,6 +45,8 @@ export const profileInput = z.object({
   /** Ausentes dejan la tinta como estaba; `null` explícito vuelve al preset. */
   accentHex: tinta('claro'),
   accentHexDark: tinta('oscuro'),
+  /** Cómo llama este perfil a su dimensión libre. La nombra el usuario (R15). */
+  dimensionLabel: z.string().trim().min(1).max(24).default('Proyecto'),
 })
 
 export const profilePatch = profileInput.partial()
@@ -82,6 +84,9 @@ export const categoryInput = z.object({
 // como ingreso o gasto y cambiarlo los dejaría mal etiquetados en masa.
 export const categoryPatch = z.object({
   name: z.string().trim().min(1, 'La categoría necesita un nombre').max(40),
+  // El papel en el estado de resultados. `null` explícito la deja sin
+  // clasificar, que es distinto de no mandarlo (deja lo que tenía).
+  role: z.enum(['costo_venta', 'gasto_fijo', 'gasto_variable']).nullish(),
 })
 
 export const categoryDeleteQuery = z.object({
@@ -131,8 +136,22 @@ export const txInput = z
     note: z.string().trim().max(200).default(''),
     transferAccountId: z.number().int().positive().nullish(),
     tagIds: z.array(z.number().int().positive()).max(20).optional(),
+    // Perfil de negocio. Todo opcional: un movimiento personal nunca los manda.
+    counterpartyId: z.number().int().positive().nullish(),
+    costCenterId: z.number().int().positive().nullish(),
+    invoiceId: z.number().int().positive().nullish(),
+    // Impuesto **contenido** en el monto, no sumado: por eso se valida contra
+    // él y no puede pasarse. Un IVA mayor que la factura no existe.
+    taxCents: z.number().int().min(0).default(0),
+    deductible: z.boolean().default(false),
   })
   .superRefine((t, ctx) => {
+    if (t.taxCents > t.amountCents) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'El impuesto va incluido en el monto, así que no puede ser mayor',
+      })
+    }
     if (t.type === 'transferencia') {
       if (!t.transferAccountId) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Elige la cuenta destino' })
@@ -455,3 +474,84 @@ export const txQuery = z
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'El monto mínimo es mayor al máximo' })
     }
   })
+
+// ── Perfil de negocio ─────────────────────────────────────────────────────
+
+export const contraparteInput = z.object({
+  profileId: z.number().int().positive(),
+  name: z.string().trim().min(1, 'La contraparte necesita un nombre').max(80),
+  role: z.enum(['cliente', 'proveedor', 'ambos']).default('ambos'),
+  // Genérico a propósito (R15): RFC en México, CUIT en Argentina, VAT en
+  // Europa, o vacío. Finply no valida el formato de ningún país.
+  taxId: z.string().trim().max(40).default(''),
+  note: z.string().trim().max(200).default(''),
+})
+
+export const contrapartePatch = contraparteInput
+  .omit({ profileId: true })
+  .partial()
+  .extend({ archived: z.boolean().optional() })
+
+export const centroInput = z.object({
+  profileId: z.number().int().positive(),
+  name: z.string().trim().min(1, 'El centro necesita un nombre').max(60),
+})
+
+export const centroPatch = centroInput
+  .omit({ profileId: true })
+  .partial()
+  .extend({ archived: z.boolean().optional() })
+
+export const facturaInput = z.object({
+  profileId: z.number().int().positive(),
+  counterpartyId: z.number().int().positive(),
+  direction: z.enum(['emitida', 'recibida']),
+  folio: z.string().trim().max(40).default(''),
+  concept: z.string().trim().max(200).default(''),
+  issueDate: isoDate,
+  dueDate: isoDate.nullish(),
+  subtotalCents: z.number().int().positive('El subtotal debe ser mayor a cero'),
+  taxCents: z.number().int().min(0).default(0),
+  costCenterId: z.number().int().positive().nullish(),
+})
+
+export const facturaPatch = facturaInput
+  .omit({ profileId: true, direction: true })
+  .partial()
+  .extend({ status: z.enum(['abierta', 'cancelada']).optional() })
+
+export const facturaQuery = z.object({
+  profileId: z.coerce.number().int().positive(),
+  direction: z.enum(['emitida', 'recibida']).optional(),
+  counterpartyId: z.coerce.number().int().positive().optional(),
+  pendientes: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+})
+
+/** El cobro o pago de una factura: crea el movimiento y lo liga. */
+export const cobroInput = z.object({
+  accountId: z.number().int().positive(),
+  amountCents: z.number().int().positive('El monto debe ser mayor a cero'),
+  date: isoDate,
+  note: z.string().trim().max(200).default(''),
+  categoryId: z.number().int().positive().nullish(),
+})
+
+export const periodoQuery = z.object({
+  profileId: z.coerce.number().int().positive(),
+  desde: isoDate,
+  hasta: isoDate,
+})
+
+export const agingQuery = z.object({
+  profileId: z.coerce.number().int().positive(),
+  hoy: isoDate.optional(),
+})
+
+export const flujoQuery = z.object({
+  profileId: z.coerce.number().int().positive(),
+  dias: z.coerce.number().int().min(1).max(365).default(30),
+  hoy: isoDate.optional(),
+})

@@ -12,8 +12,18 @@ router.get('/', (_req, res) => {
 router.post('/', (req, res) => {
   const input = profileInput.parse(req.body)
   const result = db
-    .prepare('INSERT INTO profiles (name, kind, accent, accent_hex, accent_hex_dark) VALUES (?, ?, ?, ?, ?)')
-    .run(input.name, input.kind, input.accent, input.accentHex ?? null, input.accentHexDark ?? null)
+    .prepare(
+      `INSERT INTO profiles (name, kind, accent, accent_hex, accent_hex_dark, dimension_label)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      input.name,
+      input.kind,
+      input.accent,
+      input.accentHex ?? null,
+      input.accentHexDark ?? null,
+      input.dimensionLabel,
+    )
   const id = Number(result.lastInsertRowid)
   seedCategories(id, input.kind)
   const row = db.prepare('SELECT * FROM profiles WHERE id = ?').get(id)
@@ -28,13 +38,15 @@ router.patch('/:id', (req, res) => {
   // La tinta distingue "no opiné" de "quítala", igual que las etiquetas de un
   // movimiento: ausente la deja como estaba, `null` explícito vuelve al preset.
   db.prepare(
-    'UPDATE profiles SET name = ?, kind = ?, accent = ?, accent_hex = ?, accent_hex_dark = ? WHERE id = ?',
+    `UPDATE profiles SET name = ?, kind = ?, accent = ?, accent_hex = ?, accent_hex_dark = ?,
+       dimension_label = ? WHERE id = ?`,
   ).run(
     input.name ?? existing.name,
     input.kind ?? existing.kind,
     input.accent ?? existing.accent,
     input.accentHex === undefined ? existing.accent_hex : input.accentHex,
     input.accentHexDark === undefined ? existing.accent_hex_dark : input.accentHexDark,
+    input.dimensionLabel ?? existing.dimension_label,
     id,
   )
   const row = db.prepare('SELECT * FROM profiles WHERE id = ?').get(id)
@@ -63,6 +75,9 @@ router.delete('/:id', (req, res) => {
     db.prepare('DELETE FROM goals WHERE profile_id = ?').run(id)
     db.prepare('DELETE FROM budgets WHERE profile_id = ?').run(id)
     db.prepare('DELETE FROM notes WHERE profile_id = ?').run(id)
+    db.prepare('DELETE FROM invoices WHERE profile_id = ?').run(id)
+    db.prepare('DELETE FROM counterparties WHERE profile_id = ?').run(id)
+    db.prepare('DELETE FROM cost_centers WHERE profile_id = ?').run(id)
     db.prepare('DELETE FROM categories WHERE profile_id = ?').run(id)
     db.prepare('DELETE FROM accounts WHERE profile_id = ?').run(id)
     db.prepare('DELETE FROM profiles WHERE id = ?').run(id)

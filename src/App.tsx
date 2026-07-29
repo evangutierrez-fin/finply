@@ -9,6 +9,9 @@ import { TintaPicker, tintaInicial, tintaPayload, tintaValida } from './componen
 import { Resumen } from './views/Resumen.tsx'
 import { Analisis } from './views/Analisis.tsx'
 import { Simulador } from './views/Simulador.tsx'
+import { Contrapartes } from './views/Contrapartes.tsx'
+import { Facturas } from './views/Facturas.tsx'
+import { Negocio } from './views/Negocio.tsx'
 import { Movimientos } from './views/Movimientos.tsx'
 import { Cuentas } from './views/Cuentas.tsx'
 import { Reportes } from './views/Reportes.tsx'
@@ -28,7 +31,7 @@ import { Importar } from './views/Importar.tsx'
 // donde uno la busca.
 const VIEWS: View[] = [
   'resumen', 'movimientos', 'cuentas', 'taxonomia', 'reportes', 'analisis', 'importar', 'tarjetas',
-  'deudas', 'inversiones', 'simulador', 'recurrencias', 'calendario', 'presupuestos', 'metas', 'notas', 'ajustes',
+  'deudas', 'inversiones', 'simulador', 'contrapartes', 'facturas', 'negocio', 'recurrencias', 'calendario', 'presupuestos', 'metas', 'notas', 'ajustes',
 ]
 
 const THEME_CYCLE: Record<ThemePref, ThemePref> = { claro: 'oscuro', oscuro: 'auto', auto: 'claro' }
@@ -236,6 +239,9 @@ export default function App() {
           {view === 'deudas' && <Deudas />}
           {view === 'inversiones' && <Inversiones />}
           {view === 'simulador' && <Simulador />}
+          {view === 'contrapartes' && <Contrapartes />}
+          {view === 'facturas' && <Facturas />}
+          {view === 'negocio' && <Negocio />}
           {view === 'recurrencias' && <Recurrencias />}
           {view === 'calendario' && <Calendario />}
           {view === 'presupuestos' && <Presupuestos />}

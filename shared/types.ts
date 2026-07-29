@@ -16,6 +16,8 @@ export interface Profile {
    */
   accentHex: string | null
   accentHexDark: string | null
+  /** Cómo llama este perfil a su dimensión libre: "Proyecto", "Sucursal"… */
+  dimensionLabel: string
   createdAt: string
 }
 
@@ -41,11 +43,19 @@ export interface Account {
 
 export type TxType = 'ingreso' | 'gasto' | 'transferencia'
 
+/**
+ * Papel de una categoría de gasto en el estado de resultados. `null` es "sin
+ * clasificar", que es como nacen todas: se muestran aparte en vez de
+ * suponerles un lugar.
+ */
+export type RolCategoria = 'costo_venta' | 'gasto_fijo' | 'gasto_variable'
+
 export interface Category {
   id: number
   profileId: number
   name: string
   kind: 'ingreso' | 'gasto'
+  role: RolCategoria | null
   /** Movimientos que la usan; sirve para avisar antes de borrarla. */
   txCount: number
 }
@@ -76,6 +86,15 @@ export interface Tx {
   msiPurchaseId: number | null
   /** Si viene, este movimiento es el desembolso de una deuda. */
   debtId: number | null
+  /** Si viene, este movimiento cobra o paga esa factura. */
+  invoiceId: number | null
+  counterpartyId: number | null
+  counterpartyName: string | null
+  costCenterId: number | null
+  costCenterName: string | null
+  /** Impuesto **contenido** en el monto, no sumado a él. */
+  taxCents: number
+  deductible: boolean
   tags: { id: number; name: string }[]
 }
 
@@ -326,7 +345,7 @@ export interface Bandeja {
   truncado: boolean
 }
 
-export type TipoEvento = 'recurrencia' | 'corte' | 'pago_tarjeta' | 'deuda' | 'msi'
+export type TipoEvento = 'recurrencia' | 'corte' | 'pago_tarjeta' | 'deuda' | 'msi' | 'factura'
 
 /** Algo que vence. Todo derivado y de solo lectura (D9). */
 export interface EventoCalendario {
@@ -338,6 +357,12 @@ export interface EventoCalendario {
   montoCents: number | null
   /** A qué apunta, para poder navegar hasta ahí. */
   refId: number | null
+  /**
+   * Hacia dónde mueve el dinero. Lo pone quien genera el evento, que es el
+   * único que lo sabe con certeza: el flujo proyectado lee esto en vez de
+   * volver a deducirlo, para que no haya dos versiones de lo que vence.
+   */
+  direccion: 'entra' | 'sale'
   /** Solo en recurrencias: identifica la propuesta. */
   periodo?: string
 }
@@ -609,4 +634,127 @@ export interface LoteImport {
   createdAt: string
   /** Partidas que quedan del lote; menos que `rowCount` si anulaste algunas. */
   vigentes: number
+}
+
+// ── Perfil de negocio ─────────────────────────────────────────────────────
+//
+// El libro sigue siendo de **flujo de efectivo**: una factura es el documento
+// y el compromiso —de ahí salen la antigüedad de saldos y el flujo
+// proyectado—, pero el ingreso nace cuando se cobra, con su movimiento
+// ligado. Sin esa regla, emitir y cobrar contarían dos veces el mismo peso.
+
+export type RolContraparte = 'cliente' | 'proveedor' | 'ambos'
+
+export interface Contraparte {
+  id: number
+  profileId: number
+  name: string
+  role: RolContraparte
+  /** Identificador fiscal, si el usuario lo usa. RFC, CUIT, VAT… o vacío. */
+  taxId: string
+  note: string
+  archived: boolean
+  /** Movimientos y facturas que la usan; sirve para avisar antes de borrarla. */
+  txCount: number
+  invoiceCount: number
+  /** Lo que falta por cobrarle y por pagarle, de sus facturas abiertas. */
+  porCobrarCents: number
+  porPagarCents: number
+}
+
+export interface CentroCosto {
+  id: number
+  profileId: number
+  name: string
+  archived: boolean
+  txCount: number
+}
+
+export type DireccionFactura = 'emitida' | 'recibida'
+
+export interface Factura {
+  id: number
+  profileId: number
+  counterpartyId: number
+  counterpartyName: string
+  direction: DireccionFactura
+  folio: string
+  concept: string
+  issueDate: string
+  dueDate: string | null
+  subtotalCents: number
+  taxCents: number
+  /** Subtotal más impuesto. Se calcula, no se guarda. */
+  totalCents: number
+  /** Suma de los movimientos ligados. */
+  pagadoCents: number
+  /** Total menos pagado, con piso en cero. */
+  saldoCents: number
+  status: 'abierta' | 'cancelada'
+  /** Derivado del saldo, no guardado: no puede quedarse viejo. */
+  cobrada: boolean
+  costCenterId: number | null
+  costCenterName: string | null
+  createdAt: string
+}
+
+export interface TramoAging {
+  tramo: string
+  label: string
+  montoCents: number
+  facturas: number
+}
+
+export interface Aging {
+  hoy: string
+  porCobrar: TramoAging[]
+  porPagar: TramoAging[]
+  porCobrarCents: number
+  porPagarCents: number
+  /** Las contrapartes con más saldo vencido, de mayor a menor. */
+  vencidoPorContraparte: { id: number; name: string; montoCents: number; direction: DireccionFactura }[]
+}
+
+export interface RenglonResultados {
+  categoryId: number | null
+  name: string
+  montoCents: number
+}
+
+export interface EstadoResultados {
+  desde: string
+  hasta: string
+  ingresosCents: number
+  costoVentaCents: number
+  margenBrutoCents: number
+  /** Margen bruto entre ingresos. `null` sin ingresos. */
+  margenBrutoPct: number | null
+  gastoFijoCents: number
+  gastoVariableCents: number
+  /** Gasto de categorías que nadie ha clasificado todavía. */
+  sinClasificarCents: number
+  utilidadCents: number
+  /** Impuesto que cobraste en tus ingresos y el que pagaste en tus gastos. */
+  impuestoTrasladadoCents: number
+  impuestoAcreditableCents: number
+  deducibleCents: number
+  detalle: { costoVenta: RenglonResultados[]; fijo: RenglonResultados[]; variable: RenglonResultados[]; sinClasificar: RenglonResultados[] }
+  porCentro: { id: number | null; name: string; ingresosCents: number; gastoCents: number }[]
+  /** Cuánto hay que vender para no perder ni ganar. `null` si no se puede decir. */
+  puntoEquilibrioCents: number | null
+  margenContribucion: number | null
+}
+
+export interface FlujoProyectado {
+  desde: string
+  hasta: string
+  /** Saldo líquido de hoy: efectivo, banco y ahorro. La tarjeta no es caja. */
+  saldoInicialCents: number
+  saldoFinalCents: number
+  entradasCents: number
+  salidasCents: number
+  /** El día en que el saldo proyectado se vuelve negativo, si ocurre. */
+  primerDiaEnRojo: string | null
+  puntos: { fecha: string; saldoCents: number; entradasCents: number; salidasCents: number }[]
+  eventos: EventoCalendario[]
 }

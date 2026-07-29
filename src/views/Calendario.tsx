@@ -12,6 +12,7 @@ const ETIQUETA: Record<TipoEvento, string> = {
   corte: 'Corte',
   deuda: 'Deuda',
   msi: 'A meses',
+  factura: 'Factura',
 }
 
 const VENTANAS = [

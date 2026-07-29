@@ -486,6 +486,112 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    id: 12,
+    name: 'perfil de negocio: contrapartes, facturas, dimensión libre e impuesto',
+    up: (db) => {
+      // Todo lo de esta migración es aditivo y opcional: un libro personal que
+      // nunca abra una factura queda exactamente igual que antes.
+      //
+      // Nada aquí es de un giro ni de un país (R15): la contraparte lleva un
+      // `tax_id` genérico —RFC, CUIT, VAT number o nada—, el impuesto se
+      // guarda en **monto** y no en tasa, y la dimensión libre la nombra el
+      // usuario ("Proyecto", "Sucursal", "Obra").
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS counterparties (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          role TEXT NOT NULL DEFAULT 'ambos' CHECK (role IN ('cliente', 'proveedor', 'ambos')),
+          tax_id TEXT NOT NULL DEFAULT '',
+          note TEXT NOT NULL DEFAULT '',
+          archived INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE (profile_id, name)
+        );
+
+        -- Una factura es el **documento y el compromiso**, no el asiento: el
+        -- libro sigue siendo de flujo de efectivo y el ingreso nace cuando se
+        -- cobra, con el movimiento ligado por \`invoice_id\`. Sin esa regla,
+        -- emitir y cobrar contarían dos veces el mismo peso.
+        CREATE TABLE IF NOT EXISTS invoices (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          counterparty_id INTEGER NOT NULL REFERENCES counterparties(id) ON DELETE CASCADE,
+          direction TEXT NOT NULL CHECK (direction IN ('emitida', 'recibida')),
+          folio TEXT NOT NULL DEFAULT '',
+          concept TEXT NOT NULL DEFAULT '',
+          issue_date TEXT NOT NULL,
+          due_date TEXT,
+          subtotal_cents INTEGER NOT NULL CHECK (subtotal_cents >= 0),
+          tax_cents INTEGER NOT NULL DEFAULT 0 CHECK (tax_cents >= 0),
+          status TEXT NOT NULL DEFAULT 'abierta' CHECK (status IN ('abierta', 'cancelada')),
+          cost_center_id INTEGER,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        -- La dimensión libre: exclusiva por movimiento, a diferencia de las
+        -- etiquetas, que son varias. Un gasto pertenece a un proyecto, no a
+        -- tres, y por eso el reporte por centro suma sin contar dos veces.
+        CREATE TABLE IF NOT EXISTS cost_centers (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          archived INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE (profile_id, name)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_invoices_perfil ON invoices(profile_id, direction, status);
+        CREATE INDEX IF NOT EXISTS idx_invoices_contraparte ON invoices(counterparty_id);
+      `)
+
+      // Las ligas en el movimiento. Todas nulas: un movimiento de siempre no
+      // cambia de significado.
+      if (!hasColumn(db, 'transactions', 'invoice_id')) {
+        db.exec(
+          `ALTER TABLE transactions ADD COLUMN invoice_id INTEGER
+           REFERENCES invoices(id) ON DELETE SET NULL`,
+        )
+      }
+      if (!hasColumn(db, 'transactions', 'counterparty_id')) {
+        db.exec(
+          `ALTER TABLE transactions ADD COLUMN counterparty_id INTEGER
+           REFERENCES counterparties(id) ON DELETE SET NULL`,
+        )
+      }
+      if (!hasColumn(db, 'transactions', 'cost_center_id')) {
+        db.exec(
+          `ALTER TABLE transactions ADD COLUMN cost_center_id INTEGER
+           REFERENCES cost_centers(id) ON DELETE SET NULL`,
+        )
+      }
+      // Impuesto **contenido** en el monto, no sumado a él: el movimiento
+      // sigue valiendo lo que salió de la cuenta. Y el deducible es una
+      // decisión del usuario sobre cada gasto, no algo que Finply adivine.
+      if (!hasColumn(db, 'transactions', 'tax_cents')) {
+        db.exec('ALTER TABLE transactions ADD COLUMN tax_cents INTEGER NOT NULL DEFAULT 0')
+      }
+      if (!hasColumn(db, 'transactions', 'deductible')) {
+        db.exec('ALTER TABLE transactions ADD COLUMN deductible INTEGER NOT NULL DEFAULT 0')
+      }
+      db.exec('CREATE INDEX IF NOT EXISTS idx_tx_factura ON transactions(invoice_id)')
+
+      // El papel de cada categoría en el estado de resultados. NULL significa
+      // "sin clasificar", que es como nacen todas las que ya existían: el
+      // estado de resultados las agrupa aparte en vez de suponerlas.
+      if (!hasColumn(db, 'categories', 'role')) {
+        db.exec(
+          `ALTER TABLE categories ADD COLUMN role TEXT
+           CHECK (role IS NULL OR role IN ('costo_venta', 'gasto_fijo', 'gasto_variable'))`,
+        )
+      }
+      // Cómo se llama la dimensión libre en este perfil.
+      if (!hasColumn(db, 'profiles', 'dimension_label')) {
+        db.exec("ALTER TABLE profiles ADD COLUMN dimension_label TEXT NOT NULL DEFAULT 'Proyecto'")
+      }
+    },
+  },
 ]
 
 /** Versión de esquema que espera este código. */

@@ -387,6 +387,42 @@ describe('migraciones', () => {
     db.close()
   })
 
+  test('un libro en la versión 11 estrena el perfil de negocio sin estrenarlo', () => {
+    const db = baseEnVersion(11)
+    db.exec(`
+      INSERT INTO categories (id, profile_id, name, kind) VALUES (99, 1, 'Insumos', 'gasto');
+      INSERT INTO transactions (id, profile_id, account_id, type, amount_cents, date, category_id, note)
+        VALUES (2, 1, 1, 'gasto', 850000, '2026-07-01', 99, 'Renta');
+    `)
+
+    migrate(db)
+
+    assert.equal((db.prepare('PRAGMA user_version').get() as any).user_version, SCHEMA_VERSION)
+
+    // Las tablas nuevas existen y están vacías: nadie hereda contrapartes.
+    for (const tabla of ['counterparties', 'invoices', 'cost_centers']) {
+      const fila = db.prepare(`SELECT COUNT(*) AS n FROM ${tabla}`).get() as any
+      assert.equal(fila.n, 0, `${tabla} nace vacía`)
+    }
+
+    // Y el movimiento que ya existía no cambia de significado: sin contraparte,
+    // sin centro, sin impuesto y no deducible.
+    const mov = db.prepare('SELECT * FROM transactions WHERE id = 2').get() as any
+    assert.equal(mov.amount_cents, 850000)
+    assert.equal(mov.counterparty_id, null)
+    assert.equal(mov.cost_center_id, null)
+    assert.equal(mov.invoice_id, null)
+    assert.equal(mov.tax_cents, 0, 'sin impuesto declarado, cero')
+    assert.equal(mov.deductible, 0)
+
+    const cat = db.prepare('SELECT * FROM categories WHERE id = 99').get() as any
+    assert.equal(cat.role, null, 'sin clasificar, que no es lo mismo que fijo')
+    const perfil = db.prepare('SELECT * FROM profiles WHERE id = 1').get() as any
+    assert.equal(perfil.dimension_label, 'Proyecto')
+    assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0)
+    db.close()
+  })
+
   test('los CHECK de crédito rechazan datos imposibles', () => {
     const db = baseEnVersion(5)
     migrate(db)

@@ -30,6 +30,9 @@ export type View =
   | 'deudas'
   | 'inversiones'
   | 'simulador'
+  | 'contrapartes'
+  | 'facturas'
+  | 'negocio'
   | 'presupuestos'
   | 'metas'
   | 'notas'
@@ -40,6 +43,19 @@ export type View =
   | 'ajustes'
 
 export type ThemePref = 'claro' | 'oscuro' | 'auto'
+
+/**
+ * El grupo de negocio solo existe en perfiles de negocio: un libro personal no
+ * tiene por qué llenarse de facturas y contrapartes que nunca va a usar.
+ */
+const NAV_NEGOCIO: { label: string; items: { id: View; label: string }[] } = {
+  label: 'Negocio',
+  items: [
+    { id: 'contrapartes', label: 'Contrapartes' },
+    { id: 'facturas', label: 'Facturas' },
+    { id: 'negocio', label: 'Resultados' },
+  ],
+}
 
 const NAV_GROUPS: { label: string | null; items: { id: View; label: string }[] }[] = [
   { label: null, items: [{ id: 'resumen', label: 'Resumen' }] },
@@ -194,7 +210,7 @@ export function Sidebar({
       </div>
 
       <nav className="nav" aria-label="Secciones">
-        {NAV_GROUPS.map((group, gi) => (
+        {[...NAV_GROUPS, ...(profile.kind === 'negocio' ? [NAV_NEGOCIO] : [])].map((group, gi) => (
           <div className="nav-grupo" key={group.label ?? gi}>
             {group.label && <span className="nav-grupo-label">{group.label}</span>}
             {group.items.map((item) => (

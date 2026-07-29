@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { Account, Category, Tag, Tx, TxType } from '../../shared/types.ts'
+import type {
+  Account, CentroCosto, Category, Contraparte, Tag, Tx, TxType,
+} from '../../shared/types.ts'
 import { api } from '../api.ts'
 import { parseAmount, todayISO } from '../format.ts'
 import { useApp } from '../context.ts'
@@ -33,6 +35,15 @@ export function TxModal({
   const [newCategory, setNewCategory] = useState<string | null>(null)
   const [tags, setTags] = useState<Tag[]>([])
   const [tagIds, setTagIds] = useState<number[]>(tx?.tags.map((t) => t.id) ?? [])
+  // Campos del perfil de negocio. Solo se piden en un libro de negocio: en uno
+  // personal serían cuatro casillas que nadie va a llenar nunca.
+  const [contrapartes, setContrapartes] = useState<Contraparte[]>([])
+  const [centros, setCentros] = useState<CentroCosto[]>([])
+  const [counterpartyId, setCounterpartyId] = useState<number>(tx?.counterpartyId ?? 0)
+  const [costCenterId, setCostCenterId] = useState<number>(tx?.costCenterId ?? 0)
+  const [tax, setTax] = useState(tx?.taxCents ? (tx.taxCents / 100).toFixed(2) : '')
+  const [deductible, setDeductible] = useState(tx?.deductible ?? false)
+  const esNegocio = profile.kind === 'negocio'
   const [newTag, setNewTag] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -53,6 +64,21 @@ export function TxModal({
       (err: Error) => setError(err.message),
     )
   }, [profile.id, tx])
+
+  // Contrapartes y centros solo se piden en un libro de negocio: en uno
+  // personal serían dos llamadas por cada movimiento que nadie usa.
+  useEffect(() => {
+    if (profile.kind !== 'negocio') return
+    Promise.all([api.contrapartes.list(profile.id), api.centros.list(profile.id)]).then(
+      ([cps, ccs]) => {
+        setContrapartes(cps.filter((c) => !c.archived))
+        setCentros(ccs.filter((c) => !c.archived))
+      },
+      () => {
+        // Que falten no impide registrar el movimiento: son campos opcionales.
+      },
+    )
+  }, [profile.id, profile.kind])
 
   const toggleTag = (id: number) =>
     setTagIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
@@ -126,6 +152,10 @@ export function TxModal({
         note,
         transferAccountId: type === 'transferencia' ? transferAccountId || null : null,
         tagIds,
+        counterpartyId: esNegocio ? counterpartyId || null : null,
+        costCenterId: esNegocio ? costCenterId || null : null,
+        taxCents: esNegocio ? (parseAmount(tax) ?? 0) : 0,
+        deductible: esNegocio ? deductible : false,
       }
       if (tx) await api.tx.update(tx.id, draft)
       else await api.tx.create(draft)
@@ -275,6 +305,64 @@ export function TxModal({
             />
           </label>
         </div>
+
+        {esNegocio && type !== 'transferencia' && (
+          <>
+            <div className="campos-2">
+              <label className="campo">
+                <span className="campo-label">Contraparte</span>
+                <select
+                  className="campo-input"
+                  value={counterpartyId}
+                  onChange={(e) => setCounterpartyId(Number(e.target.value))}
+                >
+                  <option value={0}>Sin contraparte</option>
+                  {contrapartes.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="campo">
+                <span className="campo-label">{profile.dimensionLabel}</span>
+                <select
+                  className="campo-input"
+                  value={costCenterId}
+                  onChange={(e) => setCostCenterId(Number(e.target.value))}
+                >
+                  <option value={0}>Sin asignar</option>
+                  {centros.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="campos-2">
+              <label className="campo">
+                <span className="campo-label">Impuesto incluido</span>
+                <div className="monto-wrap">
+                  <span className="monto-signo" aria-hidden="true">$</span>
+                  <input
+                    className="campo-input"
+                    inputMode="decimal"
+                    placeholder="0.00"
+                    value={tax}
+                    onChange={(e) => setTax(e.target.value)}
+                  />
+                </div>
+              </label>
+              {type === 'gasto' && (
+                <label className="campo campo-casilla">
+                  <input
+                    type="checkbox"
+                    checked={deductible}
+                    onChange={(e) => setDeductible(e.target.checked)}
+                  />
+                  <span>Deducible</span>
+                </label>
+              )}
+            </div>
+          </>
+        )}
 
         <fieldset className="campo campo-fieldset">
           <legend className="campo-label">Etiquetas</legend>

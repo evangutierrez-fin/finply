@@ -83,6 +83,16 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   CSV de precios y valuar varias de un jalón: ves fila por fila lo que
   pasaría antes de asentar nada. **Sin cotizaciones en línea**, nunca —
   pedirlas le contaría a otro servidor qué tienes.
+- **Perfil de negocio** — clientes y proveedores reutilizables, facturas
+  emitidas y recibidas con su vencimiento, y antigüedad de saldos para ver no
+  solo cuánto te deben sino desde hace cuánto. Registrar una factura **no mueve
+  tu libro**: es el compromiso. El ingreso entra cuando la cobras, con su parte
+  del impuesto. De ahí salen el estado de resultados —ingresos, costo de
+  ventas, margen bruto, gastos fijos y variables, utilidad—, el punto de
+  equilibrio y el flujo de caja proyectado a 30, 60 o 90 días. Nada es de un
+  giro ni de un país: el identificador fiscal es libre, el impuesto se escribe
+  en monto y la dimensión libre —proyecto, obra, sucursal— la nombras tú.
+  Solo aparece en los perfiles de negocio.
 - **Simulador de patrimonio** — qué pasa si apartas X al mes durante N años, y
   si conviene más invertirlo o pagar primero la deuda cara. Sale de tus cifras
   de hoy, la tasa la pones tú y los cinco supuestos van escritos junto al
@@ -197,9 +207,12 @@ server/          Express + node:sqlite
   analisis.ts    colchón, origen del gasto y concentración (solo lectura)
   precios.ts     import CSV de precios: analiza, y solo asienta lo marcado
   simulacion.ts  punto de partida del simulador (solo lectura)
+  facturas.ts    facturas con saldo derivado y antigüedad de saldos
+  negocio.ts     estado de resultados, equilibrio y flujo proyectado
   routes/        profiles · accounts · categories · tags · transactions · debts
                  · tarjetas · investments · budgets · goals · notes · summary
                  · reportes · alertas · analisis · precios · simulador
+                 · contrapartes · centros · facturas · negocio
                  · recurrencias · calendario · backup · importaciones
   seed.ts        datos demo deterministas
 shared/
@@ -211,11 +224,12 @@ shared/
   inversiones.ts recorrido del historial y unidades en enteros ×10⁸ (puro)
   rendimiento.ts XIRR por bisección, con null donde no se puede afirmar (puro)
   simulador.ts   proyección de patrimonio mes a mes (puro)
+  negocio.ts     tramos de antigüedad y punto de equilibrio (puro)
 src/
   views/         Resumen · Movimientos · Cuentas · Categorías · Reportes
                  · Análisis · Tarjetas · Deudas · Inversiones · Simulador
-                 · Recurrencias · Calendario · Presupuestos · Metas · Notas
-                 · Ajustes
+                 · Contrapartes · Facturas · Negocio · Recurrencias
+                 · Calendario · Presupuestos · Metas · Notas · Ajustes
   components/    formularios, gráficas, sello, barra lateral
   styles/        tokens.css (temas claro/oscuro) + app.css
 test/            pruebas de integridad contra una base temporal
@@ -270,6 +284,13 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 | `GET /api/alertas?profileId` | Lo vencido y lo que está por vencer. **Derivadas**: no se guardan ni se descartan |
 | `GET /api/analisis?profileId&meses` | Meses de colchón, tasa de ahorro, gasto recurrente contra discrecional y concentración |
 | `GET /api/simulador?profileId&meses&ahorroMensualCents&rendimientoAnualBp` | Las dos rutas —invertir o pagar la deuda— proyectadas sobre las mismas cifras |
+| `GET/POST /api/contrapartes` · `PATCH/DELETE /:id` | Clientes y proveedores, con lo que te deben y lo que les debes |
+| `GET/POST /api/centros` · `PATCH/DELETE /:id` | La dimensión libre del perfil (proyecto, obra, sucursal) |
+| `GET/POST /api/facturas` · `PATCH/DELETE /:id` | Facturas emitidas y recibidas. Registrarlas **no mueve el libro** |
+| `POST /api/facturas/:id/cobros` | El cobro (o el pago): aquí nace el asiento, con su parte del impuesto |
+| `GET /api/facturas/aging?profileId` | Antigüedad de saldos: corriente, 1-30, 31-60, 61-90 y más de 90 |
+| `GET /api/negocio/resultados?profileId&desde&hasta` | Estado de resultados, impuestos del periodo y punto de equilibrio |
+| `GET /api/negocio/flujo?profileId&dias` | Flujo de caja proyectado sobre lo que ya vence |
 | `GET /api/respaldo` · `GET /info` · `POST /restaurar` | Respaldo completo en JSON |
 
 Reglas de integridad que cuida el backend, todas cubiertas por `npm test`:

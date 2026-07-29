@@ -22,7 +22,7 @@ const BACKUP_FORMAT = 1
 // ⚠ Al agregar una tabla al esquema hay que agregarla AQUÍ también, o el
 // respaldo la pierde en silencio. Las tablas puente van después de sus dos
 // extremos.
-const TABLES = [
+export const TABLES = [
   'profiles',
   'accounts',
   'categories',
@@ -42,6 +42,12 @@ const TABLES = [
   // las referencia.
   'msi_purchases',
   'msi_installments',
+  // Contrapartes, centros y facturas van antes que los movimientos, porque el
+  // cobro apunta a su factura. Y las tres tienen que estar aquí: una tabla que
+  // se olvide en esta lista se pierde en cada respaldo sin avisar.
+  'counterparties',
+  'cost_centers',
+  'invoices',
   'transactions',
   'transaction_tags',
   // Los periodos resueltos van hasta el final: apuntan al movimiento asentado.

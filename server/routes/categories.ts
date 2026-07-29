@@ -10,6 +10,7 @@ function mapCategory(row: any) {
     profileId: row.profile_id,
     name: row.name,
     kind: row.kind,
+    role: row.role ?? null,
     txCount: row.tx_count ?? 0,
   }
 }
@@ -56,7 +57,13 @@ router.patch('/:id', (req, res) => {
     return res.status(409).json({ error: `Ya existe una categoría de ${existing.kind} con ese nombre` })
   }
 
-  db.prepare('UPDATE categories SET name = ? WHERE id = ?').run(input.name, id)
+  // `role` ausente deja el papel como estaba; `null` explícito lo quita. Es la
+  // misma distinción que ya usan la tinta del perfil y el plazo de una deuda.
+  db.prepare('UPDATE categories SET name = ?, role = ? WHERE id = ?').run(
+    input.name,
+    input.role === undefined ? existing.role : input.role,
+    id,
+  )
   const row = db.prepare(`${CATEGORY_SELECT} WHERE c.id = ?`).get(id)
   res.json(mapCategory(row))
 })

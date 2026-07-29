@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import {
-  attachTags, db, ensureAccount, ensureCategory, ensureTags, getTx, inTransaction, mapTx,
-  refreshDebtStatus, setTxTags, TX_SELECT,
+  attachTags, db, ensureAccount, ensureCategory, ensureTags, getTx, httpError, inTransaction,
+  mapTx, refreshDebtStatus, setTxTags, TX_SELECT,
 } from '../db.ts'
 import { armarCsv, celdaTexto, montoCsv } from '../csv.ts'
 import { sincronizarCompraMSI } from '../tarjetas.ts'
@@ -17,6 +17,9 @@ function ensureReferences(input: {
   categoryId?: number | null
   transferAccountId?: number | null
   tagIds?: number[]
+  counterpartyId?: number | null
+  costCenterId?: number | null
+  invoiceId?: number | null
 }): void {
   ensureAccount(input.profileId, input.accountId)
   if (input.type === 'transferencia') {
@@ -25,6 +28,31 @@ function ensureReferences(input: {
     ensureCategory(input.profileId, input.categoryId, input.type)
   }
   if (input.tagIds) ensureTags(input.profileId, input.tagIds)
+  // Las referencias del perfil de negocio, con la misma regla que las demás:
+  // tienen que ser del mismo libro. Sin esto, un movimiento puede acabar
+  // ligado a la factura de otro perfil.
+  ensurePropio(input.profileId, 'counterparties', input.counterpartyId, 'La contraparte')
+  ensurePropio(input.profileId, 'cost_centers', input.costCenterId, 'Ese centro')
+  ensurePropio(input.profileId, 'invoices', input.invoiceId, 'La factura')
+}
+
+const TABLAS_PROPIAS = {
+  counterparties: 'counterparties',
+  cost_centers: 'cost_centers',
+  invoices: 'invoices',
+} as const
+
+function ensurePropio(
+  profileId: number,
+  tabla: keyof typeof TABLAS_PROPIAS,
+  id: number | null | undefined,
+  etiqueta: string,
+): void {
+  if (!id) return
+  const row = db
+    .prepare(`SELECT id FROM ${TABLAS_PROPIAS[tabla]} WHERE id = ? AND profile_id = ?`)
+    .get(id, profileId)
+  if (!row) throw httpError(400, `${etiqueta} no pertenece a este perfil`)
 }
 
 type Query = ReturnType<typeof txQuery.parse>
@@ -160,8 +188,9 @@ router.post('/', (req, res) => {
     const result = db
       .prepare(
         `INSERT INTO transactions
-          (profile_id, account_id, type, amount_cents, date, category_id, note, transfer_account_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          (profile_id, account_id, type, amount_cents, date, category_id, note, transfer_account_id,
+           counterparty_id, cost_center_id, invoice_id, tax_cents, deductible)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.profileId,
@@ -172,6 +201,11 @@ router.post('/', (req, res) => {
         input.type === 'transferencia' ? null : (input.categoryId ?? null),
         input.note,
         input.type === 'transferencia' ? (input.transferAccountId ?? null) : null,
+        input.counterpartyId ?? null,
+        input.costCenterId ?? null,
+        input.invoiceId ?? null,
+        input.taxCents,
+        input.deductible ? 1 : 0,
       )
     const nuevo = Number(result.lastInsertRowid)
     if (input.tagIds) setTxTags(nuevo, input.tagIds)
@@ -209,7 +243,9 @@ router.patch('/:id', (req, res) => {
   inTransaction(() => {
     db.prepare(
       `UPDATE transactions SET account_id = ?, type = ?, amount_cents = ?, date = ?,
-        category_id = ?, note = ?, transfer_account_id = ? WHERE id = ?`,
+        category_id = ?, note = ?, transfer_account_id = ?,
+        counterparty_id = ?, cost_center_id = ?, tax_cents = ?, deductible = ?
+       WHERE id = ?`,
     ).run(
       input.accountId,
       input.type,
@@ -218,6 +254,10 @@ router.patch('/:id', (req, res) => {
       input.type === 'transferencia' ? null : (input.categoryId ?? null),
       input.note,
       input.type === 'transferencia' ? (input.transferAccountId ?? null) : null,
+      input.counterpartyId ?? null,
+      input.costCenterId ?? null,
+      input.taxCents,
+      input.deductible ? 1 : 0,
       id,
     )
     // `tagIds` ausente deja las etiquetas como estaban; un arreglo vacío las quita.
