@@ -304,3 +304,166 @@ export function CategoryBars({ byCategory }: { byCategory: Summary['byCategory']
     </ul>
   )
 }
+
+/**
+ * El valor de una inversión a lo largo de su historial. Los puntos van
+ * igualmente espaciados aunque las fechas no lo estén: son registros, no una
+ * serie de tiempo continua, y estirar el eje por una valuación de hace tres
+ * años dejaría el resto amontonado contra el borde. La fecha va en el pie.
+ */
+export function HistorialValor({
+  puntos,
+}: {
+  puntos: { date: string; valueCents: number }[]
+}) {
+  const [hover, setHover] = useState<number | null>(null)
+  if (puntos.length < 2) return null
+
+  const valores = puntos.map((p) => p.valueCents)
+  const max = Math.max(...valores)
+  const min = Math.min(...valores, 0)
+  const rango = max - min || 1
+
+  const chartH = 110
+  const width = 640
+  const margen = 14
+  const paso = (width - margen * 2) / (puntos.length - 1)
+  const y = (cents: number) => chartH - ((cents - min) / rango) * chartH * 0.88 - chartH * 0.06
+  const coords = puntos.map((p, i) => ({ x: margen + i * paso, y: y(p.valueCents), p }))
+  const linea = coords.map((q) => `${q.x.toFixed(1)},${q.y.toFixed(1)}`).join(' ')
+  const base = y(min < 0 ? 0 : min)
+  const area = `${coords[0]!.x},${base} ${linea} ${coords.at(-1)!.x},${base}`
+  const hovered = hover === null ? null : puntos[hover]
+
+  return (
+    <div className="grafica">
+      <svg
+        viewBox={`0 0 ${width} ${chartH}`}
+        className="grafica-svg"
+        role="img"
+        aria-label="Valor de la inversión después de cada registro"
+        onMouseLeave={() => setHover(null)}
+        preserveAspectRatio="none"
+      >
+        <polygon points={area} className="serie-area" />
+        <polyline points={linea} className="serie-linea" />
+        {coords.map((q, i) => (
+          <g key={`${q.p.date}-${i}`} onMouseEnter={() => setHover(i)}>
+            <rect x={q.x - paso / 2} y="0" width={paso} height={chartH} fill="transparent" />
+            <circle cx={q.x} cy={q.y} r={hover === i ? 4 : 2.5} className="serie-punto" />
+          </g>
+        ))}
+      </svg>
+      <div className="grafica-pie">
+        {hovered ? (
+          <span className="grafica-dato">
+            <strong>{fmtDate(hovered.date)}</strong>
+            {' · '}
+            <span className="cifra-chica">{fmtMoney(hovered.valueCents)}</span>
+          </span>
+        ) : (
+          <span className="grafica-leyenda">
+            {fmtDate(puntos[0]!.date)} — {fmtDate(puntos.at(-1)!.date)} · {puntos.length} registros
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Dos proyecciones sobre el mismo eje. Se distinguen por **forma** además de
+ * por color —una continua, la otra punteada— porque el color solo no es una
+ * codificación accesible (R10), y la leyenda dice cuál es cuál con palabras.
+ */
+export function ProyeccionLineas({
+  series,
+}: {
+  series: { nombre: string; puntos: { mes: number; patrimonioCents: number }[]; punteada?: boolean }[]
+}) {
+  const [hover, setHover] = useState<number | null>(null)
+  const todos = series.flatMap((s) => s.puntos.map((p) => p.patrimonioCents))
+  if (todos.length === 0) return null
+  const max = Math.max(...todos)
+  const min = Math.min(...todos, 0)
+  const rango = max - min || 1
+  const meses = Math.max(...series.map((s) => s.puntos.length)) - 1
+
+  const chartH = 150
+  const width = 640
+  const margen = 14
+  const paso = (width - margen * 2) / (meses || 1)
+  const y = (cents: number) => chartH - ((cents - min) / rango) * chartH * 0.88 - chartH * 0.06
+  const base = y(0)
+
+  return (
+    <div className="grafica">
+      <svg
+        viewBox={`0 0 ${width} ${chartH}`}
+        className="grafica-svg"
+        role="img"
+        aria-label="Patrimonio proyectado con cada estrategia"
+        onMouseLeave={() => setHover(null)}
+        preserveAspectRatio="none"
+      >
+        {min < 0 && <line x1="0" y1={base} x2={width} y2={base} className="grafica-base" />}
+        {series.map((s) => (
+          <polyline
+            key={s.nombre}
+            points={s.puntos
+              .map((p) => `${(margen + p.mes * paso).toFixed(1)},${y(p.patrimonioCents).toFixed(1)}`)
+              .join(' ')}
+            className={`serie-linea ${s.punteada ? 'serie-punteada' : ''}`}
+          />
+        ))}
+        {Array.from({ length: meses + 1 }, (_, i) => (
+          <rect
+            key={i}
+            x={margen + i * paso - paso / 2}
+            y="0"
+            width={paso}
+            height={chartH}
+            fill="transparent"
+            onMouseEnter={() => setHover(i)}
+          />
+        ))}
+        {hover !== null &&
+          series.map((s) => {
+            const p = s.puntos[hover]
+            return p ? (
+              <circle
+                key={s.nombre}
+                cx={margen + p.mes * paso}
+                cy={y(p.patrimonioCents)}
+                r="4"
+                className="serie-punto"
+              />
+            ) : null
+          })}
+      </svg>
+      <div className="grafica-pie">
+        {hover !== null ? (
+          <span className="grafica-dato">
+            <strong>Mes {hover}</strong>
+            {series.map((s) => (
+              <span key={s.nombre}>
+                {' · '}
+                {s.nombre}: <span className="cifra-chica">{fmtMoney(s.puntos[hover]?.patrimonioCents ?? 0)}</span>
+              </span>
+            ))}
+          </span>
+        ) : (
+          <span className="grafica-leyenda">
+            {series.map((s, i) => (
+              <span key={s.nombre}>
+                {i > 0 && ' · '}
+                <span className={`muestra-linea ${s.punteada ? 'muestra-punteada' : ''}`} aria-hidden="true" />
+                {s.nombre}
+              </span>
+            ))}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}

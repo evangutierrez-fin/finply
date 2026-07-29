@@ -61,8 +61,18 @@ router.post('/:id/entries', (req, res) => {
   const investment: any = db.prepare('SELECT * FROM investments WHERE id = ?').get(id)
   if (!investment) return res.status(404).json({ error: 'Inversión no encontrada' })
   const input = investmentEntryInput.parse(req.body)
+  const porPrecio = input.type === 'valuacion' && input.unitPriceCents != null
   if (input.type !== 'valuacion' && input.amountCents === 0) {
     return res.status(400).json({ error: 'El monto debe ser mayor a cero' })
+  }
+  // Valuar por precio sin unidades registradas dejaría el valor en cero: el
+  // precio de nada es nada. Se dice en vez de borrarle la cifra al usuario.
+  if (porPrecio && (one(investment.profile_id, id)?.unitsE8 ?? 0) <= 0) {
+    return res.status(400).json({
+      error:
+        'Esta inversión no tiene unidades registradas todavía. Valúa por monto, ' +
+        'o apunta las unidades al aportar para poder valuarla por precio.',
+    })
   }
   if (input.accountId && input.type !== 'valuacion') {
     const account = db
@@ -71,11 +81,25 @@ router.post('/:id/entries', (req, res) => {
     if (!account) return res.status(400).json({ error: 'La cuenta no pertenece a este perfil' })
   }
   inTransaction(() => {
+    // Una valuación por precio guarda monto cero a propósito: el valor es
+    // consecuencia del precio y de las unidades que haya en esa fecha, y se
+    // recalcula al leer. Guardar además el resultado sería una segunda verdad
+    // que envejece en cuanto aparezca un aporte con fecha anterior.
     const entry = db
       .prepare(
-        'INSERT INTO investment_entries (investment_id, type, amount_cents, date, note) VALUES (?, ?, ?, ?, ?)',
+        `INSERT INTO investment_entries
+           (investment_id, type, amount_cents, date, note, units_e8, unit_price_cents)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(id, input.type, input.amountCents, input.date, input.note)
+      .run(
+        id,
+        input.type,
+        porPrecio ? 0 : input.amountCents,
+        input.date,
+        input.note,
+        input.unitsE8 ?? null,
+        input.unitPriceCents ?? null,
+      )
     if (input.accountId && input.type !== 'valuacion') {
       const txType = input.type === 'aporte' ? 'gasto' : 'ingreso'
       db.prepare('INSERT OR IGNORE INTO categories (profile_id, name, kind) VALUES (?, ?, ?)').run(

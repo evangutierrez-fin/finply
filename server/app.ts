@@ -12,6 +12,8 @@ import transactions from './routes/transactions.ts'
 import debts from './routes/debts.ts'
 import tarjetas from './routes/tarjetas.ts'
 import investments from './routes/investments.ts'
+import precios from './routes/precios.ts'
+import simulador from './routes/simulador.ts'
 import budgets from './routes/budgets.ts'
 import goals from './routes/goals.ts'
 import notes from './routes/notes.ts'
@@ -43,6 +45,8 @@ export function createApp(): express.Express {
   app.use('/api/debts', debts)
   app.use('/api/tarjetas', tarjetas)
   app.use('/api/investments', investments)
+  app.use('/api/precios', precios)
+  app.use('/api/simulador', simulador)
   app.use('/api/budgets', budgets)
   app.use('/api/goals', goals)
   app.use('/api/notes', notes)

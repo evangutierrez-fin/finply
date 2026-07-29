@@ -462,6 +462,30 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    id: 11,
+    name: 'unidades y precio por unidad en las inversiones',
+    up: (db) => {
+      // Aditiva y nula, como la 10: una inversión que solo llevaba montos
+      // sigue funcionando exactamente igual, porque NULL significa "esta
+      // inversión no se lleva por unidades".
+      //
+      // Las unidades van en **entero escalado por 10⁸**, no en REAL: un
+      // satoshi (0.00000001) es exacto y en la base no entra un flotante, por
+      // la misma razón por la que el dinero va en centavos. La escala vive en
+      // `shared/inversiones.ts` (UNIDAD).
+      if (!hasColumn(db, 'investment_entries', 'units_e8')) {
+        db.exec('ALTER TABLE investment_entries ADD COLUMN units_e8 INTEGER')
+      }
+      // Precio por unidad en centavos. En una valuación **manda sobre el
+      // monto**: el valor se recalcula contra las unidades que hubiera en esa
+      // fecha, así que un aporte con fecha vieja registrado después no deja la
+      // valuación con el número de ayer.
+      if (!hasColumn(db, 'investment_entries', 'unit_price_cents')) {
+        db.exec('ALTER TABLE investment_entries ADD COLUMN unit_price_cents INTEGER')
+      }
+    },
+  },
 ]
 
 /** Versión de esquema que espera este código. */

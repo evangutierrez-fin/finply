@@ -1,8 +1,8 @@
 import type {
   Account, Alerta, Amortizacion, Analisis, Bandeja, Budget, Calendario, Category, Comparativa,
-  CompraMSI, Debt, DebtPayment, EstadoTarjeta, Frecuencia, Goal, InformeImport, Investment,
-  InvestmentEntryType, LoteImport, MapeoImport, Note, Profile, Recurrencia, ReporteAnual,
-  ResultadoImport, Summary, Tag, Tx, TxType,
+  CompraMSI, Debt, DebtPayment, EstadoTarjeta, Frecuencia, Goal, InformeImport, InformePrecios,
+  Investment, InvestmentEntryType, LoteImport, MapeoImport, Note, Profile, Recurrencia,
+  ReporteAnual, ResultadoImport, Simulacion, Summary, Tag, Tx, TxType,
 } from '../shared/types.ts'
 
 /** Error de la API que conserva el código y el cuerpo, para poder reaccionar. */
@@ -315,11 +315,31 @@ export const api = {
         date: string
         note?: string
         accountId?: number | null
+        unitsE8?: number | null
+        unitPriceCents?: number | null
       },
     ) => req<Investment>(`/api/investments/${id}/entries`, { method: 'POST', body: JSON.stringify(data) }),
     removeEntry: (entryId: number) =>
       req<Investment>(`/api/investments/entries/${entryId}`, { method: 'DELETE' }),
   },
+  precios: {
+    analizar: (data: { profileId: number; texto: string; fecha?: string | null }) =>
+      req<InformePrecios>('/api/precios/analizar', { method: 'POST', body: JSON.stringify(data) }),
+    aplicar: (data: { profileId: number; texto: string; fecha?: string | null; filas: number[] }) =>
+      req<{ creadas: number; omitidas: number }>('/api/precios/aplicar', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+  },
+  simulador: (
+    profileId: number,
+    opciones: { meses: number; ahorroMensualCents: number; rendimientoAnualBp: number },
+  ) =>
+    req<Simulacion>(
+      `/api/simulador?profileId=${profileId}&meses=${opciones.meses}` +
+        `&ahorroMensualCents=${opciones.ahorroMensualCents}` +
+        `&rendimientoAnualBp=${opciones.rendimientoAnualBp}`,
+    ),
   budgets: {
     list: (profileId: number, month: string) =>
       req<Budget[]>(`/api/budgets?profileId=${profileId}&month=${month}`),

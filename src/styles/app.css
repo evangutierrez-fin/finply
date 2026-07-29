@@ -1988,3 +1988,59 @@ select.campo-input { cursor: pointer; }
     opacity: 1;
   }
 }
+
+/* ── inversiones: precios, unidades y simulador ──────────────────────── */
+.vista-head-acciones { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.monto-signo-fin { margin-left: 2px; }
+.campo-area { resize: vertical; font-family: var(--f-mono); font-size: 13px; line-height: 1.5; }
+
+.precios-lista {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--regla);
+  border-radius: var(--radio);
+  padding: 6px;
+}
+.precio-fila {
+  display: grid;
+  grid-template-columns: auto 1fr auto minmax(140px, auto);
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.precio-fila:hover { background: var(--papel); }
+.precio-nombre { font-weight: 500; }
+.precio-valor { text-align: right; color: var(--tinta-2); font-size: 12.5px; }
+.precio-motivo { color: var(--tinta-3); font-style: italic; }
+/* Una fila que no se puede usar se apaga, pero se sigue leyendo: el usuario
+   necesita ver por qué quedó fuera, no que desaparezca. */
+.precio-descartada .precio-fila { cursor: default; opacity: 0.7; }
+.precio-descartada .precio-fila:hover { background: none; }
+
+/* La segunda serie se distingue por trazo además de por color (R10): una
+   línea continua y otra punteada se separan también en escala de grises. */
+.serie-punteada {
+  stroke: var(--tinta-3);
+  stroke-dasharray: 6 4;
+}
+.muestra-linea {
+  display: inline-block;
+  width: 18px;
+  height: 0;
+  margin-right: 6px;
+  vertical-align: middle;
+  border-top: 2px solid var(--acento);
+}
+.muestra-punteada { border-top-style: dashed; border-top-color: var(--tinta-3); }
+
+.ruta { display: flex; flex-direction: column; gap: 14px; }
+.ruta-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.ruta-mejor { border-color: var(--acento); }
+.ruta-cifra { display: flex; flex-direction: column; gap: 2px; }
+.chip-acento { color: var(--acento); border-color: var(--acento); }

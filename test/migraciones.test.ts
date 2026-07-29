@@ -359,6 +359,34 @@ describe('migraciones', () => {
     db.close()
   })
 
+  test('un libro en la versión 10 estrena unidades sin tocar sus inversiones', () => {
+    const db = baseEnVersion(10)
+    db.exec(`
+      INSERT INTO investments (id, profile_id, name, kind) VALUES (1, 1, 'CETES', 'cetes');
+      INSERT INTO investment_entries (id, investment_id, type, amount_cents, date)
+        VALUES (1, 1, 'aporte', 500000, '2026-01-10');
+      INSERT INTO investment_entries (id, investment_id, type, amount_cents, date)
+        VALUES (2, 1, 'valuacion', 512500, '2026-06-01');
+    `)
+
+    migrate(db)
+
+    assert.equal((db.prepare('PRAGMA user_version').get() as any).user_version, SCHEMA_VERSION)
+
+    // Las dos columnas nuevas nacen nulas: una inversión que solo llevaba
+    // montos vale exactamente lo mismo después de migrar que antes.
+    const entradas = db.prepare('SELECT * FROM investment_entries ORDER BY id').all() as any[]
+    assert.equal(entradas.length, 2)
+    for (const e of entradas) {
+      assert.equal(e.units_e8, null, 'las unidades nacen vacías')
+      assert.equal(e.unit_price_cents, null)
+    }
+    assert.equal(entradas[0].amount_cents, 500000)
+    assert.equal(entradas[1].amount_cents, 512500, 'la valuación sigue siendo su monto')
+    assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0)
+    db.close()
+  })
+
   test('los CHECK de crédito rechazan datos imposibles', () => {
     const db = baseEnVersion(5)
     migrate(db)

@@ -4,6 +4,9 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { ProfileKind } from '../shared/types.ts'
 import { migrate } from './migrations.ts'
+import { recorrer, type EntradaInversion } from '../shared/inversiones.ts'
+import { xirr, type Flujo } from '../shared/rendimiento.ts'
+import { hoyISO } from '../shared/fechas.ts'
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 
@@ -347,13 +350,38 @@ export function mapInvestmentEntry(row: any) {
     amountCents: row.amount_cents,
     date: row.date,
     note: row.note,
+    unitsE8: row.units_e8 ?? null,
+    unitPriceCents: row.unit_price_cents ?? null,
   }
 }
 
 /**
- * Inversiones de un perfil con aportado y valor actual calculados.
- * El valor recorre las entradas en orden: una valuación fija el valor,
- * los aportes/retiros posteriores lo ajustan.
+ * Rendimiento anualizado de una inversión: los aportes salen (negativos), los
+ * retiros entran, y el valor de hoy entra como si se liquidara todo. Es el
+ * único uso: la tasa que hace que esa serie sume cero (`shared/rendimiento.ts`).
+ */
+function rendimientoDe(entries: EntradaInversion[], valueCents: number, hoy = hoyISO()) {
+  const flujos: Flujo[] = entries
+    .filter((e) => e.type !== 'valuacion')
+    .map((e) => ({
+      date: e.date,
+      amountCents: e.type === 'aporte' ? -e.amountCents : e.amountCents,
+    }))
+  if (flujos.length === 0) return null
+  // El valor de hoy cierra la serie. Si la última fecha ya es futura —una
+  // aportación con fecha adelantada— se respeta, para no meter un flujo
+  // anterior al último y volver negativo el plazo.
+  const ultima = flujos.reduce((m, f) => (f.date > m ? f.date : m), flujos[0]!.date)
+  flujos.push({ date: hoy > ultima ? hoy : ultima, amountCents: valueCents })
+  return xirr(flujos)
+}
+
+/**
+ * Inversiones de un perfil con aportado, valor actual y rendimiento.
+ *
+ * El recorrido vive en `shared/inversiones.ts` y lo comparten esta función, la
+ * serie de patrimonio de los reportes y la gráfica de la vista: son tres
+ * lugares que deben dar el mismo número, y por eso es un solo código.
  */
 export function investmentsWithTotals(profileId: number) {
   const investments: any[] = db
@@ -375,20 +403,8 @@ export function investmentsWithTotals(profileId: number) {
     }
   }
   return investments.map((inv) => {
-    const entries = entriesByInv.get(inv.id) ?? []
-    let invested = 0
-    let value = 0
-    for (const e of entries) {
-      if (e.type === 'aporte') {
-        invested += e.amount_cents
-        value += e.amount_cents
-      } else if (e.type === 'retiro') {
-        invested -= e.amount_cents
-        value = Math.max(0, value - e.amount_cents)
-      } else {
-        value = e.amount_cents
-      }
-    }
+    const entries = (entriesByInv.get(inv.id) ?? []).map(mapInvestmentEntry)
+    const paso = recorrer(entries)
     return {
       id: inv.id,
       profileId: inv.profile_id,
@@ -397,9 +413,15 @@ export function investmentsWithTotals(profileId: number) {
       note: inv.note,
       archived: inv.archived === 1,
       createdAt: inv.created_at,
-      investedCents: invested,
-      valueCents: value,
-      entries: entries.map(mapInvestmentEntry),
+      investedCents: paso.investedCents,
+      aportadoCents: paso.aportadoCents,
+      retiradoCents: paso.retiradoCents,
+      gananciaCents: paso.gananciaCents,
+      valueCents: paso.valueCents,
+      unitsE8: paso.unitsE8,
+      rendimientoAnual: rendimientoDe(entries, paso.valueCents),
+      puntos: paso.puntos,
+      entries,
     }
   })
 }

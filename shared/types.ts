@@ -416,6 +416,10 @@ export interface InvestmentEntry {
   amountCents: number
   date: string
   note: string
+  /** Unidades del movimiento ×10⁸. `null` si la inversión no las lleva. */
+  unitsE8: number | null
+  /** Precio por unidad en centavos. En una valuación manda sobre el monto. */
+  unitPriceCents: number | null
 }
 
 export interface Investment {
@@ -426,9 +430,81 @@ export interface Investment {
   note: string
   archived: boolean
   createdAt: string
+  /** Aportado menos retirado, con piso en cero. */
   investedCents: number
+  /** Suma de los aportes, sin restar nada. */
+  aportadoCents: number
+  retiradoCents: number
+  /** Valor de hoy más lo retirado, menos lo aportado. No depende del piso. */
+  gananciaCents: number
   valueCents: number
+  /** Unidades en mano ×10⁸. Cero si nunca se registraron. */
+  unitsE8: number
+  /** Tasa anual efectiva (XIRR) como decimal. `null` si no se puede afirmar. */
+  rendimientoAnual: number | null
+  /** El valor después de cada registro: la serie de la gráfica. */
+  puntos: { date: string; valueCents: number; unitsE8: number }[]
   entries: InvestmentEntry[]
+}
+
+/** Una fila del CSV de precios, ya interpretada y con su destino resuelto. */
+export interface FilaPrecio {
+  fila: number
+  nombre: string
+  fecha: string | null
+  precioCents: number | null
+  investmentId: number | null
+  investmentName: string | null
+  unitsE8: number
+  /** Lo que valdría la inversión si se acepta esta fila. */
+  valorCents: number | null
+  estado: 'lista' | 'sin_inversion' | 'sin_unidades' | 'invalida'
+  motivo: string
+}
+
+export interface InformePrecios {
+  filas: FilaPrecio[]
+  listas: number
+  descartadas: number
+}
+
+export type EstrategiaSimulacion = 'invertir' | 'deuda'
+
+export interface PuntoProyeccion {
+  mes: number
+  liquidoCents: number
+  inversionesCents: number
+  deudaCents: number
+  patrimonioCents: number
+}
+
+export interface Proyeccion {
+  estrategia: EstrategiaSimulacion
+  puntos: PuntoProyeccion[]
+  patrimonioFinalCents: number
+  aportadoCents: number
+  rendimientoCents: number
+  interesPagadoCents: number
+  mesSinDeuda: number | null
+}
+
+export interface Simulacion {
+  /** Punto de partida, tomado del libro tal como está hoy. */
+  inicio: {
+    liquidoCents: number
+    inversionesCents: number
+    deudaCents: number
+    patrimonioCents: number
+    deudas: { id: number; nombre: string; saldoCents: number; annualRateBp: number; pagoMensualCents: number }[]
+  }
+  supuestos: {
+    meses: number
+    ahorroMensualCents: number
+    rendimientoAnualBp: number
+  }
+  /** Las dos rutas, sobre los mismos supuestos, para poder compararlas. */
+  invertir: Proyeccion
+  deuda: Proyeccion
 }
 
 export interface Budget {

@@ -67,6 +67,16 @@ function gastoPorOrigen(profileId: number, desde: string, hasta: string) {
   return { recurrente: fila.recurrente as number, discrecional: fila.discrecional as number }
 }
 
+/**
+ * Saldo que se puede gastar mañana. Se exporta porque el simulador parte de
+ * la misma cifra: dos definiciones de "líquido" son dos patrimonios de hoy.
+ */
+export function liquidoDe(profileId: number): number {
+  return (accountsWithBalance(profileId) as any[])
+    .filter((a) => a.archived === 0 && TIPOS_LIQUIDOS.has(a.type))
+    .reduce((s, a) => s + a.balance_cents, 0)
+}
+
 /** El mes del primer movimiento del libro. `null` si el libro está en blanco. */
 function primerMes(profileId: number): string | null {
   const fila: any = db
@@ -86,9 +96,7 @@ export function analisis(profileId: number, meses = 6, hoy = hoyISO()): Analisis
   const pedido = correrMes(hasta, -(meses - 1))
   const primero = primerMes(profileId)
 
-  const liquidoCents = (accountsWithBalance(profileId) as any[])
-    .filter((a) => a.archived === 0 && TIPOS_LIQUIDOS.has(a.type))
-    .reduce((s, a) => s + a.balance_cents, 0)
+  const liquidoCents = liquidoDe(profileId)
 
   // Un libro sin movimientos, o que solo tiene el mes en curso, no da un solo
   // mes cerrado que medir. Se dice que no se puede decir, en vez de inventar

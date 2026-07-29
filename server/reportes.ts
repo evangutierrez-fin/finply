@@ -10,6 +10,7 @@
 // Sin esto, sacar un crédito de $240,000 duplicaba la tasa de ahorro del mes.
 
 import { db } from './db.ts'
+import { recorrer, type EntradaInversion } from '../shared/inversiones.ts'
 import type { Comparativa, ReporteAnual } from '../shared/types.ts'
 
 /** Mueve un 'AAAA-MM' N meses. */
@@ -132,11 +133,15 @@ function deltaCuentasPorMes(profileId: number) {
  * Valor de las inversiones al cierre de cada mes pedido. Se recorren las
  * entradas una sola vez —son pocas y manuales— porque una valuación *fija* el
  * valor y los aportes y retiros posteriores lo ajustan: no es una suma.
+ *
+ * El recorrido es el de `shared/inversiones.ts`, el mismo que usa el Resumen.
+ * Tener aquí una segunda copia era exactamente lo que rompía la promesa de que
+ * el último punto de la serie coincide con la cifra del tablero.
  */
 function inversionesPorMes(profileId: number, meses: string[]): Map<string, number> {
-  const entradas: any[] = db
+  const filas: any[] = db
     .prepare(
-      `SELECT e.investment_id, e.type, e.amount_cents, e.date
+      `SELECT e.investment_id, e.id, e.type, e.amount_cents, e.date, e.units_e8, e.unit_price_cents
        FROM investment_entries e
        JOIN investments i ON i.id = e.investment_id
        WHERE i.profile_id = ? AND i.archived = 0
@@ -144,21 +149,38 @@ function inversionesPorMes(profileId: number, meses: string[]): Map<string, numb
     )
     .all(profileId)
 
-  const valorPorInversion = new Map<number, number>()
+  const porInversion = new Map<number, EntradaInversion[]>()
+  for (const f of filas) {
+    const lista = porInversion.get(f.investment_id) ?? []
+    lista.push({
+      id: f.id,
+      type: f.type,
+      amountCents: f.amount_cents,
+      date: f.date,
+      unitsE8: f.units_e8 ?? null,
+      unitPriceCents: f.unit_price_cents ?? null,
+    })
+    porInversion.set(f.investment_id, lista)
+  }
+
+  // Una serie de valores por inversión, con su propio cursor: los meses vienen
+  // en orden, así que cada punto se visita una sola vez en todo el reporte.
+  const series = [...porInversion.values()].map((entradas) => ({
+    puntos: recorrer(entradas).puntos,
+    cursor: 0,
+    valor: 0,
+  }))
+
   const resultado = new Map<string, number>()
-  let indice = 0
   for (const mes of meses) {
-    while (indice < entradas.length && entradas[indice]!.date.slice(0, 7) <= mes) {
-      const e = entradas[indice]!
-      const actual = valorPorInversion.get(e.investment_id) ?? 0
-      if (e.type === 'aporte') valorPorInversion.set(e.investment_id, actual + e.amount_cents)
-      else if (e.type === 'retiro') {
-        valorPorInversion.set(e.investment_id, Math.max(0, actual - e.amount_cents))
-      } else valorPorInversion.set(e.investment_id, e.amount_cents)
-      indice++
-    }
     let total = 0
-    for (const v of valorPorInversion.values()) total += v
+    for (const s of series) {
+      while (s.cursor < s.puntos.length && s.puntos[s.cursor]!.date.slice(0, 7) <= mes) {
+        s.valor = s.puntos[s.cursor]!.valueCents
+        s.cursor++
+      }
+      total += s.valor
+    }
     resultado.set(mes, total)
   }
   return resultado

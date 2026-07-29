@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { AA_TEXTO, evaluarTinta, normalizarHex } from '../shared/color.ts'
+import { MAX_UNIDADES_E8 } from '../shared/inversiones.ts'
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Fecha inválida (AAAA-MM-DD)')
 const isoMonth = z.string().regex(/^\d{4}-\d{2}$/, 'Mes inválido (AAAA-MM)')
@@ -316,6 +317,41 @@ export const investmentEntryInput = z.object({
   date: isoDate,
   note: z.string().trim().max(200).default(''),
   accountId: z.number().int().positive().nullish(),
+  // Unidades y precio son opcionales: una inversión que solo lleva montos
+  // —un pagaré, un inmueble— nunca los manda y se comporta igual que antes.
+  unitsE8: z
+    .number()
+    .int('Las unidades llevan 8 decimales como máximo')
+    .min(0, 'Las unidades no pueden ser negativas')
+    .max(MAX_UNIDADES_E8, 'Son demasiadas unidades para un solo registro')
+    .nullish(),
+  unitPriceCents: z
+    .number()
+    .int()
+    .min(0, 'El precio no puede ser negativo')
+    .nullish(),
+})
+
+/** El CSV de precios: texto pegado o archivo leído, más el mapeo elegido. */
+export const preciosInput = z.object({
+  profileId: z.number().int().positive(),
+  texto: z.string().min(1, 'No hay nada que leer').max(2_000_000),
+  fecha: isoDate.nullish(),
+})
+
+export const preciosConfirmar = preciosInput.extend({
+  // Solo se asientan las filas que el usuario dejó marcadas. Sin esta lista no
+  // se escribe nada: la vista previa propone, el usuario confirma (R4).
+  filas: z.array(z.number().int().nonnegative()).min(1, 'No hay filas seleccionadas'),
+})
+
+export const simuladorQuery = z.object({
+  profileId: z.coerce.number().int().positive(),
+  meses: z.coerce.number().int().min(1).max(600).default(120),
+  ahorroMensualCents: z.coerce.number().int().min(0).max(1_000_000_000_000).default(0),
+  // De −99.99 % a +200 % anual. El techo no es una opinión sobre qué es
+  // razonable: es lo que evita que un cero de más proyecte un número absurdo.
+  rendimientoAnualBp: z.coerce.number().int().min(-9_999).max(20_000).default(700),
 })
 
 export const budgetInput = z.object({

@@ -75,9 +75,18 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   libro: recurrencias por confirmar, cortes de tarjeta con su fecha límite de
   pago, la mensualidad que sigue de cada deuda con plazo y las parcialidades de
   tus compras a meses. Es un recordatorio, no un cargo.
-- **Inversiones** — CETES, fondos, acciones, cripto o lo que sea: registra
-  aportes y retiros (ligables a una cuenta) y valúa cuando quieras. Finply
-  calcula el rendimiento y dibuja la evolución del valor.
+- **Inversiones por unidades** — CETES, fondos, acciones, cripto o lo que sea:
+  registra aportes y retiros (ligables a una cuenta) con sus unidades y su
+  precio, y valúa escribiendo el precio por unidad en vez del total. Finply
+  calcula el **rendimiento anualizado** con tus fechas (XIRR, no el simple
+  valor − aportado) y dibuja la evolución del valor. También puedes pegar un
+  CSV de precios y valuar varias de un jalón: ves fila por fila lo que
+  pasaría antes de asentar nada. **Sin cotizaciones en línea**, nunca —
+  pedirlas le contaría a otro servidor qué tienes.
+- **Simulador de patrimonio** — qué pasa si apartas X al mes durante N años, y
+  si conviene más invertirlo o pagar primero la deuda cara. Sale de tus cifras
+  de hoy, la tasa la pones tú y los cinco supuestos van escritos junto al
+  número. No es un pronóstico ni un consejo de inversión.
 - **Reportes históricos** — el año completo en una vista: patrimonio mes a mes,
   ingresos contra gastos, en qué se fue el año por categoría y por etiqueta,
   tasa de ahorro y la comparativa de un mes contra el anterior. Con una regla
@@ -186,10 +195,12 @@ server/          Express + node:sqlite
   calendario.ts  lo que vence en los próximos días (solo lectura)
   alertas.ts     lo que hoy merece un aviso, derivado (solo lectura)
   analisis.ts    colchón, origen del gasto y concentración (solo lectura)
+  precios.ts     import CSV de precios: analiza, y solo asienta lo marcado
+  simulacion.ts  punto de partida del simulador (solo lectura)
   routes/        profiles · accounts · categories · tags · transactions · debts
                  · tarjetas · investments · budgets · goals · notes · summary
-                 · reportes · alertas · analisis · recurrencias · calendario
-                 · backup · importaciones
+                 · reportes · alertas · analisis · precios · simulador
+                 · recurrencias · calendario · backup · importaciones
   seed.ts        datos demo deterministas
 shared/
   types.ts       tipos compartidos cliente/servidor
@@ -197,10 +208,14 @@ shared/
   credito.ts     amortización, parcialidades e interés devengado (puro)
   recurrencias.ts periodos de una plantilla y su clave estable (puro)
   color.ts       contraste WCAG y veredicto por tema (puro)
+  inversiones.ts recorrido del historial y unidades en enteros ×10⁸ (puro)
+  rendimiento.ts XIRR por bisección, con null donde no se puede afirmar (puro)
+  simulador.ts   proyección de patrimonio mes a mes (puro)
 src/
   views/         Resumen · Movimientos · Cuentas · Categorías · Reportes
-                 · Análisis · Tarjetas · Deudas · Inversiones · Recurrencias
-                 · Calendario · Presupuestos · Metas · Notas · Ajustes
+                 · Análisis · Tarjetas · Deudas · Inversiones · Simulador
+                 · Recurrencias · Calendario · Presupuestos · Metas · Notas
+                 · Ajustes
   components/    formularios, gráficas, sello, barra lateral
   styles/        tokens.css (temas claro/oscuro) + app.css
 test/            pruebas de integridad contra una base temporal
@@ -235,8 +250,10 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 | `POST /api/debts/:id/payments` · `DELETE /api/debts/payments/:id` | Abonos (con movimiento ligado opcional; `interestCents` fija el desglose, si no se propone) |
 | `GET /api/tarjetas?profileId` | Estado de cada tarjeta: corte, pago para no generar intereses y línea disponible |
 | `GET/POST /api/tarjetas/msi` · `DELETE /msi/:id` | Compras a meses sin intereses y sus parcialidades |
-| `GET/POST /api/investments` · `PATCH/DELETE /:id` | Inversiones con rendimiento calculado |
-| `POST /api/investments/:id/entries` · `DELETE /api/investments/entries/:id` | Aportes, retiros y valuaciones |
+| `GET/POST /api/investments` · `PATCH/DELETE /:id` | Inversiones con unidades, valor y rendimiento anualizado (XIRR) |
+| `POST /api/investments/:id/entries` · `DELETE /api/investments/entries/:id` | Aportes, retiros y valuaciones, con unidades y precio por unidad |
+| `POST /api/precios/analizar` | Lee un CSV de precios y dice qué pasaría. **No escribe nada** |
+| `POST /api/precios/aplicar` | Asienta solo las filas marcadas, en una transacción |
 | `GET/POST /api/budgets` · `DELETE /:id` | Presupuestos por categoría y mes (upsert) con gastado del mes |
 | `POST /api/budgets/copiar` | Copia los topes de un mes a otro sin pisar los que ya existen |
 | `GET/POST /api/goals` · `PATCH/DELETE /:id` | Metas de ahorro |
@@ -252,6 +269,7 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 | `GET /api/calendario?profileId&dias` | Lo que vence: recurrencias, cortes y pagos de tarjeta, deudas y parcialidades |
 | `GET /api/alertas?profileId` | Lo vencido y lo que está por vencer. **Derivadas**: no se guardan ni se descartan |
 | `GET /api/analisis?profileId&meses` | Meses de colchón, tasa de ahorro, gasto recurrente contra discrecional y concentración |
+| `GET /api/simulador?profileId&meses&ahorroMensualCents&rendimientoAnualBp` | Las dos rutas —invertir o pagar la deuda— proyectadas sobre las mismas cifras |
 | `GET /api/respaldo` · `GET /info` · `POST /restaurar` | Respaldo completo en JSON |
 
 Reglas de integridad que cuida el backend, todas cubiertas por `npm test`:
@@ -297,16 +315,12 @@ donde aparece, que en el tema oscuro es la hoja, no el fondo.
 
 **Siguiente**
 
-- Inversiones con unidades, precio por unidad y rendimiento anualizado
-  (XIRR/TWR), histórico de valuaciones y simulador de escenarios con los
-  supuestos a la vista. **Sin cotizaciones en línea**: valuación manual o CSV
-  de precios, porque tus datos no salen de tu máquina.
+- Funciones de negocio agnósticas del giro: contrapartes reutilizables,
+  facturas emitidas y recibidas con vencimiento, antigüedad de saldos, IVA
+  trasladado y acreditable, centros de costo, estado de resultados simple,
+  punto de equilibrio y flujo de caja proyectado a 30/60/90 días.
 
 **Después**
-
-- Funciones de negocio agnósticas del giro: contrapartes, facturas con
-  vencimiento, antigüedad de saldos, IVA y deducibles, centros de costo,
-  estado de resultados y punto de equilibrio
 - Multimoneda de verdad (hoy la columna existe pero los totales asumen MXN)
 - Importar CFDI (XML del SAT) para perfiles de negocio
 - Adjuntar recibos a los movimientos

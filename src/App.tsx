@@ -8,6 +8,7 @@ import { ProfileModal } from './components/ProfileModal.tsx'
 import { TintaPicker, tintaInicial, tintaPayload, tintaValida } from './components/TintaPicker.tsx'
 import { Resumen } from './views/Resumen.tsx'
 import { Analisis } from './views/Analisis.tsx'
+import { Simulador } from './views/Simulador.tsx'
 import { Movimientos } from './views/Movimientos.tsx'
 import { Cuentas } from './views/Cuentas.tsx'
 import { Reportes } from './views/Reportes.tsx'
@@ -27,7 +28,7 @@ import { Importar } from './views/Importar.tsx'
 // donde uno la busca.
 const VIEWS: View[] = [
   'resumen', 'movimientos', 'cuentas', 'taxonomia', 'reportes', 'analisis', 'importar', 'tarjetas',
-  'deudas', 'inversiones', 'recurrencias', 'calendario', 'presupuestos', 'metas', 'notas', 'ajustes',
+  'deudas', 'inversiones', 'simulador', 'recurrencias', 'calendario', 'presupuestos', 'metas', 'notas', 'ajustes',
 ]
 
 const THEME_CYCLE: Record<ThemePref, ThemePref> = { claro: 'oscuro', oscuro: 'auto', auto: 'claro' }
@@ -234,6 +235,7 @@ export default function App() {
           {view === 'tarjetas' && <Tarjetas />}
           {view === 'deudas' && <Deudas />}
           {view === 'inversiones' && <Inversiones />}
+          {view === 'simulador' && <Simulador />}
           {view === 'recurrencias' && <Recurrencias />}
           {view === 'calendario' && <Calendario />}
           {view === 'presupuestos' && <Presupuestos />}

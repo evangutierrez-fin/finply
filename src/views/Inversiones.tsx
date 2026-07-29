@@ -5,7 +5,11 @@ import { useFetch } from '../hooks.ts'
 import { fmtDate, fmtMoney, parseAmount, todayISO } from '../format.ts'
 import { Money, CountUpMoney } from '../components/Money.tsx'
 import { Modal } from '../components/Modal.tsx'
-import type { Account, Investment, InvestmentEntryType, InvestmentKind } from '../../shared/types.ts'
+import { HistorialValor } from '../components/Charts.tsx'
+import { fmtUnidades, parseUnidades, precioImplicito, valorDeUnidades } from '../../shared/inversiones.ts'
+import type {
+  Account, InformePrecios, Investment, InvestmentEntryType, InvestmentKind,
+} from '../../shared/types.ts'
 
 const KIND_LABEL: Record<InvestmentKind, string> = {
   cetes: 'CETES',
@@ -22,16 +26,14 @@ const ENTRY_LABEL: Record<InvestmentEntryType, string> = {
   valuacion: 'Valuación',
 }
 
-/** Minigráfica del valor a lo largo del tiempo (aportes y valuaciones). */
+/**
+ * Minigráfica del valor a lo largo del tiempo. Los puntos vienen calculados
+ * del servidor (`shared/inversiones.ts`): recorrer aquí el historial otra vez
+ * sería una cuarta copia de la misma aritmética, y la que se vería primero
+ * cuando dejara de coincidir.
+ */
 function Sparkline({ investment }: { investment: Investment }) {
-  const points: number[] = []
-  let value = 0
-  for (const e of investment.entries) {
-    if (e.type === 'aporte') value += e.amountCents
-    else if (e.type === 'retiro') value = Math.max(0, value - e.amountCents)
-    else value = e.amountCents
-    points.push(value)
-  }
+  const points = investment.puntos.map((p) => p.valueCents)
   if (points.length < 2) return null
   const min = Math.min(...points)
   const max = Math.max(...points)
@@ -74,6 +76,12 @@ function EntryModal({
   const [date, setDate] = useState(todayISO())
   const [accountId, setAccountId] = useState(0)
   const [note, setNote] = useState('')
+  const [units, setUnits] = useState('')
+  const [price, setPrice] = useState('')
+  // Valuar por precio solo tiene sentido con unidades en mano: el precio de
+  // nada es nada. Sin ellas, la única forma es el valor total.
+  const puedeValuarPorPrecio = investment.unitsE8 > 0
+  const [porPrecio, setPorPrecio] = useState(mode === 'valuacion' && puedeValuarPorPrecio)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
@@ -91,19 +99,54 @@ function EntryModal({
     valuacion: `Valuar · ${investment.name}`,
   }
 
+  const unitsE8 = parseUnidades(units)
+  const priceCents = parseAmount(price)
+  // El monto se calcula solo cuando hay unidades y precio, que es como viene
+  // una compra de acciones o de cripto. Sigue siendo editable: una comisión
+  // hace que lo que salió de la cuenta no sea exactamente unidades × precio.
+  const montoCalculado =
+    mode !== 'valuacion' && unitsE8 !== null && unitsE8 > 0 && priceCents !== null
+      ? valorDeUnidades(unitsE8, priceCents)
+      : null
+  const montoEfectivo = montoCalculado ?? parseAmount(amount)
+  const valuacionPorPrecio =
+    mode === 'valuacion' && porPrecio && priceCents !== null
+      ? valorDeUnidades(investment.unitsE8, priceCents)
+      : null
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
-    const cents = parseAmount(amount)
-    if (cents === null) return setError('Escribe un monto válido')
+    if (mode === 'valuacion' && porPrecio) {
+      if (priceCents === null) return setError('Escribe un precio por unidad válido')
+    }
+    const cents = montoEfectivo
+    if (!(mode === 'valuacion' && porPrecio) && cents === null) {
+      return setError('Escribe un monto válido')
+    }
+    if (units.trim() && unitsE8 === null) {
+      return setError('Esas unidades no se entienden (hasta 8 decimales)')
+    }
+    if (mode !== 'valuacion' && price.trim() && priceCents === null) {
+      return setError('Ese precio por unidad no se entiende')
+    }
     setSaving(true)
     setError(null)
     try {
       await api.investments.addEntry(investment.id, {
         type: mode,
-        amountCents: cents,
+        amountCents: mode === 'valuacion' && porPrecio ? 0 : cents!,
         date,
         note: note.trim(),
         accountId: mode === 'valuacion' ? null : accountId || null,
+        unitsE8: mode === 'valuacion' ? null : unitsE8,
+        unitPriceCents:
+          mode === 'valuacion'
+            ? porPrecio
+              ? priceCents
+              : null
+            : unitsE8 && priceCents !== null
+              ? priceCents
+              : null,
       })
       stamp(mode === 'aporte' ? 'Aportado' : mode === 'retiro' ? 'Retirado' : 'Valuado')
       onSaved()
@@ -117,31 +160,124 @@ function EntryModal({
   return (
     <Modal title={titles[mode]} onClose={onClose}>
       <form className="forma" onSubmit={submit}>
-        {mode === 'valuacion' && (
+        {mode === 'valuacion' && !porPrecio && (
           <p className="forma-nota">
             Apunta cuánto vale hoy la inversión completa (lo que ves en tu estado de cuenta).
           </p>
         )}
+        {mode === 'valuacion' && puedeValuarPorPrecio && (
+          <div className="seg seg-chico" role="radiogroup" aria-label="Cómo valuar">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={porPrecio}
+              className={`seg-item${porPrecio ? ' activa' : ''}`}
+              onClick={() => setPorPrecio(true)}
+            >
+              Por precio
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={!porPrecio}
+              className={`seg-item${!porPrecio ? ' activa' : ''}`}
+              onClick={() => setPorPrecio(false)}
+            >
+              Por valor total
+            </button>
+          </div>
+        )}
         <div className="campos-2">
-          <label className="campo">
-            <span className="campo-label">{mode === 'valuacion' ? 'Valor actual' : 'Monto'}</span>
-            <div className="monto-wrap">
-              <span className="monto-signo" aria-hidden="true">$</span>
-              <input
-                className="campo-input"
-                inputMode="decimal"
-                placeholder="0.00"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                autoFocus
-              />
-            </div>
-          </label>
+          {mode === 'valuacion' && porPrecio ? (
+            <label className="campo">
+              <span className="campo-label">Precio por unidad</span>
+              <div className="monto-wrap">
+                <span className="monto-signo" aria-hidden="true">$</span>
+                <input
+                  className="campo-input"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={price}
+                  onChange={(e) => setPrice(e.target.value)}
+                  autoFocus
+                />
+              </div>
+            </label>
+          ) : (
+            <label className="campo">
+              <span className="campo-label">{mode === 'valuacion' ? 'Valor actual' : 'Monto'}</span>
+              <div className="monto-wrap">
+                <span className="monto-signo" aria-hidden="true">$</span>
+                <input
+                  className="campo-input"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={montoCalculado !== null ? (montoCalculado / 100).toFixed(2) : amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  readOnly={montoCalculado !== null}
+                  autoFocus
+                />
+              </div>
+            </label>
+          )}
           <label className="campo">
             <span className="campo-label">Fecha</span>
             <input type="date" className="campo-input" value={date} onChange={(e) => setDate(e.target.value)} />
           </label>
         </div>
+
+        {mode === 'valuacion' && porPrecio && (
+          <p className="forma-nota">
+            {fmtUnidades(investment.unitsE8)} unidades
+            {priceCents !== null && valuacionPorPrecio !== null ? (
+              <> × {fmtMoney(priceCents)} = <strong className="cifra-chica">{fmtMoney(valuacionPorPrecio)}</strong></>
+            ) : (
+              <> en mano. El valor se recalcula solo si después registras un aporte con fecha anterior.</>
+            )}
+          </p>
+        )}
+
+        {mode !== 'valuacion' && (
+          <div className="campos-2">
+            <label className="campo">
+              <span className="campo-label">Unidades (opcional)</span>
+              <input
+                className="campo-input"
+                inputMode="decimal"
+                placeholder="Ej. 0.0125"
+                value={units}
+                onChange={(e) => setUnits(e.target.value)}
+              />
+            </label>
+            <label className="campo">
+              <span className="campo-label">Precio por unidad</span>
+              <div className="monto-wrap">
+                <span className="monto-signo" aria-hidden="true">$</span>
+                <input
+                  className="campo-input"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={price}
+                  onChange={(e) => setPrice(e.target.value)}
+                />
+              </div>
+            </label>
+          </div>
+        )}
+        {mode !== 'valuacion' && units.trim() !== '' && (
+          <p className="forma-nota">
+            {unitsE8 === null
+              ? 'Esas unidades no se entienden: hasta 8 decimales.'
+              : montoCalculado !== null
+                ? `El monto se calcula: ${fmtUnidades(unitsE8)} × ${fmtMoney(priceCents!)}. Deja el precio en blanco para escribirlo tú.`
+                : `Apuntar unidades te deja valuar por precio después${
+                    parseAmount(amount) !== null && unitsE8 > 0
+                      ? `. A este monto, saldrían a ${fmtMoney(precioImplicito(parseAmount(amount)!, unitsE8) ?? 0)} por unidad`
+                      : ''
+                  }.`}
+          </p>
+        )}
+
         {mode !== 'valuacion' && (
           <label className="campo">
             <span className="campo-label">{mode === 'aporte' ? 'Sale de la cuenta' : 'Entra a la cuenta'}</span>
@@ -251,9 +387,14 @@ function InvestmentCard({ investment, index }: { investment: Investment; index: 
   const [showEntries, setShowEntries] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
 
-  const gain = investment.valueCents - investment.investedCents
-  const pct = investment.investedCents > 0 ? (gain / investment.investedCents) * 100 : null
+  // La ganancia es valor + retirado − aportado: así sigue siendo correcta
+  // cuando ya sacaste más de lo que pusiste, que es justo cuando la resta
+  // simple contra "aportado" empieza a mentir.
+  const gain = investment.gananciaCents
+  const pct = investment.aportadoCents > 0 ? (gain / investment.aportadoCents) * 100 : null
   const lastValuation = [...investment.entries].reverse().find((e) => e.type === 'valuacion')
+  const precioActual =
+    investment.unitsE8 > 0 ? precioImplicito(investment.valueCents, investment.unitsE8) : null
 
   const remove = async () => {
     try {
@@ -296,8 +437,32 @@ function InvestmentCard({ investment, index }: { investment: Investment; index: 
       <Sparkline investment={investment} />
 
       <p className="deuda-cifras">
-        Aportado: <Money cents={investment.investedCents} className="cifra-chica" />
+        Aportado: <Money cents={investment.aportadoCents} className="cifra-chica" />
+        {investment.retiradoCents > 0 && (
+          <> · retirado <Money cents={investment.retiradoCents} className="cifra-chica" /></>
+        )}
+        {investment.unitsE8 > 0 && (
+          <>
+            {' · '}
+            <span className="cifra-chica">{fmtUnidades(investment.unitsE8)}</span> unidades
+            {precioActual !== null && <> a {fmtMoney(precioActual)}</>}
+          </>
+        )}
         {lastValuation && <> · valuada el {fmtDate(lastValuation.date)}</>}
+      </p>
+
+      <p className="deuda-cifras">
+        Rendimiento anualizado:{' '}
+        {investment.rendimientoAnual === null ? (
+          <span title="Hacen falta al menos 30 días entre el primer aporte y hoy">
+            todavía no se puede decir
+          </span>
+        ) : (
+          <strong className={`cifra-chica ${investment.rendimientoAnual >= 0 ? 'stat-in' : ''}`}>
+            {investment.rendimientoAnual >= 0 ? '+' : ''}
+            {(investment.rendimientoAnual * 100).toFixed(1)} % anual
+          </strong>
+        )}
       </p>
 
       <footer className="deuda-pie">
@@ -328,20 +493,32 @@ function InvestmentCard({ investment, index }: { investment: Investment; index: 
       </footer>
 
       {showEntries && (
-        <ul className="abonos">
-          {[...investment.entries].reverse().map((e) => (
-            <li key={e.id}>
-              <span className="abono-fecha">{fmtDate(e.date)}</span>
-              <span className="abono-nota">
-                {ENTRY_LABEL[e.type]}{e.note ? ` · ${e.note}` : ''}
-              </span>
-              <Money cents={e.amountCents} className="cifra-chica" />
-              <button type="button" className="accion" aria-label="Anular registro" onClick={() => removeEntry(e.id)}>
-                ✕
-              </button>
-            </li>
-          ))}
-        </ul>
+        <>
+          <HistorialValor puntos={investment.puntos} />
+          <ul className="abonos">
+            {[...investment.entries].reverse().map((e) => (
+              <li key={e.id}>
+                <span className="abono-fecha">{fmtDate(e.date)}</span>
+                <span className="abono-nota">
+                  {ENTRY_LABEL[e.type]}
+                  {e.unitsE8 ? ` · ${fmtUnidades(e.unitsE8)} u` : ''}
+                  {e.unitPriceCents !== null ? ` · ${fmtMoney(e.unitPriceCents)} c/u` : ''}
+                  {e.note ? ` · ${e.note}` : ''}
+                </span>
+                {/* Una valuación por precio guarda monto cero a propósito: su
+                    valor sale del precio y de las unidades de esa fecha. */}
+                {e.type === 'valuacion' && e.unitPriceCents !== null ? (
+                  <span className="cifra-chica">—</span>
+                ) : (
+                  <Money cents={e.amountCents} className="cifra-chica" />
+                )}
+                <button type="button" className="accion" aria-label="Anular registro" onClick={() => removeEntry(e.id)}>
+                  ✕
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
 
       {entryMode && (
@@ -359,26 +536,205 @@ function InvestmentCard({ investment, index }: { investment: Investment; index: 
   )
 }
 
+const ESTADO_PRECIO: Record<string, string> = {
+  lista: 'Lista',
+  sin_inversion: 'Sin inversión',
+  sin_unidades: 'Sin unidades',
+  invalida: 'No se entiende',
+}
+
+/**
+ * Import de precios desde CSV. D2 lo dejó claro: Finply no consulta ninguna
+ * cotización en línea, porque pedirla le cuenta a un servidor ajeno qué tienes.
+ * El precio entra escrito por el usuario, y aquí en lote.
+ *
+ * Se ve primero lo que pasaría —fila por fila, con el valor que resultaría— y
+ * solo lo marcado se asienta, todo en una transacción (R4 y R8).
+ */
+function PreciosModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const { profile, stamp } = useApp()
+  const [texto, setTexto] = useState('')
+  const [fecha, setFecha] = useState(todayISO())
+  const [informe, setInforme] = useState<InformePrecios | null>(null)
+  const [elegidas, setElegidas] = useState<Set<number>>(new Set())
+  const [error, setError] = useState<string | null>(null)
+  const [ocupado, setOcupado] = useState(false)
+
+  const analizar = async () => {
+    setOcupado(true)
+    setError(null)
+    try {
+      const res = await api.precios.analizar({ profileId: profile.id, texto, fecha })
+      setInforme(res)
+      setElegidas(new Set(res.filas.filter((f) => f.estado === 'lista').map((f) => f.fila)))
+    } catch (err) {
+      setError((err as Error).message)
+      setInforme(null)
+    }
+    setOcupado(false)
+  }
+
+  const aplicar = async () => {
+    setOcupado(true)
+    setError(null)
+    try {
+      const res = await api.precios.aplicar({
+        profileId: profile.id,
+        texto,
+        fecha,
+        filas: [...elegidas],
+      })
+      stamp(`${res.creadas} valuada${res.creadas === 1 ? '' : 's'}`)
+      onSaved()
+      onClose()
+    } catch (err) {
+      setError((err as Error).message)
+      setOcupado(false)
+    }
+  }
+
+  const archivo = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setTexto(await file.text())
+    setInforme(null)
+  }
+
+  return (
+    <Modal title="Importar precios" onClose={onClose}>
+      <div className="forma">
+        <p className="forma-nota">
+          Pega dos columnas —la inversión y su precio por unidad— o sube el CSV que te deja
+          descargar tu casa de bolsa. Finply nunca consulta un precio en línea: eso le contaría a
+          otro servidor qué tienes.
+        </p>
+        <div className="campos-2">
+          <label className="campo">
+            <span className="campo-label">Archivo CSV</span>
+            <input type="file" accept=".csv,text/csv,text/plain" className="campo-input" onChange={archivo} />
+          </label>
+          <label className="campo">
+            <span className="campo-label">Fecha (para las filas sin la suya)</span>
+            <input type="date" className="campo-input" value={fecha} onChange={(e) => setFecha(e.target.value)} />
+          </label>
+        </div>
+        <label className="campo">
+          <span className="campo-label">O pega aquí</span>
+          <textarea
+            className="campo-input campo-area"
+            rows={5}
+            placeholder={'inversion,precio\nBitcoin,1850000\nFondo indexado,24.55'}
+            value={texto}
+            onChange={(e) => {
+              setTexto(e.target.value)
+              setInforme(null)
+            }}
+          />
+        </label>
+
+        {error && <p className="forma-error" role="alert">{error}</p>}
+
+        {informe && (
+          <>
+            <p className="forma-nota">
+              {informe.listas} fila{informe.listas === 1 ? '' : 's'} lista
+              {informe.listas === 1 ? '' : 's'}
+              {informe.descartadas > 0 && `, ${informe.descartadas} que no se pueden usar`}.
+            </p>
+            <ul className="precios-lista">
+              {informe.filas.map((f) => (
+                <li key={f.fila} className={f.estado === 'lista' ? '' : 'precio-descartada'}>
+                  <label className="precio-fila">
+                    <input
+                      type="checkbox"
+                      disabled={f.estado !== 'lista'}
+                      checked={elegidas.has(f.fila)}
+                      onChange={(e) => {
+                        const s = new Set(elegidas)
+                        if (e.target.checked) s.add(f.fila)
+                        else s.delete(f.fila)
+                        setElegidas(s)
+                      }}
+                    />
+                    <span className="precio-nombre">{f.investmentName ?? (f.nombre || '(sin nombre)')}</span>
+                    <span className="cifra-chica">
+                      {f.precioCents !== null ? fmtMoney(f.precioCents) : '—'}
+                    </span>
+                    <span className="precio-valor">
+                      {f.estado === 'lista' ? (
+                        <>
+                          {fmtUnidades(f.unitsE8)} u ={' '}
+                          <strong className="cifra-chica">{fmtMoney(f.valorCents ?? 0)}</strong>
+                        </>
+                      ) : (
+                        <span className="precio-motivo">
+                          {ESTADO_PRECIO[f.estado]}: {f.motivo}
+                        </span>
+                      )}
+                    </span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+
+        <footer className="forma-pie">
+          <button type="button" className="btn btn-fantasma" onClick={onClose}>Cancelar</button>
+          {informe ? (
+            <button
+              type="button"
+              className="btn btn-primario"
+              disabled={ocupado || elegidas.size === 0}
+              onClick={aplicar}
+            >
+              {ocupado ? 'Guardando…' : `Valuar ${elegidas.size}`}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-primario"
+              disabled={ocupado || texto.trim() === ''}
+              onClick={analizar}
+            >
+              {ocupado ? 'Leyendo…' : 'Ver qué pasaría'}
+            </button>
+          )}
+        </footer>
+      </div>
+    </Modal>
+  )
+}
+
 export function Inversiones() {
   const { profile, refreshKey, bump } = useApp()
   const [creating, setCreating] = useState(false)
+  const [precios, setPrecios] = useState(false)
   const { data: investments, error } = useFetch(
     () => api.investments.list(profile.id),
     [profile.id, refreshKey],
   )
 
   const active = (investments ?? []).filter((i) => !i.archived)
-  const invested = active.reduce((s, i) => s + i.investedCents, 0)
+  const aportado = active.reduce((s, i) => s + i.aportadoCents, 0)
   const value = active.reduce((s, i) => s + i.valueCents, 0)
-  const gain = value - invested
+  const gain = active.reduce((s, i) => s + i.gananciaCents, 0)
+  const conUnidades = active.some((i) => i.unitsE8 > 0)
 
   return (
     <div className="vista">
       <header className="vista-head">
         <h1>Inversiones</h1>
-        <button type="button" className="btn btn-primario" onClick={() => setCreating(true)}>
-          ＋ Nueva inversión
-        </button>
+        <div className="vista-head-acciones">
+          {conUnidades && (
+            <button type="button" className="btn btn-fantasma" onClick={() => setPrecios(true)}>
+              Importar precios
+            </button>
+          )}
+          <button type="button" className="btn btn-primario" onClick={() => setCreating(true)}>
+            ＋ Nueva inversión
+          </button>
+        </div>
       </header>
 
       {error && <p className="aviso" role="alert">{error}</p>}
@@ -404,15 +760,15 @@ export function Inversiones() {
             <dl className="hero-stats">
               <div className="stat">
                 <dt>Aportado</dt>
-                <dd><Money cents={invested} /></dd>
+                <dd><Money cents={aportado} /></dd>
               </div>
               <div className="stat stat-neto">
                 <dt>Rendimiento</dt>
                 <dd>
                   <span className={gain >= 0 ? 'stat-in' : ''}>
                     <Money cents={gain} signed />
-                    {invested > 0 && (
-                      <span className="cifra-chica"> · {gain >= 0 ? '+' : ''}{((gain / invested) * 100).toFixed(1)} %</span>
+                    {aportado > 0 && (
+                      <span className="cifra-chica"> · {gain >= 0 ? '+' : ''}{((gain / aportado) * 100).toFixed(1)} %</span>
                     )}
                   </span>
                 </dd>
@@ -429,6 +785,7 @@ export function Inversiones() {
       )}
 
       {creating && <InvestmentModal investment={null} onClose={() => setCreating(false)} onSaved={bump} />}
+      {precios && <PreciosModal onClose={() => setPrecios(false)} onSaved={bump} />}
     </div>
   )
 }
