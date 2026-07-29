@@ -455,8 +455,10 @@ describe('R11: el costo no crece con el libro', () => {
       )
       assert.equal(nGrande, nChico, 'el costo es el mismo: ninguna consulta es por fila')
       // El modo de fallar que R11 nombra por su nombre: "diez consultas por
-      // carga del Resumen". Hoy son ocho, todas agregadas.
-      assert.ok(nGrande < 10, `son ${nGrande} consultas, no una por cosa`)
+      // carga del Resumen". Hoy son nueve: ocho agregadas más la de los
+      // módulos del perfil, que resuelve tipo y overrides en un solo LEFT JOIN
+      // justamente para no costar dos.
+      assert.ok(nGrande < 12, `son ${nGrande} consultas, no una por cosa`)
     } finally {
       ;(db as any).prepare = original
     }

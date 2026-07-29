@@ -43,7 +43,10 @@ export function TxModal({
   const [costCenterId, setCostCenterId] = useState<number>(tx?.costCenterId ?? 0)
   const [tax, setTax] = useState(tx?.taxCents ? (tx.taxCents / 100).toFixed(2) : '')
   const [deductible, setDeductible] = useState(tx?.deductible ?? false)
-  const esNegocio = profile.kind === 'negocio'
+  // Los campos de negocio los trae el módulo, no el tipo de perfil: desde la
+  // Fase 9 el tipo solo elige el juego por omisión, y un libro personal que
+  // encienda Negocio tiene que verlos igual.
+  const esNegocio = profile.modules.includes('negocio')
   const [newTag, setNewTag] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -68,7 +71,7 @@ export function TxModal({
   // Contrapartes y centros solo se piden en un libro de negocio: en uno
   // personal serían dos llamadas por cada movimiento que nadie usa.
   useEffect(() => {
-    if (profile.kind !== 'negocio') return
+    if (!esNegocio) return
     Promise.all([api.contrapartes.list(profile.id), api.centros.list(profile.id)]).then(
       ([cps, ccs]) => {
         setContrapartes(cps.filter((c) => !c.archived))
@@ -78,7 +81,7 @@ export function TxModal({
         // Que falten no impide registrar el movimiento: son campos opcionales.
       },
     )
-  }, [profile.id, profile.kind])
+  }, [profile.id, esNegocio])
 
   const toggleTag = (id: number) =>
     setTagIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
@@ -152,10 +155,16 @@ export function TxModal({
         note,
         transferAccountId: type === 'transferencia' ? transferAccountId || null : null,
         tagIds,
-        counterpartyId: esNegocio ? counterpartyId || null : null,
-        costCenterId: esNegocio ? costCenterId || null : null,
-        taxCents: esNegocio ? (parseAmount(tax) ?? 0) : 0,
-        deductible: esNegocio ? deductible : false,
+        // Se mandan siempre, incluso con el módulo apagado, y **eso es R17**:
+        // el PATCH reemplaza el movimiento entero, así que mandar `null`
+        // porque los campos no están a la vista le borraría al usuario la
+        // contraparte y el impuesto de una partida vieja con solo corregirle
+        // la fecha. Como el estado nace del propio movimiento, mandarlo tal
+        // cual lo devuelve intacto. En un libro sin negocio ya vienen vacíos.
+        counterpartyId: counterpartyId || null,
+        costCenterId: costCenterId || null,
+        taxCents: parseAmount(tax) ?? 0,
+        deductible,
       }
       if (tx) await api.tx.update(tx.id, draft)
       else await api.tx.create(draft)

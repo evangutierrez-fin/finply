@@ -7,7 +7,8 @@
 //
 // Es de **solo lectura**, como los reportes: aquí no se escribe una sola fila.
 
-import { db } from './db.ts'
+import { db, modulosDe } from './db.ts'
+import type { ModuloId } from '../shared/modulos.ts'
 import { estadoTarjetas } from './tarjetas.ts'
 import { reglaDe } from './recurrencias.ts'
 import { tablaAmortizacion } from '../shared/credito.ts'
@@ -257,15 +258,25 @@ const ORDEN: Record<EventoCalendario['tipo'], number> = {
   corte: 5,
 }
 
-/** Todo lo que vence en los próximos `dias` días, del más cercano al último. */
+/**
+ * Todo lo que vence en los próximos `dias` días, del más cercano al último.
+ *
+ * Cada fuente pertenece a un módulo y calla si está apagado — un vencimiento
+ * de tarjeta en el calendario de quien no lleva tarjetas es ruido, y el clic
+ * llevaría a una sección que no está en su lomo. Las parcialidades de meses
+ * sin intereses cuelgan del módulo de tarjetas, que es donde se registran.
+ */
 export function calendario(profileId: number, hoy = hoyISO(), dias = 30): Calendario {
   const hasta = sumarDias(hoy, dias)
+  const activos = modulosDe(profileId)
+  const con = (id: ModuloId) => activos.includes(id)
+
   const eventos = [
-    ...deRecurrencias(profileId, hoy, hasta),
-    ...deTarjetas(profileId, hoy, hasta),
-    ...deDeudas(profileId, hoy, hasta),
-    ...deMSI(profileId, hoy, hasta),
-    ...deFacturas(profileId, hoy, hasta),
+    ...(con('recurrencias') ? deRecurrencias(profileId, hoy, hasta) : []),
+    ...(con('tarjetas') ? deTarjetas(profileId, hoy, hasta) : []),
+    ...(con('deudas') ? deDeudas(profileId, hoy, hasta) : []),
+    ...(con('tarjetas') ? deMSI(profileId, hoy, hasta) : []),
+    ...(con('negocio') ? deFacturas(profileId, hoy, hasta) : []),
   ]
   // Dentro de un mismo día manda lo que cuesta dinero si se te pasa.
   eventos.sort(

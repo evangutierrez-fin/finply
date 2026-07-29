@@ -24,6 +24,10 @@ const BACKUP_FORMAT = 1
 // extremos.
 export const TABLES = [
   'profiles',
+  // Los módulos van pegados al perfil, que es su único padre. Un respaldo
+  // anterior a la Fase 9 no trae esta tabla y eso es inofensivo: sin filas,
+  // cada perfil vuelve al juego por omisión de su tipo (`shared/modulos.ts`).
+  'profile_modules',
   'accounts',
   'categories',
   'tags',

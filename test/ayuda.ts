@@ -83,8 +83,15 @@ export async function levantar(): Promise<Cliente> {
 }
 
 /** Perfil + cuenta listos para usar, que es el punto de partida de casi todo. */
-export async function libroBase(c: Cliente, nombre = 'Prueba') {
-  const perfil = (await c.post('/api/profiles', { name: nombre, kind: 'personal' })).body
+/**
+ * Un libro con una cuenta y las categorías del alta.
+ *
+ * El `kind` importa desde la Fase 9: decide el juego de módulos por omisión, y
+ * un módulo apagado calla sus alertas y sus eventos de calendario. Las pruebas
+ * de negocio piden `'negocio'` porque un libro personal no lleva facturas.
+ */
+export async function libroBase(c: Cliente, nombre = 'Prueba', kind = 'personal') {
+  const perfil = (await c.post('/api/profiles', { name: nombre, kind })).body
   const cuenta = (
     await c.post('/api/accounts', {
       profileId: perfil.id,

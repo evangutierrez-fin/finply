@@ -4,6 +4,10 @@
 export type ProfileKind = 'personal' | 'negocio'
 export type Accent = 'verde' | 'laton' | 'cobalto' | 'vino'
 
+// El catálogo de módulos vive en `shared/modulos.ts`, que es puro y lo usan
+// las dos mitades. Aquí solo se reexporta el id para que `Profile` lo lleve.
+export type { ModuloId } from './modulos.ts'
+
 export interface Profile {
   id: number
   name: string
@@ -18,6 +22,11 @@ export interface Profile {
   accentHexDark: string | null
   /** Cómo llama este perfil a su dimensión libre: "Proyecto", "Sucursal"… */
   dimensionLabel: string
+  /**
+   * Las secciones que lleva este libro. Ya resueltas: lo guardado son
+   * overrides y lo que falta sale del juego por omisión del tipo (D16).
+   */
+  modules: import('./modulos.ts').ModuloId[]
   createdAt: string
 }
 

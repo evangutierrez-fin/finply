@@ -56,6 +56,11 @@ export function Resumen({ onNav }: { onNav: (view: View) => void }) {
 
   const active = data.accounts.filter((a) => !a.archived)
   const neto = data.incomeCents - data.expenseCents
+  // Un renglón se enseña si su módulo está encendido **o si trae saldo**: quien
+  // apagó Deudas teniendo una abierta tiene que seguir viendo de dónde sale su
+  // patrimonio, o la resta no cuadra con lo que se ve.
+  const conDeudas = profile.modules.includes('deudas')
+  const conInversiones = profile.modules.includes('inversiones')
 
   if (active.length === 0) {
     return (
@@ -166,27 +171,42 @@ export function Resumen({ onNav }: { onNav: (view: View) => void }) {
         <article className="hoja deudas-mini">
           <div className="hoja-head">
             <h2 className="hoja-titulo">Patrimonio</h2>
-            <button type="button" className="btn-liga" onClick={() => onNav('deudas')}>
-              Ver deudas →
-            </button>
+            {conDeudas && (
+              <button type="button" className="btn-liga" onClick={() => onNav('deudas')}>
+                Ver deudas →
+              </button>
+            )}
           </div>
+          {/*
+            Los renglones siguen a los módulos, pero **el total no**: aunque no
+            veas la sección de deudas, lo que debes sigue restando de tu
+            patrimonio. Apagar un módulo esconde una vista, no cambia una cifra
+            (R18) — un patrimonio que sube por apagar Deudas sería una mentira
+            cómoda, que es la peor clase.
+          */}
           <dl className="deudas-mini-lista">
             <div>
               <dt>En cuentas</dt>
               <dd><Money cents={data.totalCents} /></dd>
             </div>
-            <div>
-              <dt>Inversiones</dt>
-              <dd><Money cents={data.investments.valueCents} /></dd>
-            </div>
-            <div>
-              <dt>Te deben</dt>
-              <dd><Money cents={data.debts.porCobrarCents} className="stat-in" /></dd>
-            </div>
-            <div>
-              <dt>Debes</dt>
-              <dd><Money cents={-data.debts.porPagarCents} /></dd>
-            </div>
+            {(conInversiones || data.investments.valueCents !== 0) && (
+              <div>
+                <dt>Inversiones</dt>
+                <dd><Money cents={data.investments.valueCents} /></dd>
+              </div>
+            )}
+            {(conDeudas || data.debts.porCobrarCents !== 0) && (
+              <div>
+                <dt>Te deben</dt>
+                <dd><Money cents={data.debts.porCobrarCents} className="stat-in" /></dd>
+              </div>
+            )}
+            {(conDeudas || data.debts.porPagarCents !== 0) && (
+              <div>
+                <dt>Debes</dt>
+                <dd><Money cents={-data.debts.porPagarCents} /></dd>
+              </div>
+            )}
             <div className="patrimonio-total">
               <dt>Patrimonio</dt>
               <dd>
@@ -203,11 +223,13 @@ export function Resumen({ onNav }: { onNav: (view: View) => void }) {
               </dd>
             </div>
           </dl>
-          <p className="deudas-mini-nota">
-            {data.debts.abiertas === 0
-              ? 'Sin deudas pendientes. El libro está en paz.'
-              : `${data.debts.abiertas} ${data.debts.abiertas === 1 ? 'deuda abierta' : 'deudas abiertas'} entre cobros y pagos.`}
-          </p>
+          {conDeudas && (
+            <p className="deudas-mini-nota">
+              {data.debts.abiertas === 0
+                ? 'Sin deudas pendientes. El libro está en paz.'
+                : `${data.debts.abiertas} ${data.debts.abiertas === 1 ? 'deuda abierta' : 'deudas abiertas'} entre cobros y pagos.`}
+            </p>
+          )}
         </article>
       </section>
     </div>

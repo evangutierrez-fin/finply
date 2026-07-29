@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { MODULOS } from '../../shared/modulos.ts'
 import { api } from '../api.ts'
 import { useApp } from '../context.ts'
 import { useFetch } from '../hooks.ts'
@@ -6,7 +7,7 @@ import { useFetch } from '../hooks.ts'
 const CONFIRM_WORD = 'RESTAURAR'
 
 export function Ajustes() {
-  const { bump, stamp } = useApp()
+  const { bump, stamp, profile, editProfile } = useApp()
   const { data: info } = useFetch(() => api.backup.info(), [])
   const fileInput = useRef<HTMLInputElement>(null)
   const [pending, setPending] = useState<{ name: string; snapshot: unknown } | null>(null)
@@ -55,6 +56,30 @@ export function Ajustes() {
       <header className="vista-head">
         <h1>Ajustes</h1>
       </header>
+
+      <section className="hoja ajustes-bloque">
+        <h2 className="hoja-titulo">Secciones de {profile.name}</h2>
+        <p className="ajustes-texto">
+          Cada perfil lleva las secciones que necesita y ninguna más. Apagar una la quita del
+          lomo; <strong>no borra nada</strong>, y lo que hayas registrado vuelve a la vista en
+          cuanto la enciendas.
+        </p>
+        <ul className="ajustes-modulos">
+          {MODULOS.map((m) => {
+            const activo = profile.modules.includes(m.id)
+            return (
+              <li key={m.id} className={activo ? 'activo' : 'apagado'}>
+                <span aria-hidden="true">{activo ? '●' : '○'}</span>
+                <span>{m.label}</span>
+                {!activo && <span className="ajustes-modulo-estado">apagada</span>}
+              </li>
+            )
+          })}
+        </ul>
+        <button type="button" className="btn btn-fantasma btn-chico" onClick={editProfile}>
+          Cambiar secciones
+        </button>
+      </section>
 
       <section className="hoja ajustes-bloque">
         <h2 className="hoja-titulo">Respaldo</h2>

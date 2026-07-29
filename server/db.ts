@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, renameSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { ProfileKind } from '../shared/types.ts'
+import { MODULO_IDS, resolverModulos, type ModuloId } from '../shared/modulos.ts'
 import { migrate } from './migrations.ts'
 import { recorrer, type EntradaInversion } from '../shared/inversiones.ts'
 import { xirr, type Flujo } from '../shared/rendimiento.ts'
@@ -183,7 +184,46 @@ export function ensureTarjeta(profileId: number, accountId: number): any {
   return row
 }
 
-export function mapProfile(row: any) {
+/**
+ * Los módulos activos de un perfil. Lo guardado son **overrides**: sin fila
+ * manda el juego por omisión del tipo, que es lo que vuelve inofensiva la
+ * migración 13 y lo que hace que un respaldo viejo no deje a nadie sin
+ * secciones (ver `shared/modulos.ts`).
+ */
+export function modulosDe(profileId: number, kind?: ProfileKind): ModuloId[] {
+  // Una sola consulta, con `LEFT JOIN`, y no dos: esto lo llaman las alertas y
+  // el calendario en cada carga del Resumen, donde R11 cuenta las consultas y
+  // hay una prueba con tope. El tipo viaja repetido en cada fila y no importa.
+  const filas = db
+    .prepare(
+      `SELECT p.kind AS kind, m.module AS module, m.enabled AS enabled
+         FROM profiles p LEFT JOIN profile_modules m ON m.profile_id = p.id
+        WHERE p.id = ?`,
+    )
+    .all(profileId) as any[]
+  // Un perfil que no existe no tiene secciones; quien pregunte se calla.
+  if (filas.length === 0) return []
+  const overrides = new Map(
+    filas.filter((f) => f.module !== null).map((f) => [String(f.module), f.enabled === 1]),
+  )
+  return resolverModulos(kind ?? (filas[0].kind as ProfileKind), overrides)
+}
+
+/**
+ * Escribe la elección del usuario. Se guardan las **ocho** filas, no solo las
+ * encendidas: así la elección sobrevive a un cambio de tipo de perfil —si
+ * apagaste Metas, siguen apagadas aunque el libro pase de personal a negocio—
+ * y "lo apagué" no se confunde nunca con "no opiné".
+ */
+export function guardarModulos(profileId: number, activos: readonly ModuloId[]) {
+  const stmt = db.prepare(
+    `INSERT INTO profile_modules (profile_id, module, enabled) VALUES (?, ?, ?)
+     ON CONFLICT (profile_id, module) DO UPDATE SET enabled = excluded.enabled`,
+  )
+  for (const id of MODULO_IDS) stmt.run(profileId, id, activos.includes(id) ? 1 : 0)
+}
+
+export function mapProfile(row: any, modulos?: ModuloId[]) {
   return {
     id: row.id,
     name: row.name,
@@ -193,6 +233,9 @@ export function mapProfile(row: any) {
     accentHex: row.accent_hex ?? null,
     accentHexDark: row.accent_hex_dark ?? null,
     dimensionLabel: row.dimension_label ?? 'Proyecto',
+    // Quien ya tenga la lista la pasa: el listado de perfiles resuelve los
+    // overrides de todos en una consulta, no en una por perfil (R11).
+    modules: modulos ?? modulosDe(row.id, row.kind),
     createdAt: row.created_at,
   }
 }

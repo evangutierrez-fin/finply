@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { AA_TEXTO, evaluarTinta, normalizarHex } from '../shared/color.ts'
 import { MAX_UNIDADES_E8 } from '../shared/inversiones.ts'
+import { MODULO_IDS, type ModuloId } from '../shared/modulos.ts'
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Fecha inválida (AAAA-MM-DD)')
 const isoMonth = z.string().regex(/^\d{4}-\d{2}$/, 'Mes inválido (AAAA-MM)')
@@ -47,6 +48,13 @@ export const profileInput = z.object({
   accentHexDark: tinta('oscuro'),
   /** Cómo llama este perfil a su dimensión libre. La nombra el usuario (R15). */
   dimensionLabel: z.string().trim().min(1).max(24).default('Proyecto'),
+  /**
+   * Las secciones que lleva el libro. **Ausente ≠ vacío**, igual que las
+   * etiquetas de un movimiento: ausente deja los módulos como estaban (o en el
+   * juego por omisión del tipo, si nadie ha opinado); un arreglo vacío es una
+   * elección legítima —un libro de puro movimiento— y se guarda como tal.
+   */
+  modules: z.array(z.enum(MODULO_IDS as [ModuloId, ...ModuloId[]])).optional(),
 })
 
 export const profilePatch = profileInput.partial()

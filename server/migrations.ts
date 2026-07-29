@@ -592,6 +592,40 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+
+  {
+    id: 13,
+    name: 'módulos por perfil: qué secciones lleva cada libro',
+    up: (db) => {
+      // La migración más pequeña del proyecto, y a propósito: **una tabla
+      // vacía y nada más**. No rellena una sola fila.
+      //
+      // Puede no rellenar porque la resolución de `shared/modulos.ts` trata la
+      // ausencia de fila como "usa el juego por omisión de este tipo de
+      // perfil", y ese juego es exactamente lo que cada perfil ve hoy: un
+      // personal, todo menos negocio; uno de negocio, todo. Así que después de
+      // migrar, nadie ve nada distinto — que es lo que R2 pide demostrar, y
+      // hay prueba de ello.
+      //
+      // La misma regla cubre dos casos que un relleno no cubriría: restaurar
+      // un respaldo anterior a esta fase, cuyo JSON no trae la tabla, y un
+      // módulo que se agregue en el futuro, que nace con su propio valor por
+      // omisión en vez de apagado para todos.
+      //
+      // `module` va sin CHECK de valores: el catálogo vive en el código y una
+      // lista cerrada aquí obligaría a reconstruir la tabla —tabla nueva,
+      // copia, DROP, RENAME— cada vez que aparezca un módulo. Una fila con un
+      // id que ya no existe simplemente no la lee nadie.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS profile_modules (
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          module TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+          PRIMARY KEY (profile_id, module)
+        );
+      `)
+    },
+  },
 ]
 
 /** Versión de esquema que espera este código. */

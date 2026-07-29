@@ -2,7 +2,7 @@ import type {
   Account, Alerta, Amortizacion, Analisis, Bandeja, Budget, Calendario, Category, Comparativa,
   Aging, CentroCosto, CompraMSI, Contraparte, Debt, DebtPayment, EstadoResultados, EstadoTarjeta,
   Factura, FlujoProyectado, Frecuencia, Goal, InformeImport, InformePrecios, Investment,
-  InvestmentEntryType, LoteImport, MapeoImport, Note, Profile, Recurrencia, ReporteAnual,
+  InvestmentEntryType, LoteImport, MapeoImport, ModuloId, Note, Profile, Recurrencia, ReporteAnual,
   ResultadoImport, RolCategoria, Simulacion, Summary, Tag, Tx, TxType,
 } from '../shared/types.ts'
 
@@ -197,11 +197,25 @@ export interface TintaDraft {
 export const api = {
   profiles: {
     list: () => req<Profile[]>('/api/profiles'),
-    create: (data: { name: string; kind: string; accent: string; dimensionLabel?: string } & TintaDraft) =>
-      req<Profile>('/api/profiles', { method: 'POST', body: JSON.stringify(data) }),
+    create: (
+      data: {
+        name: string
+        kind: string
+        accent: string
+        dimensionLabel?: string
+        modules?: ModuloId[]
+      } & TintaDraft,
+    ) => req<Profile>('/api/profiles', { method: 'POST', body: JSON.stringify(data) }),
     update: (
       id: number,
-      data: Partial<{ name: string; kind: string; accent: string; dimensionLabel: string }> & TintaDraft,
+      data: Partial<{
+        name: string
+        kind: string
+        accent: string
+        dimensionLabel: string
+        modules: ModuloId[]
+      }> &
+        TintaDraft,
     ) => req<Profile>(`/api/profiles/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     remove: (id: number) => req<{ ok: true }>(`/api/profiles/${id}`, { method: 'DELETE' }),
   },

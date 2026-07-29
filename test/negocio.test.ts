@@ -20,7 +20,7 @@ before(async () => {
 after(() => c?.cerrar())
 
 async function negocio(nombre: string) {
-  const { perfil, cuenta, categorias } = await libroBase(c, nombre)
+  const { perfil, cuenta, categorias } = await libroBase(c, nombre, 'negocio')
   const cliente = (
     await c.post('/api/contrapartes', { profileId: perfil.id, name: 'Cliente A', role: 'cliente' })
   ).body
@@ -277,7 +277,7 @@ describe('antigüedad de saldos', () => {
 
 describe('estado de resultados', () => {
   async function libroConVentas(nombre: string) {
-    const { perfil, cuenta, categorias } = await libroBase(c, nombre)
+    const { perfil, cuenta, categorias } = await libroBase(c, nombre, 'negocio')
     const ventas = categorias.find((k: any) => k.kind === 'ingreso')
     const gastos = categorias.filter((k: any) => k.kind === 'gasto')
     const insumos = gastos[0]
@@ -340,7 +340,7 @@ describe('estado de resultados', () => {
   })
 
   test('recibir un préstamo no es venta (D6 también manda aquí)', async () => {
-    const { perfil, cuenta } = await libroBase(c, 'D6 en resultados')
+    const { perfil, cuenta } = await libroBase(c, 'D6 en resultados', 'negocio')
     await c.post('/api/debts', {
       profileId: perfil.id,
       direction: 'por_pagar',
@@ -356,7 +356,7 @@ describe('estado de resultados', () => {
   })
 
   test('agrupa por la dimensión libre sin contar dos veces', async () => {
-    const { perfil, cuenta, categorias } = await libroBase(c, 'Centros')
+    const { perfil, cuenta, categorias } = await libroBase(c, 'Centros', 'negocio')
     const centro = (await c.post('/api/centros', { profileId: perfil.id, name: 'Obra Norte' })).body
     const gasto = categorias.find((k: any) => k.kind === 'gasto')
     const ingreso = categorias.find((k: any) => k.kind === 'ingreso')
@@ -391,7 +391,7 @@ describe('estado de resultados', () => {
 
 describe('flujo de caja proyectado', () => {
   test('parte de la caja de hoy y la mueve con lo que ya vence', async () => {
-    const { perfil, cuenta } = await libroBase(c, 'Flujo')
+    const { perfil, cuenta } = await libroBase(c, 'Flujo', 'negocio')
     const cliente = (
       await c.post('/api/contrapartes', { profileId: perfil.id, name: 'Cliente', role: 'cliente' })
     ).body
@@ -420,7 +420,7 @@ describe('flujo de caja proyectado', () => {
   })
 
   test('avisa el día en que la caja se pondría en rojo', async () => {
-    const { perfil, cuenta } = await libroBase(c, 'Flujo rojo')
+    const { perfil, cuenta } = await libroBase(c, 'Flujo rojo', 'negocio')
     const proveedor = (
       await c.post('/api/contrapartes', { profileId: perfil.id, name: 'Caro', role: 'proveedor' })
     ).body
@@ -434,7 +434,7 @@ describe('flujo de caja proyectado', () => {
   })
 
   test('una factura ya cobrada deja de proyectarse', async () => {
-    const { perfil, cuenta } = await libroBase(c, 'Flujo cobrado')
+    const { perfil, cuenta } = await libroBase(c, 'Flujo cobrado', 'negocio')
     const cliente = (
       await c.post('/api/contrapartes', { profileId: perfil.id, name: 'Cliente', role: 'cliente' })
     ).body
@@ -471,7 +471,7 @@ describe('integridad del perfil de negocio', () => {
   })
 
   test('borrar un centro no borra movimientos: los deja sin asignar', async () => {
-    const { perfil, cuenta, categorias } = await libroBase(c, 'Centro borrado')
+    const { perfil, cuenta, categorias } = await libroBase(c, 'Centro borrado', 'negocio')
     const centro = (await c.post('/api/centros', { profileId: perfil.id, name: 'Temporal' })).body
     const gasto = categorias.find((k: any) => k.kind === 'gasto')
     await c.post('/api/transactions', {
@@ -501,7 +501,7 @@ describe('integridad del perfil de negocio', () => {
   })
 
   test('el impuesto no puede ser mayor que el monto que lo contiene', async () => {
-    const { perfil, cuenta } = await libroBase(c, 'Impuesto imposible')
+    const { perfil, cuenta } = await libroBase(c, 'Impuesto imposible', 'negocio')
     const res = await c.post('/api/transactions', {
       profileId: perfil.id, accountId: cuenta.id, type: 'gasto',
       amountCents: 10000, date: '2026-07-10', taxCents: 12000,

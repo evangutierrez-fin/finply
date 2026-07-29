@@ -62,7 +62,9 @@ export function Taxonomia() {
     [profile.id, refreshKey],
   )
   const [error, setError] = useState<string | null>(null)
-  const esNegocio = profile.kind === 'negocio'
+  // El papel de una categoría solo significa algo en el estado de resultados,
+  // que es del módulo de negocio.
+  const esNegocio = profile.modules.includes('negocio')
   const [pendiente, setPendiente] = useState<Pendiente | null>(null)
   const [destino, setDestino] = useState(0)
   const [nuevaEtiqueta, setNuevaEtiqueta] = useState('')

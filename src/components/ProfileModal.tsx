@@ -1,7 +1,9 @@
 import { useState } from 'react'
-import type { Profile, ProfileKind } from '../../shared/types.ts'
+import type { ModuloId, Profile, ProfileKind } from '../../shared/types.ts'
+import { porOmision } from '../../shared/modulos.ts'
 import { api } from '../api.ts'
 import { Modal } from './Modal.tsx'
+import { ModulosPicker } from './ModulosPicker.tsx'
 import { TintaPicker, tintaInicial, tintaPayload, tintaValida } from './TintaPicker.tsx'
 
 export function ProfileModal({
@@ -23,9 +25,21 @@ export function ProfileModal({
     tintaInicial(profile?.accent ?? 'verde', profile?.accentHex ?? null, profile?.accentHexDark ?? null),
   )
   const [dimensionLabel, setDimensionLabel] = useState(profile?.dimensionLabel ?? 'Proyecto')
+  const [modules, setModules] = useState<ModuloId[]>(
+    () => profile?.modules ?? porOmision(profile?.kind ?? 'personal'),
+  )
+  // Un perfil nuevo cuyos módulos nadie ha tocado sigue al tipo; uno que ya
+  // existe no, porque su elección ya está hecha y cambiar de tipo no puede
+  // devolverle secciones que apagó.
+  const [tocado, setTocado] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+
+  const elegirKind = (next: ProfileKind) => {
+    setKind(next)
+    if (!profile && !tocado) setModules(porOmision(next))
+  }
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -39,6 +53,7 @@ export function ProfileModal({
         name: name.trim(),
         kind,
         dimensionLabel: dimensionLabel.trim() || 'Proyecto',
+        modules,
         ...tintaPayload(tinta),
       }
       const saved = profile
@@ -87,7 +102,7 @@ export function ProfileModal({
                   type="radio"
                   name="kind"
                   checked={kind === 'personal'}
-                  onChange={() => setKind('personal')}
+                  onChange={() => elegirKind('personal')}
                 />
                 Personal
               </label>
@@ -96,7 +111,7 @@ export function ProfileModal({
                   type="radio"
                   name="kind"
                   checked={kind === 'negocio'}
-                  onChange={() => setKind('negocio')}
+                  onChange={() => elegirKind('negocio')}
                 />
                 Negocio
               </label>
@@ -104,7 +119,19 @@ export function ProfileModal({
           </fieldset>
           <TintaPicker valor={tinta} onChange={setTinta} />
         </div>
-        {kind === 'negocio' && (
+        <ModulosPicker
+          valor={modules}
+          kind={kind}
+          onChange={(m) => {
+            setTocado(true)
+            setModules(m)
+          }}
+          titulo={profile ? 'Secciones de este libro' : '¿Qué llevas en este libro?'}
+        />
+        {/* La dimensión libre es de las vistas de negocio: se pregunta cuando
+            ese módulo está encendido, no cuando el tipo de perfil dice negocio.
+            Desde la Fase 9 el tipo solo elige el juego por omisión. */}
+        {modules.includes('negocio') && (
           <label className="campo">
             <span className="campo-label">Cómo llamas a tu dimensión libre</span>
             <input

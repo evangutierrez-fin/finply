@@ -16,7 +16,8 @@
 // y lo que ya calculan `estadoTarjetas` y `recurrencias.listar` se **reusa**,
 // no se reescribe. Hay una prueba que cuenta las consultas.
 
-import { db } from './db.ts'
+import { db, modulosDe } from './db.ts'
+import type { ModuloId } from '../shared/modulos.ts'
 import { estadoTarjetas } from './tarjetas.ts'
 import { listar as listarRecurrencias } from './recurrencias.ts'
 import { tablaAmortizacion } from '../shared/credito.ts'
@@ -330,18 +331,35 @@ const ORDEN: Record<Alerta['tipo'], number> = {
   meta: 4,
 }
 
+/** Qué módulo tiene que estar encendido para que una familia hable. */
+const MODULO_DE: Record<Alerta['tipo'], ModuloId> = {
+  tarjeta: 'tarjetas',
+  deuda: 'deudas',
+  presupuesto: 'presupuestos',
+  recurrencia: 'recurrencias',
+  meta: 'metas',
+}
+
 /**
  * Todo lo que hoy merece un aviso, de lo más urgente a lo menos. De solo
  * lectura: aquí no se escribe una sola fila.
+ *
+ * Las familias de un módulo apagado ni siquiera se calculan. No es solo
+ * cosmético: cada alerta lleva un `vista` al que se navega con un clic, y
+ * mandar al usuario a una sección que no está en su lomo es peor que callarse.
+ * Además ahorra sus consultas, que es justo lo que R11 pide.
  */
 export function alertas(profileId: number, hoy = hoyISO()): Alerta[] {
+  const activos = modulosDe(profileId)
+  const con = (id: ModuloId) => activos.includes(id)
+
   const lista = [
-    ...deTarjetas(profileId, hoy),
-    ...deDeudas(profileId, hoy),
-    ...dePresupuestos(profileId, hoy.slice(0, 7)),
-    ...deRecurrencias(profileId, hoy),
-    ...deMetas(profileId, hoy),
-  ]
+    ...(con('tarjetas') ? deTarjetas(profileId, hoy) : []),
+    ...(con('deudas') ? deDeudas(profileId, hoy) : []),
+    ...(con('presupuestos') ? dePresupuestos(profileId, hoy.slice(0, 7)) : []),
+    ...(con('recurrencias') ? deRecurrencias(profileId, hoy) : []),
+    ...(con('metas') ? deMetas(profileId, hoy) : []),
+  ].filter((a) => con(MODULO_DE[a.tipo]))
   const peso = (a: Alerta) => (a.severidad === 'alta' ? 0 : 1)
   return lista.sort((a, b) => peso(a) - peso(b) || ORDEN[a.tipo] - ORDEN[b.tipo])
 }

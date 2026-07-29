@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { vistaVisible } from '../../shared/modulos.ts'
 import type { Profile } from '../../shared/types.ts'
 
 /** El punto del perfil: su preset, o su tinta propia si eligió una. */
@@ -45,18 +46,11 @@ export type View =
 export type ThemePref = 'claro' | 'oscuro' | 'auto'
 
 /**
- * El grupo de negocio solo existe en perfiles de negocio: un libro personal no
- * tiene por qué llenarse de facturas y contrapartes que nunca va a usar.
+ * El lomo completo. Lo que se muestra sale de cruzarlo con los módulos activos
+ * del perfil: una vista de módulo apagado no aparece, y un grupo que se queda
+ * sin renglones desaparece con su rótulo. Antes esto se decidía con
+ * `profile.kind`; ahora el tipo solo elige el juego por omisión (D16).
  */
-const NAV_NEGOCIO: { label: string; items: { id: View; label: string }[] } = {
-  label: 'Negocio',
-  items: [
-    { id: 'contrapartes', label: 'Contrapartes' },
-    { id: 'facturas', label: 'Facturas' },
-    { id: 'negocio', label: 'Resultados' },
-  ],
-}
-
 const NAV_GROUPS: { label: string | null; items: { id: View; label: string }[] }[] = [
   { label: null, items: [{ id: 'resumen', label: 'Resumen' }] },
   {
@@ -86,6 +80,14 @@ const NAV_GROUPS: { label: string | null; items: { id: View; label: string }[] }
       { id: 'presupuestos', label: 'Presupuestos' },
       { id: 'metas', label: 'Metas' },
       { id: 'notas', label: 'Notas' },
+    ],
+  },
+  {
+    label: 'Negocio',
+    items: [
+      { id: 'contrapartes', label: 'Contrapartes' },
+      { id: 'facturas', label: 'Facturas' },
+      { id: 'negocio', label: 'Resultados' },
     ],
   },
 ]
@@ -123,6 +125,13 @@ export function Sidebar({
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+
+  // Un grupo que se queda sin renglones desaparece con su rótulo: "Patrimonio"
+  // sobre un hueco se lee como un error de la app, no como una elección.
+  const grupos = NAV_GROUPS.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => vistaVisible(item.id, profile.modules)),
+  })).filter((group) => group.items.length > 0)
 
   useEffect(() => {
     if (!open) return
@@ -210,7 +219,7 @@ export function Sidebar({
       </div>
 
       <nav className="nav" aria-label="Secciones">
-        {[...NAV_GROUPS, ...(profile.kind === 'negocio' ? [NAV_NEGOCIO] : [])].map((group, gi) => (
+        {grupos.map((group, gi) => (
           <div className="nav-grupo" key={group.label ?? gi}>
             {group.label && <span className="nav-grupo-label">{group.label}</span>}
             {group.items.map((item) => (

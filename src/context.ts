@@ -10,6 +10,12 @@ export interface AppState {
   stamp: (text: string) => void
   /** Abre el formulario de movimiento; con `tx` entra en modo edición. */
   openTx: (tx?: Tx) => void
+  /**
+   * Abre la ficha del perfil abierto. Los módulos se editan ahí y no en dos
+   * lados: Ajustes y la sección apagada son dos puertas al mismo formulario,
+   * para que no puedan decir cosas distintas.
+   */
+  editProfile: () => void
 }
 
 export const AppCtx = createContext<AppState | null>(null)

@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import type { Profile, ProfileKind, Tx } from '../shared/types.ts'
+import type { ModuloId, Profile, ProfileKind, Tx } from '../shared/types.ts'
+import { MODULOS, moduloDeVista, porOmision, vistaVisible } from '../shared/modulos.ts'
 import { api } from './api.ts'
 import { AppCtx } from './context.ts'
 import { Sidebar, type ThemePref, type View } from './components/Sidebar.tsx'
 import { TxModal } from './components/TxModal.tsx'
+import { ModulosPicker } from './components/ModulosPicker.tsx'
 import { ProfileModal } from './components/ProfileModal.tsx'
 import { TintaPicker, tintaInicial, tintaPayload, tintaValida } from './components/TintaPicker.tsx'
 import { Resumen } from './views/Resumen.tsx'
@@ -42,19 +44,36 @@ function viewFromHash(): View {
 }
 
 function Onboarding({ onCreated }: { onCreated: (profile: Profile) => void }) {
+  const [paso, setPaso] = useState<1 | 2>(1)
   const [name, setName] = useState('')
   const [kind, setKind] = useState<ProfileKind>('personal')
   const [tinta, setTinta] = useState(() => tintaInicial('verde', null, null))
+  // Los módulos siguen al tipo mientras nadie los toque: cambiar de personal a
+  // negocio en el primer paso tiene que traer Negocio encendido al segundo.
+  const [modules, setModules] = useState<ModuloId[]>(() => porOmision('personal'))
+  const [tocado, setTocado] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
-  const submit = async (e: React.FormEvent) => {
+  const elegirKind = (next: ProfileKind) => {
+    setKind(next)
+    if (!tocado) setModules(porOmision(next))
+  }
+
+  const siguiente = (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim()) return setError('Ponle nombre a tu primer perfil')
     if (!tintaValida(tinta)) return setError('Esa tinta no se lee: ajústala hasta que cumpla AA')
+    setError(null)
+    setPaso(2)
+  }
+
+  const crear = async () => {
     setSaving(true)
     try {
-      onCreated(await api.profiles.create({ name: name.trim(), kind, ...tintaPayload(tinta) }))
+      onCreated(
+        await api.profiles.create({ name: name.trim(), kind, modules, ...tintaPayload(tinta) }),
+      )
     } catch (err) {
       setError((err as Error).message)
       setSaving(false)
@@ -66,38 +85,89 @@ function Onboarding({ onCreated }: { onCreated: (profile: Profile) => void }) {
       <div className="portada-carta">
         <span className="marca-nombre">Finply</span>
         <p className="portada-lema">Tu libro de finanzas. Manual, local y tuyo.</p>
-        <form className="forma" onSubmit={submit}>
-          <label className="campo">
-            <span className="campo-label">Nombre del perfil</span>
-            <input
-              className="campo-input"
-              placeholder="Ej. Ana · Personal"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              autoFocus
+        {paso === 1 ? (
+          <form className="forma" onSubmit={siguiente}>
+            <label className="campo">
+              <span className="campo-label">Nombre del perfil</span>
+              <input
+                className="campo-input"
+                placeholder="Ej. Ana · Personal"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                autoFocus
+              />
+            </label>
+            <div className="campos-2">
+              <fieldset className="campo campo-fieldset">
+                <legend className="campo-label">Tipo de libro</legend>
+                <div className="radios">
+                  <label className="radio">
+                    <input type="radio" checked={kind === 'personal'} onChange={() => elegirKind('personal')} />
+                    Personal
+                  </label>
+                  <label className="radio">
+                    <input type="radio" checked={kind === 'negocio'} onChange={() => elegirKind('negocio')} />
+                    Negocio
+                  </label>
+                </div>
+              </fieldset>
+              <TintaPicker valor={tinta} onChange={setTinta} />
+            </div>
+            {error && <p className="forma-error" role="alert">{error}</p>}
+            <button type="submit" className="btn btn-primario">Continuar</button>
+          </form>
+        ) : (
+          <form
+            className="forma"
+            onSubmit={(e) => {
+              e.preventDefault()
+              void crear()
+            }}
+          >
+            <ModulosPicker
+              valor={modules}
+              kind={kind}
+              onChange={(m) => {
+                setTocado(true)
+                setModules(m)
+              }}
             />
-          </label>
-          <div className="campos-2">
-            <fieldset className="campo campo-fieldset">
-              <legend className="campo-label">Tipo de libro</legend>
-              <div className="radios">
-                <label className="radio">
-                  <input type="radio" checked={kind === 'personal'} onChange={() => setKind('personal')} />
-                  Personal
-                </label>
-                <label className="radio">
-                  <input type="radio" checked={kind === 'negocio'} onChange={() => setKind('negocio')} />
-                  Negocio
-                </label>
-              </div>
-            </fieldset>
-            <TintaPicker valor={tinta} onChange={setTinta} />
-          </div>
-          {error && <p className="forma-error" role="alert">{error}</p>}
-          <button type="submit" className="btn btn-primario" disabled={saving}>
-            {saving ? 'Abriendo…' : 'Abrir mi libro'}
-          </button>
-        </form>
+            {error && <p className="forma-error" role="alert">{error}</p>}
+            <footer className="forma-pie forma-pie-doble">
+              <button type="button" className="btn-liga" onClick={() => setPaso(1)}>
+                ‹ Atrás
+              </button>
+              <button type="submit" className="btn btn-primario" disabled={saving}>
+                {saving ? 'Abriendo…' : 'Abrir mi libro'}
+              </button>
+            </footer>
+          </form>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Lo que se ve al llegar por el hash a una sección de un módulo apagado.
+ *
+ * No se redirige al Resumen en silencio: R17 dice que apagar **oculta, nunca
+ * borra**, y un enlace guardado que lleva a otro lado se lee como que los
+ * datos ya no están. Se dice qué pasó y se ofrece el interruptor.
+ */
+function ModuloApagado({ vista, onEncender }: { vista: View; onEncender: () => void }) {
+  const modulo = MODULOS.find((m) => m.id === moduloDeVista(vista))
+  return (
+    <div className="vista">
+      <div className="vacio">
+        <p className="vacio-titulo">{modulo?.label ?? 'Este módulo'} está apagado en este perfil.</p>
+        <p className="vacio-sub">
+          Por eso no aparece en el lomo. Nada se borró: lo que hayas registrado sigue ahí y
+          vuelve a la vista en cuanto lo enciendas.
+        </p>
+        <button type="button" className="btn btn-primario" onClick={onEncender}>
+          Encender {modulo?.label ?? 'el módulo'}
+        </button>
       </div>
     </div>
   )
@@ -208,7 +278,16 @@ export default function App() {
       : undefined
 
   return (
-    <AppCtx.Provider value={{ profile, refreshKey, bump, stamp, openTx }}>
+    <AppCtx.Provider
+      value={{
+        profile,
+        refreshKey,
+        bump,
+        stamp,
+        openTx,
+        editProfile: () => setProfileModal({ open: true, profile }),
+      }}
+    >
       <div
         className="app"
         data-accent={profile.accent}
@@ -228,6 +307,14 @@ export default function App() {
           onRegister={() => openTx()}
         />
         <main className="pagina" key={`${profile.id}-${view}`}>
+          {!vistaVisible(view, profile.modules) && (
+            <ModuloApagado
+              vista={view}
+              onEncender={() => setProfileModal({ open: true, profile })}
+            />
+          )}
+          {vistaVisible(view, profile.modules) && (
+          <>
           {view === 'resumen' && <Resumen onNav={nav} />}
           {view === 'movimientos' && <Movimientos />}
           {view === 'cuentas' && <Cuentas />}
@@ -248,6 +335,8 @@ export default function App() {
           {view === 'metas' && <Metas />}
           {view === 'notas' && <Notas />}
           {view === 'ajustes' && <Ajustes />}
+          </>
+          )}
         </main>
 
         {txModal.open && (
