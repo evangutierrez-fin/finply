@@ -22,6 +22,16 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   propias cuentas, categorías, movimientos, deudas, inversiones, metas y notas.
   Ideal para separar tus finanzas personales de las de tu negocio. Cada perfil
   elige su tinta (verde banca, latón, cobalto o vino).
+- **Cada libro lleva solo lo suyo** — al crear un perfil, Finply te pregunta
+  qué llevas en él: tarjetas de crédito, deudas, inversiones, recurrencias,
+  presupuestos, metas, notas, negocio. Lo que no marques no aparece en el lomo
+  ni te llena el formulario de campos que nunca usas. Viene todo encendido
+  según el tipo de libro, así que aceptar sin leer también funciona, y se
+  cambia cuando quieras desde Ajustes. **Apagar una sección no borra nada**: el
+  dato sigue ahí, sigue contando en tu patrimonio y vuelve a la vista en cuanto
+  la enciendas — si llegas a una sección apagada, Finply te lo dice en vez de
+  hacerte creer que se perdió. Y el tipo de libro solo elige el punto de
+  partida: un perfil personal puede llevar facturas si le sirven.
 - **Cuentas múltiples** — efectivo, banco, tarjeta, ahorro… con saldo inicial,
   saldo calculado y archivado (nunca pierdes historia).
 - **Movimientos manuales** — gastos, ingresos y transferencias entre cuentas,
@@ -92,7 +102,8 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   equilibrio y el flujo de caja proyectado a 30, 60 o 90 días. Nada es de un
   giro ni de un país: el identificador fiscal es libre, el impuesto se escribe
   en monto y la dimensión libre —proyecto, obra, sucursal— la nombras tú.
-  Solo aparece en los perfiles de negocio.
+  Viene encendido en los libros de negocio y apagado en los personales, pero es
+  una casilla: enciéndela si facturas por tu cuenta.
 - **Simulador de patrimonio** — qué pasa si apartas X al mes durante N años, y
   si conviene más invertirlo o pagar primero la deuda cara. Sale de tus cifras
   de hoy, la tasa la pones tú y los cinco supuestos van escritos junto al
@@ -134,6 +145,14 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   razón de contraste mientras eliges —`6.45:1 · cumple AA`— y **no guarda** una
   tinta que no se pueda leer. Los colores de las gráficas no se tocan: ese par
   está validado para daltonismo.
+- **Gráficas que se leen solas** — cada una lleva su eje con cifras en pasos
+  redondos ($0 · $5k · $10k), así que se entiende sin pasarle el ratón encima
+  y **se imprime bien**: el cierre de año en papel ya no son barras sin
+  números. Se recorren con las flechas del teclado y cada punto se anuncia,
+  y detrás de cada una hay una tabla con los datos para lectores de pantalla.
+  Cuando un solo día se dispara —la nómina mide treinta veces cualquier gasto—
+  la escala se corta para que el resto se vea, la barra recortada se marca con
+  una punta serrada y el pie lo dice con palabras: nunca en silencio.
 - **Diseño accesible** — pares de colores de gráfica validados para daltonismo
   en ambos temas (con textura como codificación secundaria), foco visible por
   teclado y respeto a `prefers-reduced-motion`.
@@ -225,6 +244,8 @@ shared/
   rendimiento.ts XIRR por bisección, con null donde no se puede afirmar (puro)
   simulador.ts   proyección de patrimonio mes a mes (puro)
   negocio.ts     tramos de antigüedad y punto de equilibrio (puro)
+  modulos.ts     catálogo de secciones por perfil y su resolución (puro)
+  escalas.ts     marcas del eje y techo de una escala con atípico (puro)
 src/
   views/         Resumen · Movimientos · Cuentas · Categorías · Reportes
                  · Análisis · Tarjetas · Deudas · Inversiones · Simulador
@@ -251,7 +272,7 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 
 | Método y ruta | Descripción |
 |---|---|
-| `GET/POST /api/profiles` · `PATCH/DELETE /:id` | Perfiles (libros) |
+| `GET/POST /api/profiles` · `PATCH/DELETE /:id` | Perfiles (libros), con sus secciones activas en `modules` |
 | `GET/POST /api/accounts` · `PATCH/DELETE /:id` | Cuentas con saldo calculado |
 | `GET/POST /api/categories` · `PATCH/DELETE /:id` | Categorías (borrar acepta `?reassignTo=` o `?force=true`) |
 | `GET/POST /api/tags` · `PATCH/DELETE /:id` | Etiquetas por perfil |
@@ -334,16 +355,48 @@ donde aparece, que en el tema oscuro es la hoja, no el fondo.
 
 ## Hoja de ruta
 
-**Siguiente**
+**Lo que corrige algo que hoy está mal**
 
-- Funciones de negocio agnósticas del giro: contrapartes reutilizables,
-  facturas emitidas y recibidas con vencimiento, antigüedad de saldos, IVA
-  trasladado y acreditable, centros de costo, estado de resultados simple,
-  punto de equilibrio y flujo de caja proyectado a 30/60/90 días.
+- **Patrimonio completo** — bienes (casa, auto, herramienta) con su valor y su
+  liga a la deuda que los financia: hoy financiar un coche baja tu patrimonio y
+  el coche nunca lo sube. Metas ligadas al libro, para que apartar dinero salga
+  de una cuenta de verdad. Y cerrar el tema de la moneda: una por perfil, en
+  vez de una columna que hoy suma dólares como si fueran pesos.
+- **Auditoría de las cuentas de Finply** — verificar cada cifra que Finply
+  calcula contra aritmética hecha aparte, dominio por dominio y simulando la
+  vida entera de cada uno. Así salió el defecto que daba una deuda por saldada
+  once pagos antes de tiempo; lo que se hizo con crédito hay que hacerlo con
+  todo lo demás.
 
-**Después**
-- Multimoneda de verdad (hoy la columna existe pero los totales asumen MXN)
-- Importar CFDI (XML del SAT) para perfiles de negocio
+**El libro, más completo**
+
+- Partida dividida (un ticket, varias categorías), conciliación contra el
+  estado de cuenta y reembolsos ligados al gasto original
+- **¿Llego a fin de mes?** — saldo proyectado día a día con lo que ya sabe tu
+  calendario, y el primer día en rojo si lo hay
+- Presupuesto que sabe qué día del mes es; Resumen con el cambio contra el mes
+  pasado y la composición de tu patrimonio
+- Más ángulos de análisis: tendencia, estacionalidad, gasto hormiga
+- Simulador: la gráfica del **rendimiento solo**, sin el patrimonio, que es lo
+  que de verdad distingue una ruta de la otra
+
+**Negocio**
+
+- Retenciones, notas de crédito, anticipos, facturas recurrentes y
+  rentabilidad por cliente
+- Cotizaciones que se vuelven factura, corte de caja, compras y órdenes
+- Módulos de giro opcionales: inmuebles en renta, horas facturables e
+  inventario simple
+
+**Cómo se usa**
+
+- Registrar más rápido, y que las secciones se hablen: pagar la tarjeta desde
+  la alerta, asentar el vencimiento desde el calendario, cobrar la factura
+  desde la antigüedad de saldos — sin navegar ni volver a teclear lo que Finply
+  ya sabe. Nunca automático: se acorta el camino hasta la confirmación, no se
+  quita la confirmación.
+- Personalización: campos propios, plantillas de movimiento, orden de las
+  secciones, formato de fechas
 - Adjuntar recibos a los movimientos
 - Móvil/PWA e internacionalización
 
