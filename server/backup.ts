@@ -37,6 +37,10 @@ export const TABLES = [
   'investment_entries',
   'goals',
   'goal_entries',
+  // Los bienes van antes que los movimientos como todo lo demás, y después de
+  // `debts` porque un bien puede apuntar a la deuda que lo financia.
+  'assets',
+  'asset_valuations',
   'budgets',
   'notes',
   'import_batches',
@@ -54,6 +58,12 @@ export const TABLES = [
   'invoices',
   'transactions',
   'transaction_tags',
+  // Todo lo que cuelga del movimiento va después de él: el reparto por
+  // categoría, el recibo y —aunque no cuelgue— el corte de conciliación, que
+  // solo necesita su cuenta.
+  'tx_splits',
+  'tx_attachments',
+  'account_statements',
   // Los periodos resueltos van hasta el final: apuntan al movimiento asentado.
   'recurrence_runs',
 ] as const

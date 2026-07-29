@@ -423,6 +423,65 @@ describe('migraciones', () => {
     db.close()
   })
 
+  test('un libro en la versión 13 estrena el reparto y la conciliación sin estrenarlos', () => {
+    const db = baseEnVersion(13)
+    db.exec(`
+      INSERT INTO categories (id, profile_id, name, kind) VALUES (77, 1, 'Despensa quincenal', 'gasto');
+      INSERT INTO transactions (id, profile_id, account_id, type, amount_cents, date, category_id, note)
+        VALUES (3, 1, 1, 'gasto', 123456, '2026-07-15', 77, 'Despensa');
+    `)
+
+    migrate(db)
+
+    assert.equal((db.prepare('PRAGMA user_version').get() as any).user_version, SCHEMA_VERSION)
+
+    // Las tres tablas nuevas existen y nacen vacías: nadie hereda un reparto,
+    // un corte ni un recibo que no pidió.
+    for (const tabla of ['tx_splits', 'account_statements', 'tx_attachments']) {
+      const fila = db.prepare(`SELECT COUNT(*) AS n FROM ${tabla}`).get() as any
+      assert.equal(fila.n, 0, `${tabla} nace vacía`)
+    }
+
+    // Y el movimiento que ya existía significa exactamente lo mismo que antes:
+    // su categoría manda porque no tiene reparto, no está conciliado y no
+    // devuelve nada. Es lo que hace inofensiva a esta migración.
+    const mov = db.prepare('SELECT * FROM transactions WHERE id = 3').get() as any
+    assert.equal(mov.amount_cents, 123456)
+    assert.equal(mov.category_id, 77)
+    assert.equal(mov.reconciled_at, null, 'sin conciliar, que es como estaba')
+    assert.equal(mov.refund_of_id, null)
+    assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0)
+    db.close()
+  })
+
+  test('borrar el movimiento se lleva su reparto y su recibo, pero no su devolución', () => {
+    const db = baseEnVersion(13)
+    migrate(db)
+    db.exec(`
+      INSERT INTO categories (id, profile_id, name, kind) VALUES (77, 1, 'Ropa de trabajo', 'gasto');
+      INSERT INTO categories (id, profile_id, name, kind) VALUES (78, 1, 'Devoluciones', 'ingreso');
+      INSERT INTO transactions (id, profile_id, account_id, type, amount_cents, date, category_id)
+        VALUES (10, 1, 1, 'gasto', 100000, '2026-07-01', 77);
+      INSERT INTO tx_splits (tx_id, category_id, amount_cents) VALUES (10, 77, 100000);
+      INSERT INTO tx_attachments (tx_id, filename, size_bytes, data_b64)
+        VALUES (10, 'ticket.png', 4, 'AAAA');
+      INSERT INTO transactions (id, profile_id, account_id, type, amount_cents, date, category_id, refund_of_id)
+        VALUES (11, 1, 1, 'ingreso', 30000, '2026-07-09', 78, 10);
+    `)
+
+    db.exec('DELETE FROM transactions WHERE id = 10')
+
+    // El reparto y el recibo son del movimiento: se van con él.
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM tx_splits').get() as any).n, 0)
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM tx_attachments').get() as any).n, 0)
+    // La devolución no: ese dinero sí entró a la cuenta. Solo pierde la liga,
+    // igual que el desembolso de una deuda cuando se borra la deuda.
+    const devolucion = db.prepare('SELECT * FROM transactions WHERE id = 11').get() as any
+    assert.equal(devolucion.amount_cents, 30000)
+    assert.equal(devolucion.refund_of_id, null)
+    db.close()
+  })
+
   test('los CHECK de crédito rechazan datos imposibles', () => {
     const db = baseEnVersion(5)
     migrate(db)

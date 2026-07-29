@@ -10,6 +10,7 @@
 // Sin esto, sacar un crédito de $240,000 duplicaba la tasa de ahorro del mes.
 
 import { db } from './db.ts'
+import { bienesPorMes } from './bienes.ts'
 import { recorrer, type EntradaInversion } from '../shared/inversiones.ts'
 import type { Comparativa, ReporteAnual } from '../shared/types.ts'
 
@@ -27,20 +28,68 @@ function correrMes(month: string, delta: number): string {
  * Se exporta porque el panel de análisis mide lo mismo: si tuviera su propia
  * versión de la regla, el usuario acabaría viendo dos tasas de ahorro
  * distintas de los mismos movimientos.
+ *
+ * Desde la Fase 10 lee además el **reparto** de una partida dividida (D17) y
+ * pone en **negativo** una devolución: un reembolso no es dinero que ganaste,
+ * es gasto que no acabaste haciendo.
  */
 export const MONTO_OPERATIVO = `
   CASE
     WHEN t.debt_id IS NOT NULL THEN 0
     WHEN t.investment_entry_id IS NOT NULL THEN 0
+    WHEN t.goal_entry_id IS NOT NULL THEN 0
     WHEN t.debt_payment_id IS NOT NULL THEN COALESCE(dp.interest_cents, 0)
-    ELSE t.amount_cents
+    WHEN t.refund_of_id IS NOT NULL THEN -COALESCE(s.amount_cents, t.amount_cents)
+    ELSE COALESCE(s.amount_cents, t.amount_cents)
   END`
 
-/** El JOIN que `MONTO_OPERATIVO` necesita para ver el desglose del abono. */
+/**
+ * De qué lado cuenta un movimiento. Casi siempre su propio tipo; una
+ * devolución cuenta del lado del **gasto** aunque el dinero haya entrado, que
+ * es justo lo que arregla la tasa de ahorro inflada.
+ *
+ * Va junto con `MONTO_OPERATIVO`: uno da el signo y el otro el lado, y usar
+ * `t.type` suelto en un agregado de dinero es el error que esto evita.
+ */
+export const TIPO_OPERATIVO = `
+  CASE WHEN t.refund_of_id IS NOT NULL THEN 'gasto' ELSE t.type END`
+
+/**
+ * A qué categoría se apunta. Manda el renglón del reparto; si no hay reparto y
+ * el movimiento es una devolución, manda la categoría del **gasto original**
+ * —devolver una camisa baja Ropa, no sube "Otros ingresos"—; si no, la suya.
+ */
+export const CATEGORIA_OPERATIVA = `COALESCE(s.category_id, o.category_id, t.category_id)`
+
+/**
+ * El FROM que las tres expresiones de arriba necesitan.
+ *
+ * `s` es el reparto: con el LEFT JOIN, un movimiento sin dividir produce una
+ * fila con su monto entero y uno dividido produce una por renglón. Sumar
+ * `MONTO_OPERATIVO` da el mismo total en los dos casos —los renglones suman
+ * exactamente el monto—, y agrupar por `CATEGORIA_OPERATIVA` reparte. Es lo
+ * que permitió dividir partidas sin tocar una sola consulta de saldo.
+ */
 export const DESDE_MOVIMIENTOS = `
   FROM transactions t
   LEFT JOIN debt_payments dp ON dp.id = t.debt_payment_id
+  LEFT JOIN tx_splits s ON s.tx_id = t.id
+  LEFT JOIN transactions o ON o.id = t.refund_of_id
 `
+
+/**
+ * Lo gastado contra un presupuesto `b` (su perfil, su categoría y su mes).
+ * Vive aquí, y no escrito dos veces, porque lo miden la vista de Presupuestos
+ * y la alerta de tope excedido: dos expresiones separadas acabarían dando dos
+ * cifras del mismo tope.
+ */
+export const GASTO_DE_PRESUPUESTO = `
+  COALESCE((SELECT SUM(${MONTO_OPERATIVO})
+    ${DESDE_MOVIMIENTOS}
+    WHERE t.profile_id = b.profile_id
+      AND ${CATEGORIA_OPERATIVA} = b.category_id
+      AND ${TIPO_OPERATIVO} = 'gasto'
+      AND substr(t.date, 1, 7) = b.month), 0)`
 
 /** Los doce meses de un año, en orden, como 'AAAA-MM'. */
 function mesesDelAnio(year: number): string[] {
@@ -55,8 +104,8 @@ export function ingresoGastoPorMes(profileId: number, desde: string, hasta: stri
   const filas: any[] = db
     .prepare(
       `SELECT substr(t.date, 1, 7) AS mes,
-        COALESCE(SUM(CASE WHEN t.type = 'ingreso' THEN ${MONTO_OPERATIVO} END), 0) AS ingreso,
-        COALESCE(SUM(CASE WHEN t.type = 'gasto' THEN ${MONTO_OPERATIVO} END), 0) AS gasto
+        COALESCE(SUM(CASE WHEN ${TIPO_OPERATIVO} = 'ingreso' THEN ${MONTO_OPERATIVO} END), 0) AS ingreso,
+        COALESCE(SUM(CASE WHEN ${TIPO_OPERATIVO} = 'gasto' THEN ${MONTO_OPERATIVO} END), 0) AS gasto
        ${DESDE_MOVIMIENTOS}
        WHERE t.profile_id = ? AND t.type IN ('ingreso', 'gasto')
          AND substr(t.date, 1, 7) BETWEEN ? AND ?
@@ -75,11 +124,11 @@ export function gastoPorCategoria(profileId: number, desde: string, hasta: strin
       `SELECT COALESCE(c.name, 'Sin categoría') AS name,
         SUM(${MONTO_OPERATIVO}) AS gasto
        ${DESDE_MOVIMIENTOS}
-       LEFT JOIN categories c ON c.id = t.category_id
-       WHERE t.profile_id = ? AND t.type = 'gasto'
+       LEFT JOIN categories c ON c.id = ${CATEGORIA_OPERATIVA}
+       WHERE t.profile_id = ? AND ${TIPO_OPERATIVO} = 'gasto'
          AND substr(t.date, 1, 7) BETWEEN ? AND ?
        GROUP BY name
-       HAVING gasto > 0
+       HAVING gasto <> 0
        ORDER BY gasto DESC`,
     )
     .all(profileId, desde, hasta) as { name: string; gasto: number }[]
@@ -93,10 +142,10 @@ function gastoPorEtiqueta(profileId: number, desde: string, hasta: string) {
        ${DESDE_MOVIMIENTOS}
        JOIN transaction_tags tt ON tt.transaction_id = t.id
        JOIN tags tg ON tg.id = tt.tag_id
-       WHERE t.profile_id = ? AND t.type = 'gasto'
+       WHERE t.profile_id = ? AND ${TIPO_OPERATIVO} = 'gasto'
          AND substr(t.date, 1, 7) BETWEEN ? AND ?
        GROUP BY tg.id
-       HAVING gasto > 0
+       HAVING gasto <> 0
        ORDER BY gasto DESC
        LIMIT 12`,
     )
@@ -226,8 +275,14 @@ function deudasPorMes(profileId: number, meses: string[]) {
 
 /**
  * Patrimonio al cierre de cada mes, con la **misma fórmula que el Resumen**:
- * cuentas activas + inversiones + lo que te deben − lo que debes. Si las dos
- * dejaran de coincidir, el usuario vería dos cifras distintas de lo mismo.
+ * cuentas activas + inversiones + bienes + lo que te deben − lo que debes. Si
+ * las dos dejaran de coincidir, el usuario vería dos cifras distintas de lo
+ * mismo.
+ *
+ * Los bienes entraron en la Fase 11 (H3): sin ellos, financiar un auto solo
+ * restaba. Y entran por su **valor**, no por su equity, porque la deuda que lo
+ * financia ya está restada en `porPagar` y contarla dos veces sería el error
+ * contrario (R18).
  */
 function patrimonioPorMes(profileId: number, meses: string[]) {
   const apertura: any = db
@@ -237,20 +292,23 @@ function patrimonioPorMes(profileId: number, meses: string[]) {
     .get(profileId)
   const deltas = deltaCuentasPorMes(profileId)
   const inversiones = inversionesPorMes(profileId, meses)
+  const bienes = bienesPorMes(profileId, meses)
   const deudas = deudasPorMes(profileId, meses)
 
   return meses.map((mes) => {
     const cuentas =
       apertura.n + deltas.filter((d) => d.mes <= mes).reduce((s, d) => s + d.delta, 0)
     const inv = inversiones.get(mes) ?? 0
+    const bien = bienes.get(mes) ?? 0
     const { porCobrar, porPagar } = deudas.get(mes) ?? { porCobrar: 0, porPagar: 0 }
     return {
       month: mes,
       cuentasCents: cuentas,
       inversionesCents: inv,
+      bienesCents: bien,
       porCobrarCents: porCobrar,
       porPagarCents: porPagar,
-      totalCents: cuentas + inv + porCobrar - porPagar,
+      totalCents: cuentas + inv + bien + porCobrar - porPagar,
     }
   })
 }

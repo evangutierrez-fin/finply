@@ -36,6 +36,10 @@ export function AccountModal({
   )
   const [corte, setCorte] = useState(account?.cutDay != null ? String(account.cutDay) : '')
   const [pago, setPago] = useState(account?.dueDay != null ? String(account.dueDay) : '')
+  const [minimo, setMinimo] = useState(
+    account?.minBalanceCents != null ? (account.minBalanceCents / 100).toFixed(2) : '',
+  )
+  const [institution, setInstitution] = useState(account?.institution ?? '')
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
@@ -77,6 +81,15 @@ export function AccountModal({
     const credito =
       type === 'tarjeta' ? { creditLimitCents, cutDay, dueDay } : {}
 
+    // Vacío = sin aviso, que es distinto de un mínimo de cero. Y admite
+    // negativo: el mínimo de una tarjeta es cuánto puedes deber.
+    const minBalanceCents =
+      minimo.trim() === '' ? null : parseAmount(minimo, { permitirNegativo: true })
+    if (minimo.trim() !== '' && minBalanceCents === null) {
+      return setError('El saldo mínimo no es un monto válido')
+    }
+    const extra = { minBalanceCents, institution: institution.trim() }
+
     setSaving(true)
     setError(null)
     try {
@@ -86,6 +99,7 @@ export function AccountModal({
           type,
           openingCents,
           ...credito,
+          ...extra,
         })
       } else {
         await api.accounts.create({
@@ -94,6 +108,7 @@ export function AccountModal({
           type,
           openingCents,
           ...credito,
+          ...extra,
         })
       }
       stamp(account ? 'Actualizado' : 'Abierta')
@@ -142,6 +157,34 @@ export function AccountModal({
                 onChange={(e) => setOpening(e.target.value)}
               />
             </div>
+          </label>
+        </div>
+        <div className="campos-2">
+          <label className="campo">
+            <span className="campo-label">Institución</span>
+            <input
+              className="campo-input"
+              placeholder="Ej. BBVA, Nu, bajo el colchón"
+              maxLength={60}
+              value={institution}
+              onChange={(e) => setInstitution(e.target.value)}
+            />
+          </label>
+          <label className="campo">
+            <span className="campo-label">Avísame si baja de</span>
+            <div className="monto-wrap">
+              <span className="monto-signo" aria-hidden="true">$</span>
+              <input
+                className="campo-input"
+                inputMode="decimal"
+                placeholder="Sin aviso"
+                value={minimo}
+                onChange={(e) => setMinimo(e.target.value)}
+              />
+            </div>
+            <span className="campo-ayuda">
+              Vacío no avisa nunca. Quedarte justo en el mínimo no cuenta como bajar de él.
+            </span>
           </label>
         </div>
         {type === 'tarjeta' && (

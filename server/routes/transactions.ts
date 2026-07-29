@@ -1,13 +1,22 @@
 import { Router } from 'express'
 import {
-  attachTags, db, ensureAccount, ensureCategory, ensureTags, getTx, httpError, inTransaction,
-  mapTx, refreshDebtStatus, setTxTags, TX_SELECT,
+  attachAdjuntos, attachSplits, attachTags, db, ensureAccount, ensureCategory, ensureTags, getTx,
+  httpError, inTransaction, mapTx, refreshDebtStatus, setTxSplits, setTxTags, TX_SELECT,
 } from '../db.ts'
 import { armarCsv, celdaTexto, montoCsv } from '../csv.ts'
 import { sincronizarCompraMSI } from '../tarjetas.ts'
-import { txInput, txQuery } from '../validators.ts'
+import { adjuntoInput, conciliarInput, txInput, txQuery } from '../validators.ts'
+import { hoyISO } from '../../shared/fechas.ts'
 
 const router = Router()
+
+/** Todo lo que cuelga de un movimiento, en tres consultas y no en 3×N (R11). */
+function hidratar(txs: ReturnType<typeof mapTx>[]) {
+  attachTags(txs)
+  attachSplits(txs)
+  attachAdjuntos(txs)
+  return txs
+}
 
 /** Valida que cuentas, categoría y etiquetas sean todas del mismo perfil. */
 function ensureReferences(input: {
@@ -53,6 +62,77 @@ function ensurePropio(
     .prepare(`SELECT id FROM ${TABLAS_PROPIAS[tabla]} WHERE id = ? AND profile_id = ?`)
     .get(id, profileId)
   if (!row) throw httpError(400, `${etiqueta} no pertenece a este perfil`)
+}
+
+/**
+ * Cada renglón del reparto tiene que ser del perfil y del mismo tipo que el
+ * ticket: si no, un gasto podría acabar repartido en categorías de ingreso y
+ * el reporte sumaría de los dos lados.
+ */
+function ensureSplits(
+  profileId: number,
+  type: 'ingreso' | 'gasto' | 'transferencia',
+  splits: { categoryId?: number | null }[],
+): void {
+  if (splits.length === 0 || type === 'transferencia') return
+  for (const r of splits) {
+    if (r.categoryId) ensureCategory(profileId, r.categoryId, type)
+  }
+}
+
+/**
+ * Una devolución apunta al gasto que devuelve. Se comprueba de todo porque es
+ * la liga que **cambia una cifra**: un reembolso resta del gasto del mes, así
+ * que apuntar mal mueve la tasa de ahorro sin que se note.
+ *
+ * `id` es el movimiento que se está guardando —nulo al crear—, para que no
+ * pueda apuntarse a sí mismo.
+ */
+function ensureRefund(
+  profileId: number,
+  refundOfId: number,
+  amountCents: number,
+  id: number | null,
+): void {
+  if (id !== null && refundOfId === id) {
+    throw httpError(400, 'Un movimiento no puede devolverse a sí mismo')
+  }
+  const original: any = db
+    .prepare('SELECT * FROM transactions WHERE id = ? AND profile_id = ?')
+    .get(refundOfId, profileId)
+  if (!original) throw httpError(400, 'El gasto original no pertenece a este perfil')
+  if (original.type !== 'gasto') {
+    throw httpError(400, 'Solo se devuelve un gasto: elige la partida que se te reembolsa')
+  }
+  if (original.refund_of_id) {
+    throw httpError(400, 'Esa partida ya es una devolución; liga la devolución al gasto original')
+  }
+  // Un desembolso, un abono, un aporte o el cargo de una compra a meses ya
+  // tienen su propio significado y su propia sincronización: devolverlos
+  // parcialmente dejaría la deuda o la compra diciendo otra cosa.
+  if (
+    original.debt_id ||
+    original.debt_payment_id ||
+    original.investment_entry_id ||
+    original.msi_purchase_id
+  ) {
+    throw httpError(400, 'Ese gasto está ligado a una deuda, inversión o compra a meses')
+  }
+  // Devolver más de lo que costó no es una devolución: es otra cosa, y dejaría
+  // la categoría en negativo sin que nadie lo haya dicho.
+  const otras: any = db
+    .prepare(
+      `SELECT COALESCE(SUM(amount_cents), 0) AS n FROM transactions
+       WHERE refund_of_id = ? AND id IS NOT ?`,
+    )
+    .get(refundOfId, id)
+  if (otras.n + amountCents > original.amount_cents) {
+    throw httpError(
+      400,
+      `Ese gasto fue de ${original.amount_cents / 100} y ya se devolvieron ${otras.n / 100}: ` +
+        'no se puede devolver de más',
+    )
+  }
 }
 
 type Query = ReturnType<typeof txQuery.parse>
@@ -105,6 +185,9 @@ function buildFilter(query: Query): { where: string; params: (string | number)[]
     const like = `%${query.q}%`
     params.push(like, like, like)
   }
+  if (query.conciliado) {
+    clauses.push(query.conciliado === 'si' ? 't.reconciled_at IS NOT NULL' : 't.reconciled_at IS NULL')
+  }
 
   return { where: clauses.join(' AND '), params }
 }
@@ -136,8 +219,7 @@ router.get('/', (req, res) => {
     .prepare(`${TX_SELECT} WHERE ${where} ORDER BY t.date DESC, t.id DESC LIMIT ? OFFSET ?`)
     .all(...params, query.limit, query.offset)
 
-  const txs = rows.map(mapTx)
-  attachTags(txs)
+  const txs = hidratar(rows.map(mapTx))
 
   // Los agregados van en cabeceras para no cambiar la forma de la respuesta:
   // sigue siendo un arreglo, como antes de existir la paginación.
@@ -156,11 +238,11 @@ router.get('/export.csv', (req, res) => {
   const rows = db
     .prepare(`${TX_SELECT} WHERE ${where} ORDER BY t.date ASC, t.id ASC`)
     .all(...params) as any[]
-  const txs = rows.map(mapTx)
-  attachTags(txs)
+  const txs = hidratar(rows.map(mapTx))
 
   const encabezados = [
     'fecha', 'tipo', 'cuenta', 'cuenta_destino', 'categoria', 'etiquetas', 'monto', 'concepto',
+    'conciliado',
   ]
   const filas = txs.map((t) => [
     t.date,
@@ -168,11 +250,18 @@ router.get('/export.csv', (req, res) => {
     // Nombres, conceptos y etiquetas los escribió el usuario: se sanean.
     celdaTexto(t.accountName),
     celdaTexto(t.transferAccountName),
-    celdaTexto(t.categoryName),
+    // Un ticket dividido no tiene una categoría, tiene varias: se listan en la
+    // misma celda en vez de dejarla vacía, que se leería como "sin clasificar".
+    celdaTexto(
+      t.splits.length > 0
+        ? t.splits.map((r) => r.categoryName ?? 'Sin categoría').join(' · ')
+        : t.categoryName,
+    ),
     celdaTexto(t.tags.map((tag) => tag.name).join(' · ')),
     // El monto lo genera Finply: signo intacto, sin prefijo.
     montoCsv(t.type === 'gasto' ? -t.amountCents : t.amountCents),
     celdaTexto(t.note),
+    t.reconciledAt ? 'sí' : 'no',
   ])
 
   const dia = new Date().toISOString().slice(0, 10)
@@ -184,13 +273,17 @@ router.get('/export.csv', (req, res) => {
 router.post('/', (req, res) => {
   const input = txInput.parse(req.body)
   ensureReferences(input)
+  if (input.splits) ensureSplits(input.profileId, input.type, input.splits)
+  if (input.refundOfId) {
+    ensureRefund(input.profileId, input.refundOfId, input.amountCents, null)
+  }
   const id = inTransaction(() => {
     const result = db
       .prepare(
         `INSERT INTO transactions
           (profile_id, account_id, type, amount_cents, date, category_id, note, transfer_account_id,
-           counterparty_id, cost_center_id, invoice_id, tax_cents, deductible)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           counterparty_id, cost_center_id, invoice_id, tax_cents, deductible, refund_of_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.profileId,
@@ -206,14 +299,14 @@ router.post('/', (req, res) => {
         input.invoiceId ?? null,
         input.taxCents,
         input.deductible ? 1 : 0,
+        input.refundOfId ?? null,
       )
     const nuevo = Number(result.lastInsertRowid)
     if (input.tagIds) setTxTags(nuevo, input.tagIds)
+    if (input.splits) setTxSplits(nuevo, input.splits)
     return nuevo
   })
-  const tx = mapTx(getTx(id))
-  attachTags([tx])
-  res.status(201).json(tx)
+  res.status(201).json(hidratar([mapTx(getTx(id))])[0])
 })
 
 router.patch('/:id', (req, res) => {
@@ -238,13 +331,22 @@ router.patch('/:id', (req, res) => {
     })
   }
   ensureReferences(input)
+  if (input.splits) ensureSplits(input.profileId, input.type, input.splits)
+  // `refundOfId` ausente conserva la liga que ya traía —igual que las
+  // etiquetas—, y por eso hay que revalidarla contra el monto nuevo: bajar un
+  // gasto de $1,000 a $100 con una devolución de $300 encima lo dejaría
+  // devuelto de más.
+  const refundOfId =
+    input.refundOfId === undefined ? (existing.refund_of_id ?? null) : input.refundOfId
+  if (refundOfId) ensureRefund(input.profileId, refundOfId, input.amountCents, id)
   // Monto y fecha se sincronizan con el abono o aporte ligado,
   // para que el libro y la deuda/inversión sigan cuadrando.
   inTransaction(() => {
     db.prepare(
       `UPDATE transactions SET account_id = ?, type = ?, amount_cents = ?, date = ?,
         category_id = ?, note = ?, transfer_account_id = ?,
-        counterparty_id = ?, cost_center_id = ?, tax_cents = ?, deductible = ?
+        counterparty_id = ?, cost_center_id = ?, tax_cents = ?, deductible = ?,
+        refund_of_id = ?
        WHERE id = ?`,
     ).run(
       input.accountId,
@@ -258,10 +360,19 @@ router.patch('/:id', (req, res) => {
       input.costCenterId ?? null,
       input.taxCents,
       input.deductible ? 1 : 0,
+      refundOfId,
       id,
     )
     // `tagIds` ausente deja las etiquetas como estaban; un arreglo vacío las quita.
     if (input.tagIds) setTxTags(id, input.tagIds)
+    // El reparto sigue la misma regla. Ojo: cambiar el monto de un movimiento
+    // dividido **sin** mandar renglones nuevos dejaría un reparto que ya no
+    // suma el total, así que en ese caso se descarta y manda la categoría.
+    if (input.splits) {
+      setTxSplits(id, input.splits)
+    } else if (input.amountCents !== existing.amount_cents) {
+      db.prepare('DELETE FROM tx_splits WHERE tx_id = ?').run(id)
+    }
     if (existing.debt_payment_id) {
       // El interés que el usuario ya fijó se respeta, pero nunca puede pasar
       // del abono: el capital no puede quedar negativo.
@@ -307,9 +418,117 @@ router.patch('/:id', (req, res) => {
       })
     }
   })
-  const tx = mapTx(getTx(id))
-  attachTags([tx])
-  res.json(tx)
+  res.json(hidratar([mapTx(getTx(id))])[0])
+})
+
+/**
+ * Marcar (o desmarcar) partidas contra el estado de cuenta. En bloque, porque
+ * conciliar es pasar una lista con el dedo, no abrir treinta modales.
+ *
+ * Es lo único de la Fase 10 que escribe sin pasar por el modal, y aun así no
+ * cambia una cifra: la bandera no mueve saldos ni reportes (R4 tranquilo).
+ */
+router.post('/conciliar', (req, res) => {
+  const input = conciliarInput.parse(req.body)
+  const marca = input.reconciled ? hoyISO() : null
+  const cambiados = inTransaction(() => {
+    const stmt = db.prepare(
+      'UPDATE transactions SET reconciled_at = ? WHERE id = ? AND profile_id = ?',
+    )
+    let n = 0
+    for (const txId of new Set(input.txIds)) {
+      n += Number(stmt.run(marca, txId, input.profileId).changes)
+    }
+    return n
+  })
+  res.json({ ok: true, cambiados })
+})
+
+/**
+ * Duplicar una partida. Copia lo que se vuelve a teclear —cuenta, tipo, monto,
+ * categoría o reparto, etiquetas y concepto— y **no** copia las ligas: una
+ * copia es un movimiento nuevo, no un segundo abono a la misma deuda ni un
+ * segundo cobro de la misma factura. El recibo tampoco: es de aquella compra.
+ */
+router.post('/:id/duplicar', (req, res) => {
+  const original: any = db
+    .prepare('SELECT * FROM transactions WHERE id = ?')
+    .get(Number(req.params.id))
+  if (!original) return res.status(404).json({ error: 'Movimiento no encontrado' })
+  const date = typeof req.body?.date === 'string' ? req.body.date : original.date
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: 'Fecha inválida (AAAA-MM-DD)' })
+  }
+
+  const id = inTransaction(() => {
+    const result = db
+      .prepare(
+        `INSERT INTO transactions
+          (profile_id, account_id, type, amount_cents, date, category_id, note, transfer_account_id,
+           counterparty_id, cost_center_id, tax_cents, deductible)
+         SELECT profile_id, account_id, type, amount_cents, ?, category_id, note, transfer_account_id,
+           counterparty_id, cost_center_id, tax_cents, deductible
+         FROM transactions WHERE id = ?`,
+      )
+      .run(date, original.id)
+    const nuevo = Number(result.lastInsertRowid)
+    db.prepare(
+      `INSERT INTO transaction_tags (transaction_id, tag_id)
+       SELECT ?, tag_id FROM transaction_tags WHERE transaction_id = ?`,
+    ).run(nuevo, original.id)
+    db.prepare(
+      `INSERT INTO tx_splits (tx_id, category_id, amount_cents, note)
+       SELECT ?, category_id, amount_cents, note FROM tx_splits WHERE tx_id = ?`,
+    ).run(nuevo, original.id)
+    return nuevo
+  })
+  res.status(201).json(hidratar([mapTx(getTx(id))])[0])
+})
+
+/** Adjuntar el recibo. Los bytes van en base64 dentro del JSON (validators). */
+router.post('/:id/adjuntos', (req, res) => {
+  const id = Number(req.params.id)
+  const tx: any = db.prepare('SELECT id FROM transactions WHERE id = ?').get(id)
+  if (!tx) return res.status(404).json({ error: 'Movimiento no encontrado' })
+  const input = adjuntoInput.parse(req.body)
+  const bytes = Buffer.from(input.dataB64, 'base64')
+  const result = db
+    .prepare(
+      `INSERT INTO tx_attachments (tx_id, filename, mime, size_bytes, data_b64)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run(id, input.filename, input.mime, bytes.length, input.dataB64)
+  const row: any = db
+    .prepare('SELECT id, filename, mime, size_bytes, created_at FROM tx_attachments WHERE id = ?')
+    .get(Number(result.lastInsertRowid))
+  res.status(201).json({
+    id: row.id,
+    filename: row.filename,
+    mime: row.mime,
+    sizeBytes: row.size_bytes,
+    createdAt: row.created_at,
+  })
+})
+
+/** El archivo, tal cual. Es el único lugar donde salen los bytes. */
+router.get('/:id/adjuntos/:adjuntoId', (req, res) => {
+  const row: any = db
+    .prepare('SELECT * FROM tx_attachments WHERE id = ? AND tx_id = ?')
+    .get(Number(req.params.adjuntoId), Number(req.params.id))
+  if (!row) return res.status(404).json({ error: 'Recibo no encontrado' })
+  res.setHeader('Content-Type', row.mime || 'application/octet-stream')
+  // `attachment` y no `inline`: el archivo lo subió el usuario y abrirlo en la
+  // misma pestaña convierte un PDF ajeno en código corriendo en el origen.
+  res.setHeader('Content-Disposition', `attachment; filename="${row.filename.replace(/"/g, '')}"`)
+  res.send(Buffer.from(row.data_b64, 'base64'))
+})
+
+router.delete('/:id/adjuntos/:adjuntoId', (req, res) => {
+  const result = db
+    .prepare('DELETE FROM tx_attachments WHERE id = ? AND tx_id = ?')
+    .run(Number(req.params.adjuntoId), Number(req.params.id))
+  if (Number(result.changes) === 0) return res.status(404).json({ error: 'Recibo no encontrado' })
+  res.json({ ok: true })
 })
 
 router.delete('/:id', (req, res) => {

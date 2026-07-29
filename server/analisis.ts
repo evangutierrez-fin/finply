@@ -22,6 +22,7 @@ import { accountsWithBalance, db } from './db.ts'
 import {
   DESDE_MOVIMIENTOS,
   MONTO_OPERATIVO,
+  TIPO_OPERATIVO,
   gastoPorCategoria,
   ingresoGastoPorMes,
   tasaDeAhorro,
@@ -60,7 +61,7 @@ function gastoPorOrigen(profileId: number, desde: string, hasta: string) {
         COALESCE(SUM(CASE WHEN rr.tx_id IS NULL THEN ${MONTO_OPERATIVO} END), 0) AS discrecional
        ${DESDE_MOVIMIENTOS}
        LEFT JOIN recurrence_runs rr ON rr.tx_id = t.id
-       WHERE t.profile_id = ? AND t.type = 'gasto'
+       WHERE t.profile_id = ? AND ${TIPO_OPERATIVO} = 'gasto'
          AND substr(t.date, 1, 7) BETWEEN ? AND ?`,
     )
     .get(profileId, desde, hasta)

@@ -76,6 +76,10 @@ export const accountInput = z.object({
   creditLimitCents: z.number().int().nonnegative('El límite no puede ser negativo').nullish(),
   cutDay: diaDelMes.nullish(),
   dueDay: diaDelMes.nullish(),
+  /** Debajo de esto, Finply avisa. `null` quita el aviso. */
+  minBalanceCents: z.number().int().nullish(),
+  institution: z.string().trim().max(60).default(''),
+  sortOrder: z.number().int().min(-999).max(999).default(0),
 })
 
 export const accountPatch = accountInput.omit({ profileId: true }).partial().extend({
@@ -133,6 +137,19 @@ export const importInput = z.object({
   huella: z.string().max(64).optional(),
 })
 
+/**
+ * Un renglón de una partida dividida (D17). Lleva su propia categoría y su
+ * propio monto; el concepto es opcional porque el del ticket ya está arriba.
+ */
+const txSplit = z.object({
+  categoryId: z.number().int().positive().nullish(),
+  amountCents: z.number().int().positive('Cada renglón debe ser mayor a cero'),
+  note: z.string().trim().max(120).default(''),
+})
+
+/** Cuántos renglones caben en un ticket. Cuarenta es más de lo que nadie divide. */
+export const MAX_RENGLONES = 40
+
 export const txInput = z
   .object({
     profileId: z.number().int().positive(),
@@ -152,8 +169,43 @@ export const txInput = z
     // él y no puede pasarse. Un IVA mayor que la factura no existe.
     taxCents: z.number().int().min(0).default(0),
     deductible: z.boolean().default(false),
+    // Fase 10. Los dos ausentes dejan lo que ya había —la misma regla de
+    // `tagIds`—; un arreglo vacío quita el reparto y un `null` explícito
+    // desliga la devolución. Es la diferencia entre "no opiné" y "quítalo".
+    splits: z.array(txSplit).max(MAX_RENGLONES).optional(),
+    refundOfId: z.number().int().positive().nullish(),
   })
   .superRefine((t, ctx) => {
+    if (t.splits && t.splits.length > 0) {
+      if (t.type === 'transferencia') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Una transferencia no se divide por categoría: no tiene categoría',
+        })
+      }
+      if (t.splits.length < 2) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Dividir una partida son al menos dos renglones; con uno, basta su categoría',
+        })
+      }
+      // La invariante de D17: los renglones suman **exactamente** el
+      // movimiento. Si no, el gasto por categoría dejaría de sumar el total y
+      // el usuario vería dos verdades del mismo ticket.
+      const suma = t.splits.reduce((s, r) => s + r.amountCents, 0)
+      if (suma !== t.amountCents) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Los renglones suman ${suma / 100} y el movimiento es ${t.amountCents / 100}`,
+        })
+      }
+    }
+    if (t.refundOfId && t.type !== 'ingreso') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Una devolución es dinero que entra: va como ingreso, ligada al gasto original',
+      })
+    }
     if (t.taxCents > t.amountCents) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -405,6 +457,12 @@ export const goalInput = z.object({
   targetCents: z.number().int().positive('La meta debe ser mayor a cero'),
   dueDate: isoDate.nullish(),
   note: z.string().trim().max(200).default(''),
+  /**
+   * Dónde vive el dinero de esta meta (H1). Sin cuenta, la meta sigue siendo
+   * un apunte —lo que era antes— y la vista lo dice en vez de fingir que ese
+   * dinero está apartado en algún lado.
+   */
+  accountId: z.number().int().positive().nullish(),
 })
 
 export const goalPatch = goalInput.omit({ profileId: true }).partial()
@@ -413,6 +471,12 @@ export const goalEntryInput = z.object({
   amountCents: z.number().int().positive('El aporte debe ser mayor a cero'),
   date: isoDate,
   note: z.string().trim().max(200).default(''),
+  /**
+   * La cuenta de la que **sale** el dinero. Con ella, el aporte asienta una
+   * transferencia a la cuenta de la meta y deja de ser dinero fantasma (H1).
+   * Sin ella es "solo apuntar", que es lo que manda R4 por omisión.
+   */
+  accountId: z.number().int().positive().nullish(),
 })
 
 export const noteInput = z.object({
@@ -471,6 +535,8 @@ export const txQuery = z
     minCents: z.coerce.number().int().nonnegative().optional(),
     maxCents: z.coerce.number().int().nonnegative().optional(),
     q: z.string().trim().max(100).optional(),
+    /** Conciliación: 'si' solo lo marcado, 'no' solo lo pendiente. */
+    conciliado: z.enum(['si', 'no']).optional(),
     limit: z.coerce.number().int().positive().max(500).default(500),
     offset: z.coerce.number().int().nonnegative().default(0),
   })
@@ -561,5 +627,113 @@ export const agingQuery = z.object({
 export const flujoQuery = z.object({
   profileId: z.coerce.number().int().positive(),
   dias: z.coerce.number().int().min(1).max(365).default(30),
+  hoy: isoDate.optional(),
+})
+
+// ── Fase 10 · el libro que cuadra ────────────────────────────────────────────
+
+/**
+ * El corte de conciliación: "al 31 de julio mi banco decía $X" (D19). El saldo
+ * va **con signo** —una tarjeta lo tiene en negativo— y por eso no lleva el
+ * `positive()` de los montos normales.
+ */
+export const cortInput = z.object({
+  profileId: z.number().int().positive(),
+  accountId: z.number().int().positive(),
+  date: isoDate,
+  balanceCents: z.number().int(),
+  note: z.string().trim().max(200).default(''),
+})
+
+export const cortQuery = z.object({
+  profileId: z.coerce.number().int().positive(),
+  accountId: z.coerce.number().int().positive().optional(),
+})
+
+/** Marcar o desmarcar movimientos contra el estado de cuenta. */
+export const conciliarInput = z.object({
+  profileId: z.number().int().positive(),
+  txIds: z.array(z.number().int().positive()).min(1).max(500),
+  reconciled: z.boolean(),
+})
+
+/**
+ * Tope de un recibo. 2 MB del archivo original; en base64 ocupa un tercio más,
+ * que es el precio de que el respaldo se lo lleve (ver la migración 14).
+ */
+export const MAX_ADJUNTO_BYTES = 2 * 1024 * 1024
+
+/**
+ * Lo que se acepta adjuntar. Lista cerrada a propósito: un recibo es una foto
+ * o un PDF, y aceptar cualquier cosa convertiría el libro en un almacén de
+ * archivos ejecutables que después alguien abre.
+ */
+export const MIMES_ADJUNTO = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'application/pdf']
+
+export const adjuntoInput = z
+  .object({
+    filename: z.string().trim().min(1).max(120),
+    mime: z.string().trim().refine((m) => MIMES_ADJUNTO.includes(m), {
+      message: `Solo se adjuntan imágenes o PDF (${MIMES_ADJUNTO.join(', ')})`,
+    }),
+    // El archivo llega en base64 dentro del JSON: no hay multipart en Finply y
+    // meter una dependencia para subir un recibo no vale la pena.
+    dataB64: z.string().min(1),
+  })
+  .superRefine((a, ctx) => {
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(a.dataB64)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'El archivo no viene en base64' })
+      return
+    }
+    // Tamaño real del binario, deducido del largo del base64: 4 caracteres por
+    // cada 3 bytes, menos el relleno. Así el tope se aplica antes de decodificar.
+    const relleno = a.dataB64.endsWith('==') ? 2 : a.dataB64.endsWith('=') ? 1 : 0
+    const bytes = Math.floor((a.dataB64.length * 3) / 4) - relleno
+    if (bytes <= 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'El archivo viene vacío' })
+    }
+    if (bytes > MAX_ADJUNTO_BYTES) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `El recibo pesa ${Math.round(bytes / 1024)} KB y el tope son ${MAX_ADJUNTO_BYTES / 1024} KB`,
+      })
+    }
+  })
+
+// ── Fase 11 · patrimonio completo ────────────────────────────────────────────
+
+export const bienInput = z.object({
+  profileId: z.number().int().positive(),
+  name: z.string().trim().min(1, 'El bien necesita un nombre').max(60),
+  kind: z.enum(['inmueble', 'vehiculo', 'equipo', 'otro']).default('otro'),
+  costCents: z.number().int().nonnegative('El costo no puede ser negativo'),
+  acquiredDate: isoDate,
+  /** La deuda que lo financia. `null` explícito la desliga. */
+  debtId: z.number().int().positive().nullish(),
+  note: z.string().trim().max(200).default(''),
+})
+
+export const bienPatch = bienInput.omit({ profileId: true }).partial().extend({
+  archived: z.boolean().optional(),
+})
+
+export const bienQuery = z.object({
+  profileId: z.coerce.number().int().positive(),
+  /** Para que las pruebas puedan pararse en una fecha; por omisión es hoy. */
+  hoy: isoDate.optional(),
+})
+
+/**
+ * Cuánto vale hoy, **declarado por el usuario** (R9). Cero es legítimo: una
+ * herramienta puede acabar sin valor, y decirlo vale más que borrarla.
+ */
+export const valuacionInput = z.object({
+  date: isoDate,
+  valueCents: z.number().int().nonnegative('El valor no puede ser negativo'),
+  note: z.string().trim().max(200).default(''),
+})
+
+export const serieCuentaQuery = z.object({
+  meses: z.coerce.number().int().min(2).max(120).default(12),
   hoy: isoDate.optional(),
 })

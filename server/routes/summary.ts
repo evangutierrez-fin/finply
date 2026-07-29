@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { db, accountsWithBalance, investmentsWithTotals, mapAccount, mapTx, TX_SELECT } from '../db.ts'
+import { listarBienes } from '../bienes.ts'
 import { summaryQuery } from '../validators.ts'
 
 const router = Router()
@@ -65,6 +66,10 @@ router.get('/', (req, res) => {
     .get(profileId)
 
   const investments = investmentsWithTotals(profileId).filter((i) => !i.archived)
+  // H3: el auto que financiaste también es tuyo. Entra por su valor declarado
+  // —la deuda ya se resta en su propio renglón— y por eso el Resumen dejó de
+  // decir que comprar un coche te empobrece.
+  const bienes = listarBienes(profileId).filter((b) => !b.archived)
 
   res.json({
     month,
@@ -84,6 +89,11 @@ router.get('/', (req, res) => {
       investedCents: investments.reduce((s, i) => s + i.investedCents, 0),
       valueCents: investments.reduce((s, i) => s + i.valueCents, 0),
       count: investments.length,
+    },
+    bienes: {
+      costCents: bienes.reduce((s, b) => s + b.costCents, 0),
+      valueCents: bienes.reduce((s, b) => s + b.valueCents, 0),
+      count: bienes.length,
     },
   })
 })

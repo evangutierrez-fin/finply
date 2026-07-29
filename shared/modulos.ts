@@ -17,6 +17,7 @@ import type { ProfileKind } from './types.ts'
 export type ModuloId =
   | 'tarjetas'
   | 'deudas'
+  | 'bienes'
   | 'inversiones'
   | 'recurrencias'
   | 'presupuestos'
@@ -56,6 +57,13 @@ export const MODULOS: readonly Modulo[] = [
     label: 'Deudas y préstamos',
     descripcion: 'Lo que debes y lo que te deben, con tasa, plazo y tabla de amortización.',
     vistas: ['deudas'],
+    omision: TODOS,
+  },
+  {
+    id: 'bienes',
+    label: 'Bienes',
+    descripcion: 'La casa, el auto o la herramienta: lo que costaron y lo que valen hoy.',
+    vistas: ['bienes'],
     omision: TODOS,
   },
   {

@@ -61,6 +61,7 @@ export function Resumen({ onNav }: { onNav: (view: View) => void }) {
   // patrimonio, o la resta no cuadra con lo que se ve.
   const conDeudas = profile.modules.includes('deudas')
   const conInversiones = profile.modules.includes('inversiones')
+  const conBienes = profile.modules.includes('bienes')
 
   if (active.length === 0) {
     return (
@@ -195,6 +196,12 @@ export function Resumen({ onNav }: { onNav: (view: View) => void }) {
                 <dd><Money cents={data.investments.valueCents} /></dd>
               </div>
             )}
+            {(conBienes || data.bienes.valueCents !== 0) && (
+              <div>
+                <dt>Bienes</dt>
+                <dd><Money cents={data.bienes.valueCents} /></dd>
+              </div>
+            )}
             {(conDeudas || data.debts.porCobrarCents !== 0) && (
               <div>
                 <dt>Te deben</dt>
@@ -215,6 +222,7 @@ export function Resumen({ onNav }: { onNav: (view: View) => void }) {
                     cents={
                       data.totalCents +
                       data.investments.valueCents +
+                      data.bienes.valueCents +
                       data.debts.porCobrarCents -
                       data.debts.porPagarCents
                     }

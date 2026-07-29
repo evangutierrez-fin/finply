@@ -41,6 +41,38 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
 - **Categorías y etiquetas** — renombra o borra categorías reasignando sus
   movimientos (ningún monto cambia nunca al reclasificar). Las etiquetas cruzan
   categorías: un mismo viaje lleva comida, transporte y hospedaje.
+- **Partida dividida** — un ticket con despensa, farmacia y ropa es **un solo
+  movimiento** con varias categorías, no tres movimientos que ya no se parecen
+  al ticket. Los renglones tienen que sumar exactamente el total y Finply te
+  dice cuánto falta por repartir mientras lo escribes. Tu saldo no se mueve: lo
+  único que cambia es a qué categorías se reparte el gasto.
+- **Reembolsos ligados** — una devolución apunta al gasto que devuelve. El
+  dinero entra a tu cuenta, pero **no cuenta como ingreso del mes**: baja ese
+  gasto y su categoría. Devolver una camisa no es ganar dinero, y sin esto tu
+  tasa de ahorro subía cada vez que te reembolsaban algo.
+- **Conciliación** — palomea cada partida contra tu estado de cuenta y declara
+  el saldo que el banco dice a esa fecha. Finply resta y te enseña la
+  diferencia y **cuántas partidas la explican**. Marcar no corrige nada: si te
+  equivocaste, despalomea y el corte vuelve a descuadrar solo.
+- **Bienes** — la casa, el auto, la herramienta del taller. Financiar un coche
+  ya no te empobrece: la deuda resta y el bien suma, y Finply te dice **cuánto
+  de él ya es tuyo** (su valor menos lo que debes del crédito). La depreciación
+  la declaras tú, con la fecha en que lo valuaste: no hay una tasa que sirva
+  para todos los coches, y Finply no se la inventa.
+- **Metas con respaldo** — cada aporte puede salir de una cuenta de verdad y
+  asentar su traspaso. La meta te dice cuánto de lo apartado es dinero movido y
+  cuánto es solo un apunte, y **cuánto tienes que apartar al mes** para llegar a
+  tiempo. Antes, apartar $50,000 no los quitaba de ningún lado.
+- **Una moneda por libro** — se fija al crear el perfil y las cuentas la
+  heredan. Si tienes dólares, abres otro perfil: convertir a un tipo de cambio
+  inventado sería peor que no hacerlo.
+- **Cada cuenta, en el tiempo** — el saldo de los últimos doce meses de esa
+  cuenta (la serie de patrimonio es global y no dice si tu ahorro va subiendo),
+  su institución, el orden en que las ves y un aviso cuando alguna baja del
+  mínimo que tú pusiste.
+- **Recibos y duplicados** — adjunta la foto o el PDF del ticket (se guarda
+  dentro de tu libro y viaja en el respaldo) y duplica cualquier partida con la
+  fecha de hoy, sin volver a teclear lo que Finply ya sabe.
 - **Exportar a CSV** — el filtro completo que tengas en pantalla, con BOM para
   que Excel respete los acentos y sin dejar pasar celdas ejecutables.
 - **Importar CSV** — el archivo de tu banco, con detección del separador y de
@@ -276,8 +308,12 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 | `GET/POST /api/accounts` · `PATCH/DELETE /:id` | Cuentas con saldo calculado |
 | `GET/POST /api/categories` · `PATCH/DELETE /:id` | Categorías (borrar acepta `?reassignTo=` o `?force=true`) |
 | `GET/POST /api/tags` · `PATCH/DELETE /:id` | Etiquetas por perfil |
-| `GET/POST /api/transactions` · `PATCH/DELETE /:id` | Movimientos (filtros: mes, `from`/`to`, cuenta, tipo, etiqueta, `minCents`/`maxCents`, búsqueda, `limit`/`offset`) |
+| `GET/POST /api/transactions` · `PATCH/DELETE /:id` | Movimientos (filtros: mes, `from`/`to`, cuenta, tipo, etiqueta, `minCents`/`maxCents`, búsqueda, `conciliado`, `limit`/`offset`). `splits` reparte por categoría; `refundOfId` liga una devolución |
 | `GET /api/transactions/export.csv` | Export CSV del filtro completo, sin paginar |
+| `POST /api/transactions/conciliar` | Palomea o despalomea partidas en bloque. No mueve ninguna cifra |
+| `POST /api/transactions/:id/duplicar` | Copia la partida sin sus ligas |
+| `POST/GET/DELETE /api/transactions/:id/adjuntos` | Recibos: imagen o PDF hasta 2 MB, en base64 |
+| `GET/POST /api/conciliacion` · `DELETE /:id` | Cortes: el saldo que declaró el banco, con la diferencia contra lo palomeado |
 | `POST /api/importaciones/previsualizar` | Analiza un CSV y devuelve el informe. No escribe nada |
 | `GET/POST /api/importaciones` · `DELETE /:id` | Lotes de importación y deshacer |
 | `GET/POST /api/debts` · `PATCH/DELETE /:id` | Deudas por cobrar / por pagar, con tasa, plazo y enganche (`accountId` y `downPaymentAccountId` asientan sus movimientos) |
@@ -291,6 +327,9 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 | `POST /api/precios/aplicar` | Asienta solo las filas marcadas, en una transacción |
 | `GET/POST /api/budgets` · `DELETE /:id` | Presupuestos por categoría y mes (upsert) con gastado del mes |
 | `POST /api/budgets/copiar` | Copia los topes de un mes a otro sin pisar los que ya existen |
+| `GET/POST /api/bienes` · `PATCH/DELETE /:id` | Bienes con su valor de hoy y su liga a la deuda que los financia |
+| `POST /api/bienes/:id/valuaciones` · `DELETE /valuaciones/:id` | Cuánto vale hoy, declarado por ti. Repetir fecha corrige |
+| `GET /api/accounts/:id/serie` | Saldo de esa cuenta al cierre de cada mes |
 | `GET/POST /api/goals` · `PATCH/DELETE /:id` | Metas de ahorro |
 | `POST /api/goals/:id/entries` · `DELETE /api/goals/entries/:id` | Aportes a metas |
 | `GET/POST /api/notes` · `PATCH/DELETE /:id` | Notas (con fijado) |
@@ -357,11 +396,6 @@ donde aparece, que en el tema oscuro es la hoja, no el fondo.
 
 **Lo que corrige algo que hoy está mal**
 
-- **Patrimonio completo** — bienes (casa, auto, herramienta) con su valor y su
-  liga a la deuda que los financia: hoy financiar un coche baja tu patrimonio y
-  el coche nunca lo sube. Metas ligadas al libro, para que apartar dinero salga
-  de una cuenta de verdad. Y cerrar el tema de la moneda: una por perfil, en
-  vez de una columna que hoy suma dólares como si fueran pesos.
 - **Auditoría de las cuentas de Finply** — verificar cada cifra que Finply
   calcula contra aritmética hecha aparte, dominio por dominio y simulando la
   vida entera de cada uno. Así salió el defecto que daba una deuda por saldada
@@ -370,8 +404,6 @@ donde aparece, que en el tema oscuro es la hoja, no el fondo.
 
 **El libro, más completo**
 
-- Partida dividida (un ticket, varias categorías), conciliación contra el
-  estado de cuenta y reembolsos ligados al gasto original
 - **¿Llego a fin de mes?** — saldo proyectado día a día con lo que ya sabe tu
   calendario, y el primer día en rojo si lo hay
 - Presupuesto que sabe qué día del mes es; Resumen con el cambio contra el mes

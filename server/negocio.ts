@@ -12,7 +12,12 @@
 // estado de resultados y el reporte anual no puedan separarse.
 
 import { db } from './db.ts'
-import { DESDE_MOVIMIENTOS, MONTO_OPERATIVO } from './reportes.ts'
+import {
+  CATEGORIA_OPERATIVA,
+  DESDE_MOVIMIENTOS,
+  MONTO_OPERATIVO,
+  TIPO_OPERATIVO,
+} from './reportes.ts'
 import { liquidoDe } from './analisis.ts'
 import { calendario } from './calendario.ts'
 import { hoyISO, sumarDias } from '../shared/fechas.ts'
@@ -26,10 +31,10 @@ function gastoPorRol(profileId: number, desde: string, hasta: string) {
       `SELECT c.id AS category_id, c.name, c.role,
         COALESCE(SUM(${MONTO_OPERATIVO}), 0) AS monto
        ${DESDE_MOVIMIENTOS}
-       LEFT JOIN categories c ON c.id = t.category_id
-       WHERE t.profile_id = ? AND t.type = 'gasto' AND t.date BETWEEN ? AND ?
+       LEFT JOIN categories c ON c.id = ${CATEGORIA_OPERATIVA}
+       WHERE t.profile_id = ? AND ${TIPO_OPERATIVO} = 'gasto' AND t.date BETWEEN ? AND ?
        GROUP BY c.id
-       HAVING monto > 0
+       HAVING monto <> 0
        ORDER BY monto DESC`,
     )
     .all(profileId, desde, hasta) as {
@@ -53,19 +58,31 @@ export function estadoDeResultados(
 ): EstadoResultados {
   const ingresos: any = db
     .prepare(
-      `SELECT COALESCE(SUM(${MONTO_OPERATIVO}), 0) AS monto,
-        COALESCE(SUM(t.tax_cents), 0) AS impuesto
+      `SELECT COALESCE(SUM(${MONTO_OPERATIVO}), 0) AS monto
        ${DESDE_MOVIMIENTOS}
-       WHERE t.profile_id = ? AND t.type = 'ingreso' AND t.date BETWEEN ? AND ?`,
+       WHERE t.profile_id = ? AND ${TIPO_OPERATIVO} = 'ingreso' AND t.date BETWEEN ? AND ?`,
     )
     .get(profileId, desde, hasta)
 
-  const impuestoGasto: any = db
+  const gastos: any = db
     .prepare(
-      `SELECT COALESCE(SUM(t.tax_cents), 0) AS impuesto,
-        COALESCE(SUM(CASE WHEN t.deductible = 1 THEN ${MONTO_OPERATIVO} END), 0) AS deducible
+      `SELECT COALESCE(SUM(CASE WHEN t.deductible = 1 THEN ${MONTO_OPERATIVO} END), 0) AS deducible
        ${DESDE_MOVIMIENTOS}
-       WHERE t.profile_id = ? AND t.type = 'gasto' AND t.date BETWEEN ? AND ?`,
+       WHERE t.profile_id = ? AND ${TIPO_OPERATIVO} = 'gasto' AND t.date BETWEEN ? AND ?`,
+    )
+    .get(profileId, desde, hasta)
+
+  // ⚠ El impuesto va **sin** el JOIN del reparto. `tax_cents` es del
+  // movimiento entero, así que sumarlo sobre las filas del reparto lo
+  // multiplicaría por el número de renglones: un ticket dividido en tres
+  // trasladaría el triple de IVA. Solo los montos se leen por renglón.
+  const impuestos: any = db
+    .prepare(
+      `SELECT
+        COALESCE(SUM(CASE WHEN t.type = 'ingreso' THEN t.tax_cents END), 0) AS trasladado,
+        COALESCE(SUM(CASE WHEN t.type = 'gasto' THEN t.tax_cents END), 0) AS acreditable
+       FROM transactions t
+       WHERE t.profile_id = ? AND t.date BETWEEN ? AND ?`,
     )
     .get(profileId, desde, hasta)
 
@@ -93,8 +110,8 @@ export function estadoDeResultados(
   const porCentro = db
     .prepare(
       `SELECT cc.id, cc.name,
-        COALESCE(SUM(CASE WHEN t.type = 'ingreso' THEN ${MONTO_OPERATIVO} END), 0) AS ingresos,
-        COALESCE(SUM(CASE WHEN t.type = 'gasto' THEN ${MONTO_OPERATIVO} END), 0) AS gastos
+        COALESCE(SUM(CASE WHEN ${TIPO_OPERATIVO} = 'ingreso' THEN ${MONTO_OPERATIVO} END), 0) AS ingresos,
+        COALESCE(SUM(CASE WHEN ${TIPO_OPERATIVO} = 'gasto' THEN ${MONTO_OPERATIVO} END), 0) AS gastos
        ${DESDE_MOVIMIENTOS}
        LEFT JOIN cost_centers cc ON cc.id = t.cost_center_id
        WHERE t.profile_id = ? AND t.type IN ('ingreso', 'gasto') AND t.date BETWEEN ? AND ?
@@ -117,9 +134,9 @@ export function estadoDeResultados(
     sinClasificarCents,
     utilidadCents:
       ingresosCents - costoVentaCents - gastoFijoCents - gastoVariableCents - sinClasificarCents,
-    impuestoTrasladadoCents: ingresos.impuesto as number,
-    impuestoAcreditableCents: impuestoGasto.impuesto as number,
-    deducibleCents: impuestoGasto.deducible as number,
+    impuestoTrasladadoCents: impuestos.trasladado as number,
+    impuestoAcreditableCents: impuestos.acreditable as number,
+    deducibleCents: gastos.deducible as number,
     detalle,
     porCentro: porCentro.map((c) => ({
       id: c.id ?? null,

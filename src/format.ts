@@ -32,11 +32,23 @@ export function fmtCompacto(cents: number): string {
   return `${signo}$${Math.round(abs)}`
 }
 
-/** '1,234.56' | '$1234' | '1234.5' → centavos enteros, o null si no es un monto. */
-export function parseAmount(raw: string): number | null {
+/**
+ * '1,234.56' | '$1234' | '1234.5' → centavos enteros, o null si no es un monto.
+ *
+ * Por omisión exige que sea **mayor que cero**, porque casi todo lo que se
+ * teclea en Finply es un monto y un monto de cero no significa nada. La
+ * excepción es el saldo de un corte de conciliación (D19): el estado de cuenta
+ * de una tarjeta viene en negativo, y el de una cuenta vacía viene en cero.
+ */
+export function parseAmount(
+  raw: string,
+  opciones: { permitirNegativo?: boolean } = {},
+): number | null {
   const clean = raw.replace(/[$,\s]/g, '')
-  if (!/^\d+(\.\d{1,2})?$/.test(clean)) return null
+  const patron = opciones.permitirNegativo ? /^-?\d+(\.\d{1,2})?$/ : /^\d+(\.\d{1,2})?$/
+  if (!patron.test(clean)) return null
   const cents = Math.round(parseFloat(clean) * 100)
+  if (opciones.permitirNegativo) return cents
   return cents > 0 ? cents : null
 }
 

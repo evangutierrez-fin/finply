@@ -29,6 +29,7 @@ export type View =
   | 'analisis'
   | 'tarjetas'
   | 'deudas'
+  | 'bienes'
   | 'inversiones'
   | 'simulador'
   | 'contrapartes'
@@ -68,6 +69,7 @@ const NAV_GROUPS: { label: string | null; items: { id: View; label: string }[] }
     items: [
       { id: 'tarjetas', label: 'Tarjetas' },
       { id: 'deudas', label: 'Deudas' },
+      { id: 'bienes', label: 'Bienes' },
       { id: 'inversiones', label: 'Inversiones' },
       { id: 'simulador', label: 'Simulador' },
     ],

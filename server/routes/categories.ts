@@ -15,8 +15,16 @@ function mapCategory(row: any) {
   }
 }
 
+/**
+ * El conteo suma los movimientos que apuntan a la categoría **y los renglones
+ * de partidas divididas** que la usan: desde la Fase 10, una categoría puede
+ * estar en uso sin que ninguna partida la lleve arriba, y borrarla sin contarlos
+ * dejaría renglones sin clasificar en silencio.
+ */
 const CATEGORY_SELECT = `
-  SELECT c.*, (SELECT COUNT(*) FROM transactions t WHERE t.category_id = c.id) AS tx_count
+  SELECT c.*,
+    (SELECT COUNT(*) FROM transactions t WHERE t.category_id = c.id)
+    + (SELECT COUNT(*) FROM tx_splits s WHERE s.category_id = c.id) AS tx_count
   FROM categories c
 `
 
@@ -81,8 +89,11 @@ router.delete('/:id', (req, res) => {
   const { reassignTo, force } = categoryDeleteQuery.parse(req.query)
 
   const usage: any = db
-    .prepare('SELECT COUNT(*) AS n FROM transactions WHERE category_id = ?')
-    .get(id)
+    .prepare(
+      `SELECT (SELECT COUNT(*) FROM transactions WHERE category_id = ?)
+            + (SELECT COUNT(*) FROM tx_splits WHERE category_id = ?) AS n`,
+    )
+    .get(id, id)
 
   if (reassignTo !== undefined) {
     if (reassignTo === id) throw httpError(400, 'La categoría destino es la misma')
@@ -107,6 +118,10 @@ router.delete('/:id', (req, res) => {
   inTransaction(() => {
     if (reassignTo !== undefined) {
       db.prepare('UPDATE transactions SET category_id = ? WHERE category_id = ?').run(reassignTo, id)
+      // Los renglones del reparto se mueven igual. Sin esto, la cascada de la
+      // llave foránea los dejaría en nulo y el ticket perdería clasificación
+      // aunque el usuario haya pedido explícitamente reasignar.
+      db.prepare('UPDATE tx_splits SET category_id = ? WHERE category_id = ?').run(reassignTo, id)
     }
     // Los presupuestos de la categoría se van con ella: un tope sin categoría
     // no significa nada, y moverlos podría chocar con el tope que el destino ya

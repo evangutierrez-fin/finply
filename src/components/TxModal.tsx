@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
-  Account, CentroCosto, Category, Contraparte, Tag, Tx, TxType,
+  Account, CentroCosto, Category, Contraparte, Tag, Tx, TxAttachment, TxType,
 } from '../../shared/types.ts'
 import { api } from '../api.ts'
-import { parseAmount, todayISO } from '../format.ts'
+import { fmtDate, parseAmount, todayISO } from '../format.ts'
 import { useApp } from '../context.ts'
+import { Money } from './Money.tsx'
 import { Modal } from './Modal.tsx'
 
 const TYPES: { id: TxType; label: string }[] = [
@@ -12,6 +13,15 @@ const TYPES: { id: TxType; label: string }[] = [
   { id: 'ingreso', label: 'Ingreso' },
   { id: 'transferencia', label: 'Transferencia' },
 ]
+
+/** Un renglón del reparto mientras se edita: el monto vive como texto. */
+interface Renglon {
+  categoryId: number
+  amount: string
+  note: string
+}
+
+const RENGLON_VACIO: Renglon = { categoryId: 0, amount: '', note: '' }
 
 export function TxModal({
   tx,
@@ -51,6 +61,27 @@ export function TxModal({
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
+  // Fase 10. El reparto por categoría (D17): mientras está apagado, manda la
+  // categoría de arriba; encendido, mandan los renglones y la de arriba se va.
+  const [dividida, setDividida] = useState((tx?.splits.length ?? 0) > 0)
+  const [renglones, setRenglones] = useState<Renglon[]>(
+    tx && tx.splits.length > 0
+      ? tx.splits.map((r) => ({
+          categoryId: r.categoryId ?? 0,
+          amount: (r.amountCents / 100).toFixed(2),
+          note: r.note,
+        }))
+      : [RENGLON_VACIO, RENGLON_VACIO],
+  )
+  // La devolución y su gasto original.
+  const [refundOfId, setRefundOfId] = useState<number>(tx?.refundOfId ?? 0)
+  const [gastosRecientes, setGastosRecientes] = useState<Tx[]>([])
+  // Los recibos ya guardados. Solo existen al corregir: adjuntar algo exige que
+  // el movimiento ya tenga id.
+  const [adjuntos, setAdjuntos] = useState<TxAttachment[]>(tx?.attachments ?? [])
+  const [subiendo, setSubiendo] = useState(false)
+  const archivoRef = useRef<HTMLInputElement>(null)
+
   useEffect(() => {
     Promise.all([
       api.accounts.list(profile.id),
@@ -83,8 +114,67 @@ export function TxModal({
     )
   }, [profile.id, esNegocio])
 
+  // Los gastos a los que se puede ligar una devolución. Solo se piden cuando el
+  // movimiento es un ingreso: en cualquier otro caso la pregunta no existe.
+  useEffect(() => {
+    if (type !== 'ingreso') return
+    api.tx
+      .list({ profileId: profile.id, type: 'gasto', limit: 60 })
+      .then(
+        (page) => setGastosRecientes(page.items.filter((g) => !g.refundOfId)),
+        () => {
+          // Que falle solo quita la sugerencia; el movimiento se registra igual.
+        },
+      )
+  }, [profile.id, type])
+
   const toggleTag = (id: number) =>
     setTagIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
+
+  const setRenglon = (i: number, cambio: Partial<Renglon>) =>
+    setRenglones((prev) => prev.map((r, j) => (j === i ? { ...r, ...cambio } : r)))
+
+  /** Lo que llevan los renglones ahora mismo, para poder enseñar lo que falta. */
+  const sumaRenglones = renglones.reduce((s, r) => s + (parseAmount(r.amount) ?? 0), 0)
+  const totalCents = parseAmount(amount) ?? 0
+  const restante = totalCents - sumaRenglones
+
+  /**
+   * Adjuntar el recibo. El archivo se lee en el navegador y viaja en base64
+   * dentro del JSON: no hay multipart en Finply, y el respaldo se lo lleva
+   * justo porque acaba guardado en la base (ver la migración 14).
+   */
+  const adjuntar = async (file: File) => {
+    if (!tx) return
+    setSubiendo(true)
+    setError(null)
+    try {
+      const buffer = await file.arrayBuffer()
+      let binario = ''
+      const bytes = new Uint8Array(buffer)
+      for (let i = 0; i < bytes.length; i += 1) binario += String.fromCharCode(bytes[i]!)
+      const creado = await api.tx.adjuntar(tx.id, {
+        filename: file.name,
+        mime: file.type,
+        dataB64: btoa(binario),
+      })
+      setAdjuntos((prev) => [...prev, creado])
+    } catch (err) {
+      setError((err as Error).message)
+    }
+    setSubiendo(false)
+    if (archivoRef.current) archivoRef.current.value = ''
+  }
+
+  const quitarAdjunto = async (adjunto: TxAttachment) => {
+    if (!tx) return
+    try {
+      await api.tx.quitarAdjunto(tx.id, adjunto.id)
+      setAdjuntos((prev) => prev.filter((a) => a.id !== adjunto.id))
+    } catch (err) {
+      setError((err as Error).message)
+    }
+  }
 
   const addTag = async () => {
     const name = newTag.trim()
@@ -165,6 +255,17 @@ export function TxModal({
         costCenterId: costCenterId || null,
         taxCents: parseAmount(tax) ?? 0,
         deductible,
+        // Misma regla de R17 que los campos de negocio: se manda siempre lo que
+        // el estado trae del propio movimiento. Apagar el reparto es un arreglo
+        // vacío —"quítalo"—, y eso es una decisión del usuario, no un descuido.
+        splits: dividida
+          ? renglones.map((r) => ({
+              categoryId: r.categoryId || null,
+              amountCents: parseAmount(r.amount) ?? 0,
+              note: r.note,
+            }))
+          : [],
+        refundOfId: type === 'ingreso' ? refundOfId || null : null,
       }
       if (tx) await api.tx.update(tx.id, draft)
       else await api.tx.create(draft)
@@ -254,6 +355,14 @@ export function TxModal({
                   ))}
               </select>
             </label>
+          ) : dividida ? (
+            <div className="campo">
+              <span className="campo-label">Categoría</span>
+              <p className="campo-nota">
+                Este ticket va repartido en {renglones.length} renglones; su categoría son
+                las de abajo.
+              </p>
+            </div>
           ) : (
             <label className="campo">
               <span className="campo-label">Categoría</span>
@@ -314,6 +423,123 @@ export function TxModal({
             />
           </label>
         </div>
+
+        {/*
+          El reparto por categoría. Un ticket con despensa, farmacia y ropa es
+          un solo movimiento —el saldo bajó una vez—, con varias categorías.
+        */}
+        {type !== 'transferencia' && (
+          <fieldset className="campo campo-fieldset">
+            <legend className="campo-label">Reparto por categoría</legend>
+            <label className="campo-casilla">
+              <input
+                type="checkbox"
+                checked={dividida}
+                onChange={(e) => setDividida(e.target.checked)}
+              />
+              <span>Dividir en varias categorías</span>
+            </label>
+            {dividida && (
+              <>
+                {renglones.map((r, i) => (
+                  <div className="renglon" key={i}>
+                    <select
+                      className="campo-input"
+                      value={r.categoryId}
+                      onChange={(e) => setRenglon(i, { categoryId: Number(e.target.value) })}
+                      aria-label={`Categoría del renglón ${i + 1}`}
+                    >
+                      <option value={0}>Sin categoría</option>
+                      {options.map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                    <div className="monto-wrap">
+                      <span className="monto-signo" aria-hidden="true">$</span>
+                      <input
+                        className="campo-input"
+                        inputMode="decimal"
+                        placeholder="0.00"
+                        value={r.amount}
+                        onChange={(e) => setRenglon(i, { amount: e.target.value })}
+                        aria-label={`Monto del renglón ${i + 1}`}
+                      />
+                    </div>
+                    <input
+                      className="campo-input"
+                      placeholder="Detalle (opcional)"
+                      maxLength={120}
+                      value={r.note}
+                      onChange={(e) => setRenglon(i, { note: e.target.value })}
+                      aria-label={`Detalle del renglón ${i + 1}`}
+                    />
+                    <button
+                      type="button"
+                      className="accion"
+                      aria-label={`Quitar renglón ${i + 1}`}
+                      disabled={renglones.length <= 2}
+                      onClick={() => setRenglones((prev) => prev.filter((_, j) => j !== i))}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+                <div className="renglon-pie">
+                  <button
+                    type="button"
+                    className="btn-liga"
+                    onClick={() => setRenglones((prev) => [...prev, { ...RENGLON_VACIO }])}
+                  >
+                    ＋ Otro renglón
+                  </button>
+                  {/*
+                    Lo que falta por repartir, siempre a la vista: el servidor
+                    exige que los renglones sumen exactamente el movimiento, y
+                    descubrirlo al guardar sería descubrirlo tarde.
+                  */}
+                  <span className={`renglon-resta${restante === 0 ? ' cuadra' : ''}`}>
+                    {restante === 0 ? (
+                      'Cuadra'
+                    ) : (
+                      <>
+                        {restante > 0 ? 'Falta por repartir ' : 'Te pasaste por '}
+                        <Money cents={Math.abs(restante)} />
+                      </>
+                    )}
+                  </span>
+                </div>
+              </>
+            )}
+          </fieldset>
+        )}
+
+        {/*
+          La devolución. Ligarla al gasto original es lo que evita que una
+          camisa devuelta cuente como ingreso e infle la tasa de ahorro.
+        */}
+        {type === 'ingreso' && (
+          <label className="campo">
+            <span className="campo-label">¿Devuelve un gasto?</span>
+            <select
+              className="campo-input"
+              value={refundOfId}
+              onChange={(e) => setRefundOfId(Number(e.target.value))}
+            >
+              <option value={0}>No, es un ingreso normal</option>
+              {gastosRecientes.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {fmtDate(g.date)} · {g.note || g.categoryName || 'Sin concepto'} · $
+                  {(g.amountCents / 100).toFixed(2)}
+                </option>
+              ))}
+            </select>
+            {refundOfId > 0 && (
+              <p className="campo-nota">
+                No cuenta como ingreso del mes: baja el gasto de esa partida y su categoría.
+              </p>
+            )}
+          </label>
+        )}
 
         {esNegocio && type !== 'transferencia' && (
           <>
@@ -410,6 +636,48 @@ export function TxModal({
             </button>
           </div>
         </fieldset>
+
+        {/* El recibo. Exige que el movimiento exista: sin id no hay dónde colgarlo. */}
+        {tx && (
+          <fieldset className="campo campo-fieldset">
+            <legend className="campo-label">Recibo</legend>
+            {adjuntos.length > 0 && (
+              <ul className="adjuntos">
+                {adjuntos.map((a) => (
+                  <li key={a.id} className="adjunto">
+                    <a href={api.tx.adjuntoUrl(tx.id, a.id)} download={a.filename}>
+                      {a.filename}
+                    </a>
+                    <span className="adjunto-peso">{Math.round(a.sizeBytes / 1024)} KB</span>
+                    <button
+                      type="button"
+                      className="accion"
+                      aria-label={`Quitar ${a.filename}`}
+                      onClick={() => void quitarAdjunto(a)}
+                    >
+                      ✕
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <input
+              ref={archivoRef}
+              type="file"
+              className="campo-input"
+              accept="image/png,image/jpeg,image/webp,image/heic,application/pdf"
+              disabled={subiendo}
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                if (file) void adjuntar(file)
+              }}
+              aria-label="Adjuntar recibo"
+            />
+            <p className="campo-nota">
+              Foto o PDF, hasta 2 MB. Se guarda dentro de tu libro y viaja en el respaldo.
+            </p>
+          </fieldset>
+        )}
 
         {error && <p className="forma-error" role="alert">{error}</p>}
 

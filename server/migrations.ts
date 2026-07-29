@@ -626,6 +626,184 @@ export const MIGRATIONS: Migration[] = [
       `)
     },
   },
+
+  {
+    id: 14,
+    name: 'el libro que cuadra: partida dividida, conciliación, reembolsos y recibos',
+    up: (db) => {
+      // Aditiva entera. Un libro que nunca divida una partida, nunca concilie y
+      // nunca adjunte nada queda **exactamente** igual que antes de migrar: las
+      // tres tablas nacen vacías y las dos columnas nuevas nacen nulas.
+      db.exec(`
+        -- D17. El movimiento sigue siendo **uno solo**; esto es su reparto por
+        -- categoría. Por eso ninguna consulta de saldo, patrimonio o
+        -- conciliación cambia: siguen leyendo \`transactions.amount_cents\`.
+        -- Lo único que cambia es el gasto por categoría, que deja de leer
+        -- \`category_id\` y lee estos renglones cuando existen.
+        --
+        -- Sin filas para un movimiento = sin dividir, y entonces manda su
+        -- \`category_id\` de siempre. Es la misma regla de \`profile_modules\`:
+        -- la ausencia significa "lo de antes", y por eso migrar no mueve nada.
+        CREATE TABLE IF NOT EXISTS tx_splits (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tx_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+          category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+          amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+          note TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_splits_tx ON tx_splits(tx_id);
+        CREATE INDEX IF NOT EXISTS idx_splits_categoria ON tx_splits(category_id);
+
+        -- D19, segunda mitad: el corte. "Al 31 de julio mi banco decía $X".
+        -- Sin esto, marcar casillas no demuestra nada; con esto, la resta
+        -- contra lo conciliado tiene respuesta sí/no.
+        CREATE TABLE IF NOT EXISTS account_statements (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+          date TEXT NOT NULL,
+          balance_cents INTEGER NOT NULL,
+          note TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE (account_id, date)
+        );
+        CREATE INDEX IF NOT EXISTS idx_cortes_cuenta ON account_statements(account_id, date);
+
+        -- El recibo. Va **dentro de la base**, en base64, y no en un archivo
+        -- suelto de data/: así viaja en el respaldo JSON sin que backup.ts
+        -- tenga que saber de archivos, y restaurar en otra máquina devuelve
+        -- también los recibos. Cuesta un tercio más de tamaño que el binario;
+        -- con el tope de 2 MB por archivo, es un precio que se paga.
+        CREATE TABLE IF NOT EXISTS tx_attachments (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tx_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+          filename TEXT NOT NULL,
+          mime TEXT NOT NULL DEFAULT '',
+          size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
+          data_b64 TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_adjuntos_tx ON tx_attachments(tx_id);
+      `)
+
+      // D19, primera mitad: la bandera. Fecha en que se marcó y no un 0/1,
+      // porque cuesta lo mismo y además dice cuándo se comprobó. NULL = sin
+      // conciliar, que es como queda todo lo que ya existía.
+      if (!hasColumn(db, 'transactions', 'reconciled_at')) {
+        db.exec('ALTER TABLE transactions ADD COLUMN reconciled_at TEXT')
+      }
+
+      // El reembolso apunta al gasto que devuelve. `ON DELETE SET NULL` y no
+      // CASCADE: si borras el gasto original, la devolución **sigue en el
+      // libro** porque ese dinero sí entró — es el mismo trato que ya tienen
+      // el desembolso de una deuda y el aporte de una inversión.
+      if (!hasColumn(db, 'transactions', 'refund_of_id')) {
+        db.exec(
+          `ALTER TABLE transactions ADD COLUMN refund_of_id INTEGER
+           REFERENCES transactions(id) ON DELETE SET NULL`,
+        )
+      }
+      db.exec('CREATE INDEX IF NOT EXISTS idx_tx_reembolso ON transactions(refund_of_id)')
+    },
+  },
+
+  {
+    id: 15,
+    name: 'patrimonio completo: bienes, metas ligadas al libro y una moneda por perfil',
+    up: (db) => {
+      db.exec(`
+        -- H3. Financiar un auto creaba una deuda que **bajaba** el patrimonio y
+        -- el auto nunca lo subía: el Resumen decía que comprar un coche te
+        -- empobrecía $240,000. El bien vive aquí, con su liga opcional a la
+        -- deuda que lo financia.
+        --
+        -- Tabla propia y no una inversión de tipo inmueble (D20): una inversión
+        -- tiene aportes, retiros, unidades y XIRR; un bien tiene costo, valor y
+        -- depreciación, y no se le calcula rendimiento. Es el argumento de D15
+        -- con las facturas, otra vez.
+        CREATE TABLE IF NOT EXISTS assets (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          kind TEXT NOT NULL DEFAULT 'otro'
+            CHECK (kind IN ('inmueble', 'vehiculo', 'equipo', 'otro')),
+          cost_cents INTEGER NOT NULL CHECK (cost_cents >= 0),
+          acquired_date TEXT NOT NULL,
+          debt_id INTEGER REFERENCES debts(id) ON DELETE SET NULL,
+          note TEXT NOT NULL DEFAULT '',
+          archived INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        -- El valor de hoy lo **declara el usuario** (R9). Finply no deprecia
+        -- por su cuenta: no hay una tasa universal para un coche o una casa, y
+        -- suponer una convertiría el patrimonio en una opinión de Finply.
+        -- Sin valuaciones, un bien vale lo que costó.
+        CREATE TABLE IF NOT EXISTS asset_valuations (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+          date TEXT NOT NULL,
+          value_cents INTEGER NOT NULL CHECK (value_cents >= 0),
+          note TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_bienes_perfil ON assets(profile_id, archived);
+        CREATE INDEX IF NOT EXISTS idx_valuaciones_bien ON asset_valuations(asset_id, date);
+      `)
+
+      // H1. El aporte a una meta salía de la nada: `goal_entries` no ligaba ni
+      // a cuenta ni a movimiento, así que apartar $50,000 no los quitaba de
+      // ningún lado y el mismo peso se contaba dos veces entre pantallas.
+      // Ahora la meta puede decir **dónde vive su dinero** y cada aporte puede
+      // llevar su movimiento, igual que un aporte a inversión.
+      if (!hasColumn(db, 'goals', 'account_id')) {
+        db.exec(
+          'ALTER TABLE goals ADD COLUMN account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL',
+        )
+      }
+      if (!hasColumn(db, 'transactions', 'goal_entry_id')) {
+        db.exec(
+          `ALTER TABLE transactions ADD COLUMN goal_entry_id INTEGER
+           REFERENCES goal_entries(id) ON DELETE SET NULL`,
+        )
+      }
+      db.exec('CREATE INDEX IF NOT EXISTS idx_tx_meta ON transactions(goal_entry_id)')
+
+      // H2/D18. La moneda pasa a ser **del perfil** y las cuentas la heredan.
+      // `accounts.currency` existía y se validaba, pero los saldos se sumaban
+      // sin convertir: mil dólares sumaban $1,000 al patrimonio en pesos. Se
+      // cierra la puerta en vez de dejarla entreabierta.
+      //
+      // El relleno toma la moneda **más usada** entre las cuentas del perfil,
+      // así que un libro de una sola moneda —todos los que existen— no nota
+      // nada. Las cuentas que difieran **no se tocan**: cambiarles el texto
+      // sería borrar lo que el usuario declaró. La vista de Cuentas las señala
+      // y dice que se suman como si fueran de la moneda del libro.
+      if (!hasColumn(db, 'profiles', 'currency')) {
+        db.exec("ALTER TABLE profiles ADD COLUMN currency TEXT NOT NULL DEFAULT 'MXN'")
+        db.exec(`
+          UPDATE profiles SET currency = COALESCE((
+            SELECT a.currency FROM accounts a
+            WHERE a.profile_id = profiles.id
+            GROUP BY a.currency
+            ORDER BY COUNT(*) DESC, a.id ASC
+            LIMIT 1
+          ), 'MXN')
+        `)
+      }
+
+      // Saldo mínimo con aviso, institución y orden. Los tres nulos o en cero:
+      // una cuenta de siempre se ve y se ordena exactamente igual que ayer.
+      if (!hasColumn(db, 'accounts', 'min_balance_cents')) {
+        db.exec('ALTER TABLE accounts ADD COLUMN min_balance_cents INTEGER')
+      }
+      if (!hasColumn(db, 'accounts', 'institution')) {
+        db.exec("ALTER TABLE accounts ADD COLUMN institution TEXT NOT NULL DEFAULT ''")
+      }
+      if (!hasColumn(db, 'accounts', 'sort_order')) {
+        db.exec('ALTER TABLE accounts ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0')
+      }
+    },
+  },
 ]
 
 /** Versión de esquema que espera este código. */

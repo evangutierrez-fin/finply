@@ -23,6 +23,12 @@ export interface Profile {
   /** Cómo llama este perfil a su dimensión libre: "Proyecto", "Sucursal"… */
   dimensionLabel: string
   /**
+   * La moneda del libro (D18). **Una por perfil**: las cuentas la heredan y
+   * quien tenga dólares abre otro perfil. Hacer multimoneda de verdad exige
+   * tipo de cambio con fecha, y eso es justo lo que R6 impide automatizar.
+   */
+  currency: string
+  /**
    * Las secciones que lleva este libro. Ya resueltas: lo guardado son
    * overrides y lo que falta sale del juego por omisión del tipo (D16).
    */
@@ -48,6 +54,12 @@ export interface Account {
   cutDay: number | null
   /** Día límite de pago. */
   dueDay: number | null
+  /** Debajo de esto Finply avisa. `null` = sin aviso. */
+  minBalanceCents: number | null
+  /** Quién la lleva: "BBVA", "Nu", "bajo el colchón". */
+  institution: string
+  /** Orden en el que se listan; a igualdad, manda la antigüedad. */
+  sortOrder: number
 }
 
 export type TxType = 'ingreso' | 'gasto' | 'transferencia'
@@ -104,7 +116,58 @@ export interface Tx {
   /** Impuesto **contenido** en el monto, no sumado a él. */
   taxCents: number
   deductible: boolean
+  /** Fecha en que se palomeó contra el estado de cuenta. `null` sin conciliar. */
+  reconciledAt: string | null
+  /** Si viene, este movimiento devuelve ese gasto y **resta** de él (D6). */
+  refundOfId: number | null
   tags: { id: number; name: string }[]
+  /**
+   * El reparto por categoría (D17). Vacío significa "sin dividir", y entonces
+   * manda `categoryId`. Los renglones suman exactamente `amountCents`.
+   */
+  splits: TxSplit[]
+  /** La ficha de los recibos adjuntos; los bytes se piden por su propia ruta. */
+  attachments: TxAttachment[]
+}
+
+export interface TxSplit {
+  id: number
+  categoryId: number | null
+  categoryName: string | null
+  amountCents: number
+  note: string
+}
+
+export interface TxAttachment {
+  id: number
+  filename: string
+  mime: string
+  sizeBytes: number
+  createdAt: string
+}
+
+/**
+ * Un corte de conciliación: lo que el estado de cuenta decía a esa fecha (D19).
+ * Todo lo demás es derivado y se recalcula al leer.
+ */
+export interface CorteConciliacion {
+  id: number
+  profileId: number
+  accountId: number
+  accountName: string
+  date: string
+  /** Lo que declaró el usuario. */
+  balanceCents: number
+  /** Lo que suman las partidas ya palomeadas hasta esa fecha. */
+  conciliadoCents: number
+  /** Lo que suma el libro entero hasta esa fecha. */
+  libroCents: number
+  /** Cero es "cuadra"; lo demás es lo que falta por explicar. */
+  diferenciaCents: number
+  pendientes: number
+  pendientesCents: number
+  note: string
+  createdAt: string
 }
 
 export type DebtDirection = 'por_cobrar' | 'por_pagar'
@@ -234,6 +297,8 @@ export interface Summary {
   recent: Tx[]
   debts: { porCobrarCents: number; porPagarCents: number; abiertas: number }
   investments: { investedCents: number; valueCents: number; count: number }
+  /** H3: el auto financiado también es tuyo. Entra al patrimonio por su valor. */
+  bienes: { costCents: number; valueCents: number; count: number }
 }
 
 // ── Reportes históricos ───────────────────────────────────────────────────
@@ -253,9 +318,14 @@ export interface PuntoPatrimonio {
   month: string
   cuentasCents: number
   inversionesCents: number
+  bienesCents: number
   porCobrarCents: number
   porPagarCents: number
-  /** Cuentas + inversiones + por cobrar − por pagar, igual que el Resumen. */
+  /**
+   * Cuentas + inversiones + bienes + por cobrar − por pagar, igual que el
+   * Resumen. Los bienes entran por su **valor**: la deuda que los financia ya
+   * está en `porPagar` y restarla aquí la contaría dos veces (R18).
+   */
   totalCents: number
 }
 
@@ -388,7 +458,13 @@ export interface Calendario {
 // y se apagan solas cuando el hecho deja de ser cierto. No hay tabla, no hay
 // "ya lo vi" que pueda quedarse viejo, y ninguna lectura escribe.
 
-export type TipoAlerta = 'presupuesto' | 'tarjeta' | 'recurrencia' | 'deuda' | 'meta'
+export type TipoAlerta =
+  | 'presupuesto'
+  | 'tarjeta'
+  | 'saldo_minimo'
+  | 'recurrencia'
+  | 'deuda'
+  | 'meta'
 
 /** `alta` es lo que cuesta dinero si se ignora; `media`, lo que conviene ver. */
 export type Severidad = 'alta' | 'media'
@@ -402,7 +478,7 @@ export interface Alerta {
   montoCents: number | null
   refId: number | null
   /** A qué sección lleva el clic. */
-  vista: 'presupuestos' | 'tarjetas' | 'recurrencias' | 'deudas' | 'metas'
+  vista: 'presupuestos' | 'tarjetas' | 'cuentas' | 'recurrencias' | 'deudas' | 'metas'
 }
 
 export interface CategoriaParte {
@@ -569,7 +645,62 @@ export interface Goal {
   note: string
   status: 'activa' | 'cumplida'
   savedCents: number
+  /** Dónde vive el dinero de la meta. `null` = la meta es solo un apunte (H1). */
+  accountId: number | null
+  accountName: string | null
+  accountBalanceCents: number | null
+  /**
+   * Cuánto de lo apartado movió dinero de verdad. Menor que `savedCents`
+   * significa que el resto son apuntes sin respaldo, y la vista lo dice.
+   */
+  respaldadoCents: number
+  /** Cuánto hay que apartar al mes para llegar. `null` sin fecha límite. */
+  porMesCents: number | null
   entries: GoalEntry[]
+}
+
+export type BienKind = 'inmueble' | 'vehiculo' | 'equipo' | 'otro'
+
+export interface ValuacionBien {
+  id: number
+  assetId: number
+  date: string
+  valueCents: number
+  note: string
+}
+
+/**
+ * Un bien: la casa, el auto, la herramienta (H3). Tabla propia y no una
+ * inversión (D20): un bien no tiene aportes ni rendimiento, tiene costo, valor
+ * y depreciación — y esa la **declara el usuario**, nunca la supone Finply.
+ */
+export interface Bien {
+  id: number
+  profileId: number
+  name: string
+  kind: BienKind
+  costCents: number
+  acquiredDate: string
+  /** La deuda que lo financia, si la hay. */
+  debtId: number | null
+  debtConcept: string | null
+  debtBalanceCents: number
+  note: string
+  archived: boolean
+  /** Lo que declaró el usuario, o el costo si nunca lo ha valuado. */
+  valueCents: number
+  /** Lo que ha perdido de valor. Negativo si subió. */
+  depreciacionCents: number
+  /** Lo que ya es tuyo: valor menos lo que debes del crédito. Puede ser negativo. */
+  equityCents: number
+  valuaciones: number
+  entries: ValuacionBien[]
+}
+
+export interface SerieCuenta {
+  accountId: number
+  name: string
+  puntos: { month: string; balanceCents: number }[]
 }
 
 export interface Note {

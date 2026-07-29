@@ -1,6 +1,7 @@
 import { Router } from 'express'
-import { db, accountsWithBalance, httpError, mapAccount } from '../db.ts'
-import { accountInput, accountPatch } from '../validators.ts'
+import { db, accountsWithBalance, httpError, mapAccount, saldoAFecha } from '../db.ts'
+import { accountInput, accountPatch, serieCuentaQuery } from '../validators.ts'
+import { hoyISO } from '../../shared/fechas.ts'
 
 const router = Router()
 
@@ -32,8 +33,9 @@ router.post('/', (req, res) => {
   const result = db
     .prepare(
       `INSERT INTO accounts
-        (profile_id, name, type, currency, opening_cents, credit_limit_cents, cut_day, due_day)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        (profile_id, name, type, currency, opening_cents, credit_limit_cents, cut_day, due_day,
+         min_balance_cents, institution, sort_order)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       input.profileId,
@@ -44,6 +46,9 @@ router.post('/', (req, res) => {
       input.creditLimitCents ?? null,
       input.cutDay ?? null,
       input.dueDay ?? null,
+      input.minBalanceCents ?? null,
+      input.institution,
+      input.sortOrder,
     )
   const rows = accountsWithBalance(input.profileId).map(mapAccount)
   const created = rows.find((a) => a.id === Number(result.lastInsertRowid))
@@ -75,7 +80,8 @@ router.patch('/:id', (req, res) => {
 
   db.prepare(
     `UPDATE accounts SET name = ?, type = ?, currency = ?, opening_cents = ?, archived = ?,
-      credit_limit_cents = ?, cut_day = ?, due_day = ? WHERE id = ?`,
+      credit_limit_cents = ?, cut_day = ?, due_day = ?,
+      min_balance_cents = ?, institution = ?, sort_order = ? WHERE id = ?`,
   ).run(
     input.name ?? existing.name,
     type,
@@ -85,10 +91,49 @@ router.patch('/:id', (req, res) => {
     credito.limite,
     credito.corte,
     credito.pago,
+    input.minBalanceCents === undefined ? existing.min_balance_cents : input.minBalanceCents,
+    input.institution ?? existing.institution,
+    input.sortOrder ?? existing.sort_order,
     id,
   )
   const rows = accountsWithBalance(existing.profile_id).map(mapAccount)
   res.json(rows.find((a) => a.id === id))
+})
+
+/**
+ * El saldo de **esta** cuenta al cierre de cada mes. La serie de patrimonio es
+ * global y no contesta "¿mi cuenta de ahorro va subiendo?": esta sí.
+ *
+ * Una sola consulta para toda la serie —un `saldoAFecha` por mes dentro del
+ * mismo SELECT— en vez de una por mes (R11).
+ */
+router.get('/:id/serie', (req, res) => {
+  const id = Number(req.params.id)
+  const cuenta: any = db.prepare('SELECT * FROM accounts WHERE id = ?').get(id)
+  if (!cuenta) return res.status(404).json({ error: 'Cuenta no encontrada' })
+  const { meses, hoy } = serieCuentaQuery.parse(req.query)
+  const hasta = hoy ?? hoyISO()
+
+  // Los cierres, de más viejo a más nuevo. El del mes en curso es hoy: el mes
+  // va a medias y decir su cierre sería inventar lo que todavía no pasa.
+  const [y, m] = hasta.slice(0, 7).split('-').map(Number)
+  const puntos: { month: string; cierre: string }[] = []
+  for (let i = meses - 1; i >= 0; i -= 1) {
+    const total = y! * 12 + (m! - 1) - i
+    const mes = `${Math.floor(total / 12)}-${String((((total % 12) + 12) % 12) + 1).padStart(2, '0')}`
+    puntos.push({ month: mes, cierre: i === 0 ? hasta : `${mes}-31` })
+  }
+
+  const columnas = puntos.map((_, i) => `${saldoAFecha('a', `?${''}`)} AS m${i}`).join(', ')
+  const fila: any = db
+    .prepare(`SELECT ${columnas} FROM accounts a WHERE a.id = ?`)
+    .get(...puntos.flatMap((p) => [p.cierre, p.cierre]), id)
+
+  res.json({
+    accountId: id,
+    name: cuenta.name,
+    puntos: puntos.map((p, i) => ({ month: p.month, balanceCents: fila[`m${i}`] as number })),
+  })
 })
 
 router.delete('/:id', (req, res) => {

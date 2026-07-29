@@ -150,9 +150,34 @@ export function accountsWithBalance(profileId: number): unknown[] {
           WHERE t.account_id = a.id OR t.transfer_account_id = a.id) AS tx_count
       FROM accounts a
       WHERE a.profile_id = ?
-      ORDER BY a.archived ASC, a.created_at ASC, a.id ASC`,
+      ORDER BY a.archived ASC, a.sort_order ASC, a.created_at ASC, a.id ASC`,
     )
     .all(profileId)
+}
+
+/**
+ * Saldo de una cuenta a una fecha, como expresión SQL. Misma aritmética que
+ * `accountsWithBalance`: apertura, más lo que entró y salió, más la pata que
+ * recibe de las transferencias. Si las dos se separaran, el corte de
+ * conciliación cuadraría contra un saldo que la vista de Cuentas no enseña.
+ *
+ * Es un fragmento y no una función que consulta para que el listado de cortes
+ * lo resuelva **en la misma consulta** en vez de una por corte (R11).
+ *
+ * @param cuenta alias de la fila de `accounts` en la consulta que lo usa
+ * @param fecha  expresión de fecha (una columna o un `?`)
+ * @param soloConciliados lo que vuelve útil al corte (D19): compara lo que el
+ *   banco dice contra lo que el usuario ya palomeó, no contra el libro entero
+ */
+export function saldoAFecha(cuenta: string, fecha: string, soloConciliados = false): string {
+  const filtro = soloConciliados ? 'AND t.reconciled_at IS NOT NULL' : ''
+  return `(${cuenta}.opening_cents
+    + COALESCE((SELECT SUM(CASE
+        WHEN t.type = 'ingreso' THEN t.amount_cents ELSE -t.amount_cents END)
+      FROM transactions t
+      WHERE t.account_id = ${cuenta}.id AND t.date <= ${fecha} ${filtro}), 0)
+    + COALESCE((SELECT SUM(t.amount_cents) FROM transactions t
+      WHERE t.transfer_account_id = ${cuenta}.id AND t.date <= ${fecha} ${filtro}), 0))`
 }
 
 export function mapAccount(row: any) {
@@ -169,6 +194,10 @@ export function mapAccount(row: any) {
     creditLimitCents: row.credit_limit_cents ?? null,
     cutDay: row.cut_day ?? null,
     dueDay: row.due_day ?? null,
+    /** Debajo de esto, Finply avisa. `null` = sin aviso. */
+    minBalanceCents: row.min_balance_cents ?? null,
+    institution: row.institution ?? '',
+    sortOrder: row.sort_order ?? 0,
   }
 }
 
@@ -233,6 +262,9 @@ export function mapProfile(row: any, modulos?: ModuloId[]) {
     accentHex: row.accent_hex ?? null,
     accentHexDark: row.accent_hex_dark ?? null,
     dimensionLabel: row.dimension_label ?? 'Proyecto',
+    // Una moneda por perfil (D18). Las cuentas la heredan; una que difiera se
+    // señala en la vista en vez de convertirse en silencio.
+    currency: row.currency ?? 'MXN',
     // Quien ya tenga la lista la pasa: el listado de perfiles resuelve los
     // overrides de todos en una consulta, no en una por perfil (R11).
     modules: modulos ?? modulosDe(row.id, row.kind),
@@ -265,8 +297,109 @@ export function mapTx(row: any) {
     costCenterName: row.cost_center_name ?? null,
     taxCents: row.tax_cents ?? 0,
     deductible: row.deductible === 1,
+    /** Fecha en que se marcó contra el estado de cuenta; `null` sin conciliar. */
+    reconciledAt: row.reconciled_at ?? null,
+    /** Si viene, este movimiento devuelve ese gasto (D6: no es ingreso). */
+    refundOfId: row.refund_of_id ?? null,
     tags: [] as { id: number; name: string }[],
+    /** Vacío = sin dividir, y entonces manda `categoryId`. */
+    splits: [] as TxSplit[],
+    /** Solo la ficha del recibo; los bytes se piden aparte. */
+    attachments: [] as TxAttachment[],
   }
+}
+
+export interface TxSplit {
+  id: number
+  categoryId: number | null
+  categoryName: string | null
+  amountCents: number
+  note: string
+}
+
+export interface TxAttachment {
+  id: number
+  filename: string
+  mime: string
+  sizeBytes: number
+  createdAt: string
+}
+
+/**
+ * Reemplaza el reparto de un movimiento. Llamar dentro de una transacción.
+ *
+ * Un movimiento dividido **no tiene categoría propia**: la deja en nulo. Si la
+ * conservara habría dos verdades sobre el mismo ticket —la categoría de arriba
+ * y la de los renglones— y cada consulta tendría que decidir a cuál creerle.
+ */
+export function setTxSplits(
+  txId: number,
+  splits: { categoryId?: number | null; amountCents: number; note: string }[],
+): void {
+  db.prepare('DELETE FROM tx_splits WHERE tx_id = ?').run(txId)
+  if (splits.length === 0) return
+  const insert = db.prepare(
+    'INSERT INTO tx_splits (tx_id, category_id, amount_cents, note) VALUES (?, ?, ?, ?)',
+  )
+  for (const r of splits) insert.run(txId, r.categoryId ?? null, r.amountCents, r.note)
+  db.prepare('UPDATE transactions SET category_id = NULL WHERE id = ?').run(txId)
+}
+
+/** Los renglones de varios movimientos en una sola consulta (R11: nada de N+1). */
+export function attachSplits(txs: { id: number; splits: TxSplit[] }[]): void {
+  if (txs.length === 0) return
+  const ids = txs.map((t) => t.id)
+  const rows = db
+    .prepare(
+      `SELECT s.id, s.tx_id, s.category_id, s.amount_cents, s.note, c.name AS category_name
+       FROM tx_splits s
+       LEFT JOIN categories c ON c.id = s.category_id
+       WHERE s.tx_id IN (${ids.map(() => '?').join(',')})
+       ORDER BY s.id ASC`,
+    )
+    .all(...ids) as any[]
+  const porTx = new Map<number, TxSplit[]>()
+  for (const r of rows) {
+    const lista = porTx.get(r.tx_id) ?? []
+    lista.push({
+      id: r.id,
+      categoryId: r.category_id ?? null,
+      categoryName: r.category_name ?? null,
+      amountCents: r.amount_cents,
+      note: r.note,
+    })
+    porTx.set(r.tx_id, lista)
+  }
+  for (const tx of txs) tx.splits = porTx.get(tx.id) ?? []
+}
+
+/**
+ * La ficha de los recibos, **sin los bytes**. `data_b64` nunca sale de aquí en
+ * un listado: un mes de tickets serían decenas de megas en cada carga.
+ */
+export function attachAdjuntos(txs: { id: number; attachments: TxAttachment[] }[]): void {
+  if (txs.length === 0) return
+  const ids = txs.map((t) => t.id)
+  const rows = db
+    .prepare(
+      `SELECT id, tx_id, filename, mime, size_bytes, created_at FROM tx_attachments
+       WHERE tx_id IN (${ids.map(() => '?').join(',')})
+       ORDER BY id ASC`,
+    )
+    .all(...ids) as any[]
+  const porTx = new Map<number, TxAttachment[]>()
+  for (const r of rows) {
+    const lista = porTx.get(r.tx_id) ?? []
+    lista.push({
+      id: r.id,
+      filename: r.filename,
+      mime: r.mime,
+      sizeBytes: r.size_bytes,
+      createdAt: r.created_at,
+    })
+    porTx.set(r.tx_id, lista)
+  }
+  for (const tx of txs) tx.attachments = porTx.get(tx.id) ?? []
 }
 
 /** Todas las etiquetas deben existir y ser del perfil. */

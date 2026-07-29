@@ -3,7 +3,8 @@ import type {
   Aging, CentroCosto, CompraMSI, Contraparte, Debt, DebtPayment, EstadoResultados, EstadoTarjeta,
   Factura, FlujoProyectado, Frecuencia, Goal, InformeImport, InformePrecios, Investment,
   InvestmentEntryType, LoteImport, MapeoImport, ModuloId, Note, Profile, Recurrencia, ReporteAnual,
-  ResultadoImport, RolCategoria, Simulacion, Summary, Tag, Tx, TxType,
+  ResultadoImport, RolCategoria, Simulacion, Summary, Tag, Tx, TxAttachment, TxType,
+  Bien, BienKind, CorteConciliacion, SerieCuenta,
 } from '../shared/types.ts'
 
 /** Error de la API que conserva el código y el cuerpo, para poder reaccionar. */
@@ -61,6 +62,8 @@ export interface TxFilters {
   minCents?: number
   maxCents?: number
   q?: string
+  /** Conciliación: 'si' solo lo palomeado, 'no' solo lo pendiente. */
+  conciliado?: 'si' | 'no'
   limit?: number
   offset?: number
 }
@@ -77,6 +80,7 @@ function txSearch(params: TxFilters): URLSearchParams {
   if (params.minCents !== undefined) search.set('minCents', String(params.minCents))
   if (params.maxCents !== undefined) search.set('maxCents', String(params.maxCents))
   if (params.q) search.set('q', params.q)
+  if (params.conciliado) search.set('conciliado', params.conciliado)
   if (params.limit !== undefined) search.set('limit', String(params.limit))
   if (params.offset) search.set('offset', String(params.offset))
   return search
@@ -100,6 +104,14 @@ export interface TxDraft {
   /** Impuesto contenido en el monto, no sumado a él. */
   taxCents?: number
   deductible?: boolean
+  /**
+   * El reparto por categoría (D17). **Ausente ≠ vacío**, igual que `tagIds`:
+   * ausente deja el reparto como estaba, vacío lo quita. Los renglones tienen
+   * que sumar exactamente `amountCents` o el servidor rechaza.
+   */
+  splits?: { categoryId?: number | null; amountCents: number; note?: string }[]
+  /** El gasto que este movimiento devuelve. `null` explícito lo desliga. */
+  refundOfId?: number | null
 }
 
 export interface ImportDraft {
@@ -135,6 +147,13 @@ export interface DebtDraft {
   downPaymentCents?: number
   /** Solo al crear: cuenta de la que sale (o a la que entra) el enganche. */
   downPaymentAccountId?: number | null
+}
+
+/** Lo que la Fase 11 le agregó a una cuenta. `null` en el mínimo quita el aviso. */
+export interface CuentaExtra {
+  minBalanceCents?: number | null
+  institution?: string
+  sortOrder?: number
 }
 
 /** Datos de crédito de una cuenta. `null` los borra; ausente no opina. */
@@ -222,14 +241,18 @@ export const api = {
   accounts: {
     list: (profileId: number) => req<Account[]>(`/api/accounts?profileId=${profileId}`),
     create: (
-      data: { profileId: number; name: string; type: string; openingCents: number } & CreditoDraft,
+      data: { profileId: number; name: string; type: string; openingCents: number } & CreditoDraft &
+        CuentaExtra,
     ) => req<Account>('/api/accounts', { method: 'POST', body: JSON.stringify(data) }),
     update: (
       id: number,
       data: Partial<{ name: string; type: string; openingCents: number; archived: boolean }> &
-        CreditoDraft,
+        CreditoDraft &
+        CuentaExtra,
     ) => req<Account>(`/api/accounts/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     remove: (id: number) => req<{ ok: true }>(`/api/accounts/${id}`, { method: 'DELETE' }),
+    /** El saldo de esta cuenta al cierre de cada mes. La serie global no lo dice. */
+    serie: (id: number, meses = 12) => req<SerieCuenta>(`/api/accounts/${id}/serie?meses=${meses}`),
   },
   tarjetas: {
     /** Estado de cuenta de cada tarjeta: corte, pago y línea disponible. */
@@ -302,6 +325,71 @@ export const api = {
     update: (id: number, data: TxDraft) =>
       req<Tx>(`/api/transactions/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     remove: (id: number) => req<{ ok: true }>(`/api/transactions/${id}`, { method: 'DELETE' }),
+    /** Copia una partida sin sus ligas: es un movimiento nuevo, no un segundo abono. */
+    duplicar: (id: number, date?: string) =>
+      req<Tx>(`/api/transactions/${id}/duplicar`, {
+        method: 'POST',
+        body: JSON.stringify(date ? { date } : {}),
+      }),
+    /** Palomear (o despalomear) contra el estado de cuenta. No mueve una cifra. */
+    conciliar: (data: { profileId: number; txIds: number[]; reconciled: boolean }) =>
+      req<{ ok: true; cambiados: number }>('/api/transactions/conciliar', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    adjuntar: (id: number, data: { filename: string; mime: string; dataB64: string }) =>
+      req<TxAttachment>(`/api/transactions/${id}/adjuntos`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    adjuntoUrl: (txId: number, adjuntoId: number) =>
+      `/api/transactions/${txId}/adjuntos/${adjuntoId}`,
+    quitarAdjunto: (txId: number, adjuntoId: number) =>
+      req<{ ok: true }>(`/api/transactions/${txId}/adjuntos/${adjuntoId}`, { method: 'DELETE' }),
+  },
+  bienes: {
+    list: (profileId: number) => req<Bien[]>(`/api/bienes?profileId=${profileId}`),
+    create: (data: {
+      profileId: number
+      name: string
+      kind: BienKind
+      costCents: number
+      acquiredDate: string
+      debtId?: number | null
+      note?: string
+    }) => req<Bien>('/api/bienes', { method: 'POST', body: JSON.stringify(data) }),
+    update: (
+      id: number,
+      data: Partial<{
+        name: string
+        kind: BienKind
+        costCents: number
+        acquiredDate: string
+        debtId: number | null
+        note: string
+        archived: boolean
+      }>,
+    ) => req<Bien>(`/api/bienes/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    remove: (id: number) => req<{ ok: true }>(`/api/bienes/${id}`, { method: 'DELETE' }),
+    /** Cuánto vale hoy, declarado por el usuario. Repetir fecha corrige. */
+    valuar: (id: number, data: { date: string; valueCents: number; note?: string }) =>
+      req<Bien>(`/api/bienes/${id}/valuaciones`, { method: 'POST', body: JSON.stringify(data) }),
+    quitarValuacion: (valuacionId: number) =>
+      req<Bien>(`/api/bienes/valuaciones/${valuacionId}`, { method: 'DELETE' }),
+  },
+  conciliacion: {
+    list: (profileId: number, accountId?: number) =>
+      req<CorteConciliacion[]>(
+        `/api/conciliacion?profileId=${profileId}${accountId ? `&accountId=${accountId}` : ''}`,
+      ),
+    declarar: (data: {
+      profileId: number
+      accountId: number
+      date: string
+      balanceCents: number
+      note?: string
+    }) => req<CorteConciliacion>('/api/conciliacion', { method: 'POST', body: JSON.stringify(data) }),
+    remove: (id: number) => req<{ ok: true }>(`/api/conciliacion/${id}`, { method: 'DELETE' }),
   },
   debts: {
     list: (profileId: number) => req<Debt[]>(`/api/debts?profileId=${profileId}`),
@@ -433,14 +521,29 @@ export const api = {
   goals: {
     list: (profileId: number) => req<Goal[]>(`/api/goals?profileId=${profileId}`),
     create: (data: {
-      profileId: number; name: string; targetCents: number; dueDate?: string | null; note?: string
+      profileId: number
+      name: string
+      targetCents: number
+      dueDate?: string | null
+      note?: string
+      /** Dónde vive el dinero de la meta. Sin ella, la meta es solo un apunte. */
+      accountId?: number | null
     }) => req<Goal>('/api/goals', { method: 'POST', body: JSON.stringify(data) }),
     update: (
       id: number,
-      data: Partial<{ name: string; targetCents: number; dueDate: string | null; note: string }>,
+      data: Partial<{
+        name: string
+        targetCents: number
+        dueDate: string | null
+        note: string
+        accountId: number | null
+      }>,
     ) => req<Goal>(`/api/goals/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     remove: (id: number) => req<{ ok: true }>(`/api/goals/${id}`, { method: 'DELETE' }),
-    addEntry: (id: number, data: { amountCents: number; date: string; note?: string }) =>
+    addEntry: (
+      id: number,
+      data: { amountCents: number; date: string; note?: string; accountId?: number | null },
+    ) =>
       req<Goal>(`/api/goals/${id}/entries`, { method: 'POST', body: JSON.stringify(data) }),
     removeEntry: (entryId: number) =>
       req<Goal>(`/api/goals/entries/${entryId}`, { method: 'DELETE' }),

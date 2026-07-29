@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { db, httpError } from '../db.ts'
+import { GASTO_DE_PRESUPUESTO } from '../reportes.ts'
 import { budgetCopyInput, budgetInput, budgetQuery } from '../validators.ts'
 
 const router = Router()
@@ -16,12 +17,14 @@ function mapBudget(row: any) {
   }
 }
 
-/** El tope y lo gastado son ambos del mes del presupuesto. */
+/**
+ * El tope y lo gastado son ambos del mes del presupuesto. Lo gastado sale del
+ * fragmento compartido con la alerta de tope excedido: si cada uno tuviera el
+ * suyo, la barra y la alerta podrían decir cifras distintas del mismo mes.
+ */
 const BUDGET_SELECT = `
   SELECT b.id, b.profile_id, b.category_id, b.month, b.amount_cents, c.name AS category_name,
-    COALESCE((SELECT SUM(t.amount_cents) FROM transactions t
-      WHERE t.profile_id = b.profile_id AND t.category_id = b.category_id
-        AND t.type = 'gasto' AND substr(t.date, 1, 7) = b.month), 0) AS spent_cents
+    ${GASTO_DE_PRESUPUESTO} AS spent_cents
   FROM budgets b
   JOIN categories c ON c.id = b.category_id
 `
