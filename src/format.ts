@@ -12,6 +12,26 @@ export function fmtMoney(cents: number, currency = 'MXN'): string {
   return f.format(cents / 100)
 }
 
+/**
+ * Dinero corto para el eje de una gráfica: `$0`, `$850`, `$1.2k`, `$45k`,
+ * `$1.3M`. El eje necesita que la cifra quepa; el pie y las tablas siguen
+ * usando `fmtMoney`, que es la cifra exacta.
+ */
+export function fmtCompacto(cents: number): string {
+  const pesos = cents / 100
+  const signo = pesos < 0 ? '−' : ''
+  const abs = Math.abs(pesos)
+  if (abs >= 1_000_000) {
+    const m = abs / 1_000_000
+    return `${signo}$${m >= 10 ? Math.round(m) : m.toFixed(1).replace(/\.0$/, '')}M`
+  }
+  if (abs >= 1_000) {
+    const k = abs / 1_000
+    return `${signo}$${k >= 10 ? Math.round(k) : k.toFixed(1).replace(/\.0$/, '')}k`
+  }
+  return `${signo}$${Math.round(abs)}`
+}
+
 /** '1,234.56' | '$1234' | '1234.5' → centavos enteros, o null si no es un monto. */
 export function parseAmount(raw: string): number | null {
   const clean = raw.replace(/[$,\s]/g, '')

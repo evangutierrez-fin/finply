@@ -1,10 +1,145 @@
-import { useState } from 'react'
+import { useState, type Dispatch, type KeyboardEvent, type SetStateAction } from 'react'
 import type { MesReporte, PuntoPatrimonio, Summary } from '../../shared/types.ts'
-import { fmtDate, fmtMoney, MESES } from '../format.ts'
+import { ticksBonitos, techoDeEscala } from '../../shared/escalas.ts'
+import { fmtCompacto, fmtDate, fmtMoney, MESES } from '../format.ts'
 
 function daysInMonth(month: string): number {
   const [y, m] = month.split('-').map(Number)
   return new Date(y!, m!, 0).getDate()
+}
+
+/**
+ * Ancho reservado a los rótulos del eje, en unidades del viewBox.
+ *
+ * El eje no es decoración: sin él, la única forma de saber cuánto mide una
+ * barra es pasarle el ratón encima — y el cierre de año **se imprime**, donde
+ * no hay ratón que valga. Una gráfica que solo se entiende en pantalla y con
+ * mouse no es una gráfica, es un adorno interactivo.
+ */
+const MARGEN_EJE = 46
+
+/** Las marcas horizontales con su cifra. Se leen igual en papel. */
+function EjeY({
+  marcas,
+  y,
+  x0,
+  x1,
+}: {
+  marcas: number[]
+  y: (cents: number) => number
+  x0: number
+  x1: number
+}) {
+  return (
+    <g aria-hidden="true">
+      {marcas.map((v) => (
+        <g key={v}>
+          <line x1={x0} y1={y(v)} x2={x1} y2={y(v)} className={v === 0 ? 'grafica-base' : 'grafica-guia'} />
+          <text x={x0 - 6} y={y(v) + 3.2} className="grafica-tick eje-rotulo" textAnchor="end">
+            {fmtCompacto(v)}
+          </text>
+        </g>
+      ))}
+    </g>
+  )
+}
+
+/**
+ * Los mismos datos en una tabla que solo ven los lectores de pantalla.
+ *
+ * Un `role="img"` con etiqueta dice *qué* es la gráfica, nunca *cuánto* vale
+ * cada barra. La tabla es la que entrega las cifras, y va siempre en el DOM
+ * —no detrás de un botón— para que no dependa de que alguien la abra.
+ */
+function TablaDatos({
+  titulo,
+  columnas,
+  filas,
+}: {
+  titulo: string
+  columnas: string[]
+  filas: (string | number)[][]
+}) {
+  return (
+    <table className="sr-only">
+      <caption>{titulo}</caption>
+      <thead>
+        <tr>
+          {columnas.map((c) => (
+            <th key={c} scope="col">{c}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {filas.map((fila, i) => (
+          <tr key={i}>
+            {fila.map((celda, j) =>
+              j === 0 ? (
+                <th key={j} scope="row">{celda}</th>
+              ) : (
+                <td key={j}>{celda}</td>
+              ),
+            )}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+/**
+ * Recorrer una serie con el teclado.
+ *
+ * El dato de estas gráficas vivía entero en `onMouseEnter`, así que con
+ * teclado o en una pantalla táctil no había forma de leer un valor. Con esto
+ * el SVG entra en el orden de tabulación y las flechas mueven el punto
+ * destacado; el pie va en `aria-live`, así que cada paso se anuncia.
+ */
+function useNavegable(n: number, setActivo: Dispatch<SetStateAction<number | null>>) {
+  return {
+    tabIndex: n > 0 ? 0 : undefined,
+    onFocus: () => setActivo((a) => a ?? 0),
+    onBlur: () => setActivo(null),
+    onMouseLeave: () => setActivo(null),
+    onKeyDown: (e: KeyboardEvent) => {
+      const paso = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0
+      if (paso !== 0) {
+        e.preventDefault()
+        // Actualización **funcional**, no `activo + paso`: con la tecla dejada
+        // apretada los eventos llegan más rápido de lo que React repinta, y
+        // todos leerían el mismo valor viejo. Se veía: tres flechas seguidas
+        // movían un solo paso.
+        setActivo((a) => Math.min(n - 1, Math.max(0, (a ?? 0) + paso)))
+      } else if (e.key === 'Home') {
+        e.preventDefault()
+        setActivo(0)
+      } else if (e.key === 'End') {
+        e.preventDefault()
+        setActivo(n - 1)
+      } else if (e.key === 'Escape') {
+        setActivo(null)
+      }
+    },
+  }
+}
+
+/** Lo que dice el pie cuando la escala se cortó. Nunca se calla. */
+function notaRecorte(recortados: number): string | null {
+  if (recortados === 0) return null
+  return recortados === 1
+    ? '1 barra se sale de la escala y va recortada'
+    : `${recortados} barras se salen de la escala y van recortadas`
+}
+
+/** La punta serrada de una barra recortada: se ve que le falta. */
+function Serrucho({ x, y, w }: { x: number; y: number; w: number }) {
+  const dientes = 3
+  const paso = w / dientes
+  const puntos = Array.from({ length: dientes * 2 + 1 }, (_, i) => {
+    const px = x + (i * paso) / 2
+    return `${px.toFixed(2)},${(y + (i % 2 === 0 ? 0 : 2.4)).toFixed(2)}`
+  }).join(' ')
+  return <polyline points={puntos} className="barra-recorte" />
 }
 
 /**
@@ -13,22 +148,38 @@ function daysInMonth(month: string): number {
  * la leyenda y la posición fija (entrada siempre a la izquierda del par).
  */
 export function MonthBars({ byDay, month }: { byDay: Summary['byDay']; month: string }) {
-  const [hover, setHover] = useState<string | null>(null)
+  const [activo, setActivo] = useState<number | null>(null)
   const days = daysInMonth(month)
   const map = new Map(byDay.map((d) => [d.date, d]))
-  const max = Math.max(...byDay.map((d) => Math.max(d.incomeCents, d.expenseCents)), 1)
+  const fechaDe = (i: number) => `${month}-${String(i + 1).padStart(2, '0')}`
+
+  // El día de la nómina mide treinta veces cualquier gasto; con la escala
+  // hasta el máximo, los otros veintinueve días quedan invisibles.
+  const { techo, recortados } = techoDeEscala(
+    byDay.flatMap((d) => [d.incomeCents, d.expenseCents]),
+  )
 
   const step = 16
   const barW = 5
   const chartH = 120
-  const width = days * step
+  const util = chartH * 0.9
+  const ancho = days * step
+  const width = MARGEN_EJE + ancho
   const height = chartH + 22
+  const y = (cents: number) => chartH - Math.min(cents, techo) / techo * util
+  const nav = useNavegable(days, setActivo)
 
   if (byDay.length === 0) {
     return <p className="grafica-vacia">Sin movimientos este mes. La gráfica espera tu primer registro.</p>
   }
 
-  const hovered = hover ? map.get(hover) : null
+  // Un día sin movimientos también se anuncia: recorriendo con el teclado, no
+  // decir nada se siente como que la flecha no hizo nada.
+  const destacado =
+    activo === null
+      ? null
+      : (map.get(fechaDe(activo)) ?? { date: fechaDe(activo), incomeCents: 0, expenseCents: 0 })
+  const aviso = notaRecorte(recortados)
 
   return (
     <div className="grafica">
@@ -36,8 +187,8 @@ export function MonthBars({ byDay, month }: { byDay: Summary['byDay']; month: st
         viewBox={`0 0 ${width} ${height}`}
         className="grafica-svg"
         role="img"
-        aria-label="Entradas y salidas por día del mes"
-        onMouseLeave={() => setHover(null)}
+        aria-label={`Entradas y salidas por día. Usa las flechas para recorrer los ${days} días.`}
+        {...nav}
       >
         <defs>
           <pattern id="rayado" patternUnits="userSpaceOnUse" width="4" height="4" patternTransform="rotate(45)">
@@ -45,47 +196,57 @@ export function MonthBars({ byDay, month }: { byDay: Summary['byDay']; month: st
             <line x1="0" y1="0" x2="0" y2="4" stroke="var(--hoja)" strokeWidth="1.6" />
           </pattern>
         </defs>
-        {/* línea guía del máximo */}
-        <line x1="0" y1={chartH - chartH * 0.9} x2={width} y2={chartH - chartH * 0.9} className="grafica-guia" />
-        <line x1="0" y1={chartH} x2={width} y2={chartH} className="grafica-base" />
+        <EjeY marcas={ticksBonitos(0, techo, 3)} y={y} x0={MARGEN_EJE} x1={width} />
+        <line x1={MARGEN_EJE} y1={chartH} x2={width} y2={chartH} className="grafica-base" />
         {Array.from({ length: days }, (_, i) => {
           const dayNum = i + 1
-          const date = `${month}-${String(dayNum).padStart(2, '0')}`
+          const date = fechaDe(i)
           const d = map.get(date)
-          const hIn = d ? Math.max(2, (d.incomeCents / max) * chartH * 0.9) : 0
-          const hOut = d ? Math.max(2, (d.expenseCents / max) * chartH * 0.9) : 0
-          const x = i * step + (step - barW * 2 - 2) / 2
+          const x = MARGEN_EJE + i * step + (step - barW * 2 - 2) / 2
+          // Se dibuja **desde la base hacia arriba**: con un alto mínimo pero
+          // anclada en `y(cents)`, una barra diminuta se salía por debajo de
+          // la línea del cero.
+          const alto = (cents: number) => Math.max(2, chartH - y(cents))
+          const arriba = (cents: number) => chartH - alto(cents)
           return (
-            <g key={date} onMouseEnter={() => setHover(date)}>
+            <g key={date} onMouseEnter={() => setActivo(i)}>
               {/* blanco de interacción a lo alto de la columna */}
-              <rect x={i * step} y="0" width={step} height={chartH} fill="transparent" />
+              <rect x={MARGEN_EJE + i * step} y="0" width={step} height={chartH} fill="transparent" />
               {d && d.incomeCents > 0 && (
-                <rect
-                  className="barra"
-                  style={{ animationDelay: `${Math.min(i * 14, 420)}ms` }}
-                  x={x}
-                  y={chartH - hIn}
-                  width={barW}
-                  height={hIn}
-                  rx="1.5"
-                  fill="var(--viz-entrada)"
-                />
+                <>
+                  <rect
+                    className="barra"
+                    style={{ animationDelay: `${Math.min(i * 14, 420)}ms` }}
+                    x={x}
+                    y={arriba(d.incomeCents)}
+                    width={barW}
+                    height={alto(d.incomeCents)}
+                    rx="1.5"
+                    fill="var(--viz-entrada)"
+                  />
+                  {d.incomeCents > techo && <Serrucho x={x} y={arriba(d.incomeCents)} w={barW} />}
+                </>
               )}
               {d && d.expenseCents > 0 && (
-                <rect
-                  className="barra"
-                  style={{ animationDelay: `${Math.min(i * 14 + 40, 460)}ms` }}
-                  x={x + barW + 2}
-                  y={chartH - hOut}
-                  width={barW}
-                  height={hOut}
-                  rx="1.5"
-                  fill="url(#rayado)"
-                />
+                <>
+                  <rect
+                    className="barra"
+                    style={{ animationDelay: `${Math.min(i * 14 + 40, 460)}ms` }}
+                    x={x + barW + 2}
+                    y={arriba(d.expenseCents)}
+                    width={barW}
+                    height={alto(d.expenseCents)}
+                    rx="1.5"
+                    fill="url(#rayado)"
+                  />
+                  {d.expenseCents > techo && <Serrucho x={x + barW + 2} y={arriba(d.expenseCents)} w={barW} />}
+                </>
               )}
-              {hover === date && <rect x={i * step} y="0" width={step} height={chartH} className="grafica-halo" />}
+              {activo === i && (
+                <rect x={MARGEN_EJE + i * step} y="0" width={step} height={chartH} className="grafica-halo" />
+              )}
               {(dayNum === 1 || dayNum % 7 === 0) && (
-                <text x={i * step + step / 2} y={chartH + 15} className="grafica-tick" textAnchor="middle">
+                <text x={MARGEN_EJE + i * step + step / 2} y={chartH + 15} className="grafica-tick" textAnchor="middle">
                   {dayNum}
                 </text>
               )}
@@ -93,22 +254,28 @@ export function MonthBars({ byDay, month }: { byDay: Summary['byDay']; month: st
           )
         })}
       </svg>
-      <div className="grafica-pie">
-        {hovered ? (
+      <div className="grafica-pie" aria-live="polite">
+        {destacado ? (
           <span className="grafica-dato">
-            <strong>{fmtDate(hovered.date)}</strong>
+            <strong>{fmtDate(destacado.date)}</strong>
             {' · entró '}
-            <span className="cifra-chica">{fmtMoney(hovered.incomeCents)}</span>
+            <span className="cifra-chica">{fmtMoney(destacado.incomeCents)}</span>
             {' · salió '}
-            <span className="cifra-chica">{fmtMoney(hovered.expenseCents)}</span>
+            <span className="cifra-chica">{fmtMoney(destacado.expenseCents)}</span>
           </span>
         ) : (
           <span className="grafica-leyenda">
             <span className="muestra muestra-entrada" aria-hidden="true" /> Entradas
             <span className="muestra muestra-salida" aria-hidden="true" /> Salidas
+            {aviso && <span className="grafica-aviso">· {aviso}</span>}
           </span>
         )}
       </div>
+      <TablaDatos
+        titulo="Entradas y salidas por día del mes"
+        columnas={['Día', 'Entró', 'Salió']}
+        filas={byDay.map((d) => [fmtDate(d.date), fmtMoney(d.incomeCents), fmtMoney(d.expenseCents)])}
+      />
     </div>
   )
 }
@@ -121,15 +288,20 @@ const INICIAL = MESES.map((m) => m.charAt(0).toUpperCase())
  * entrada siempre a la izquierda del par (R10).
  */
 export function YearBars({ meses }: { meses: MesReporte[] }) {
-  const [hover, setHover] = useState<number | null>(null)
-  const max = Math.max(...meses.map((m) => Math.max(m.incomeCents, m.expenseCents)), 1)
+  const [activo, setActivo] = useState<number | null>(null)
+  const { techo, recortados } = techoDeEscala(meses.flatMap((m) => [m.incomeCents, m.expenseCents]))
 
   const step = 54
   const barW = 18
   const chartH = 150
-  const width = meses.length * step
+  const util = chartH * 0.9
+  const ancho = meses.length * step
+  const width = MARGEN_EJE + ancho
   const height = chartH + 24
-  const hovered = hover === null ? null : meses[hover]
+  const y = (cents: number) => chartH - Math.min(cents, techo) / techo * util
+  const destacado = activo === null ? null : meses[activo]
+  const nav = useNavegable(meses.length, setActivo)
+  const aviso = notaRecorte(recortados)
 
   if (meses.every((m) => m.incomeCents === 0 && m.expenseCents === 0)) {
     return <p className="grafica-vacia">Este año no tiene movimientos todavía.</p>
@@ -141,8 +313,8 @@ export function YearBars({ meses }: { meses: MesReporte[] }) {
         viewBox={`0 0 ${width} ${height}`}
         className="grafica-svg"
         role="img"
-        aria-label="Entradas y salidas mes a mes del año"
-        onMouseLeave={() => setHover(null)}
+        aria-label="Entradas y salidas mes a mes del año. Usa las flechas para recorrer los meses."
+        {...nav}
       >
         <defs>
           <pattern id="rayado-anio" patternUnits="userSpaceOnUse" width="4" height="4" patternTransform="rotate(45)">
@@ -150,57 +322,76 @@ export function YearBars({ meses }: { meses: MesReporte[] }) {
             <line x1="0" y1="0" x2="0" y2="4" stroke="var(--hoja)" strokeWidth="1.6" />
           </pattern>
         </defs>
-        <line x1="0" y1={chartH * 0.1} x2={width} y2={chartH * 0.1} className="grafica-guia" />
-        <line x1="0" y1={chartH} x2={width} y2={chartH} className="grafica-base" />
+        <EjeY marcas={ticksBonitos(0, techo, 4)} y={y} x0={MARGEN_EJE} x1={width} />
+        <line x1={MARGEN_EJE} y1={chartH} x2={width} y2={chartH} className="grafica-base" />
         {meses.map((m, i) => {
-          const hIn = m.incomeCents > 0 ? Math.max(2, (m.incomeCents / max) * chartH * 0.9) : 0
-          const hOut = m.expenseCents > 0 ? Math.max(2, (m.expenseCents / max) * chartH * 0.9) : 0
-          const x = i * step + (step - barW * 2 - 3) / 2
+          const x = MARGEN_EJE + i * step + (step - barW * 2 - 3) / 2
+          const alto = (cents: number) => Math.max(2, chartH - y(cents))
+          const arriba = (cents: number) => chartH - alto(cents)
           return (
-            <g key={m.month} onMouseEnter={() => setHover(i)}>
-              <rect x={i * step} y="0" width={step} height={chartH} fill="transparent" />
-              {hIn > 0 && (
-                <rect
-                  className="barra"
-                  style={{ animationDelay: `${i * 30}ms` }}
-                  x={x} y={chartH - hIn} width={barW} height={hIn} rx="1.5"
-                  fill="var(--viz-entrada)"
-                />
+            <g key={m.month} onMouseEnter={() => setActivo(i)}>
+              <rect x={MARGEN_EJE + i * step} y="0" width={step} height={chartH} fill="transparent" />
+              {m.incomeCents > 0 && (
+                <>
+                  <rect
+                    className="barra"
+                    style={{ animationDelay: `${i * 30}ms` }}
+                    x={x} y={arriba(m.incomeCents)} width={barW} height={alto(m.incomeCents)} rx="1.5"
+                    fill="var(--viz-entrada)"
+                  />
+                  {m.incomeCents > techo && <Serrucho x={x} y={arriba(m.incomeCents)} w={barW} />}
+                </>
               )}
-              {hOut > 0 && (
-                <rect
-                  className="barra"
-                  style={{ animationDelay: `${i * 30 + 60}ms` }}
-                  x={x + barW + 3} y={chartH - hOut} width={barW} height={hOut} rx="1.5"
-                  fill="url(#rayado-anio)"
-                />
+              {m.expenseCents > 0 && (
+                <>
+                  <rect
+                    className="barra"
+                    style={{ animationDelay: `${i * 30 + 60}ms` }}
+                    x={x + barW + 3} y={arriba(m.expenseCents)} width={barW} height={alto(m.expenseCents)} rx="1.5"
+                    fill="url(#rayado-anio)"
+                  />
+                  {m.expenseCents > techo && <Serrucho x={x + barW + 3} y={arriba(m.expenseCents)} w={barW} />}
+                </>
               )}
-              {hover === i && <rect x={i * step} y="0" width={step} height={chartH} className="grafica-halo" />}
-              <text x={i * step + step / 2} y={chartH + 16} className="grafica-tick" textAnchor="middle">
+              {activo === i && (
+                <rect x={MARGEN_EJE + i * step} y="0" width={step} height={chartH} className="grafica-halo" />
+              )}
+              <text x={MARGEN_EJE + i * step + step / 2} y={chartH + 16} className="grafica-tick" textAnchor="middle">
                 {INICIAL[i]}
               </text>
             </g>
           )
         })}
       </svg>
-      <div className="grafica-pie">
-        {hovered ? (
+      <div className="grafica-pie" aria-live="polite">
+        {destacado ? (
           <span className="grafica-dato">
-            <strong>{MESES[Number(hovered.month.slice(5)) - 1]}</strong>
+            <strong>{MESES[Number(destacado.month.slice(5)) - 1]}</strong>
             {' · entró '}
-            <span className="cifra-chica">{fmtMoney(hovered.incomeCents)}</span>
+            <span className="cifra-chica">{fmtMoney(destacado.incomeCents)}</span>
             {' · salió '}
-            <span className="cifra-chica">{fmtMoney(hovered.expenseCents)}</span>
+            <span className="cifra-chica">{fmtMoney(destacado.expenseCents)}</span>
             {' · quedó '}
-            <span className="cifra-chica">{fmtMoney(hovered.netCents)}</span>
+            <span className="cifra-chica">{fmtMoney(destacado.netCents)}</span>
           </span>
         ) : (
           <span className="grafica-leyenda">
             <span className="muestra muestra-entrada" aria-hidden="true" /> Entradas
             <span className="muestra muestra-salida" aria-hidden="true" /> Salidas
+            {aviso && <span className="grafica-aviso">· {aviso}</span>}
           </span>
         )}
       </div>
+      <TablaDatos
+        titulo="Entradas y salidas mes a mes del año"
+        columnas={['Mes', 'Entró', 'Salió', 'Quedó']}
+        filas={meses.map((m) => [
+          MESES[Number(m.month.slice(5)) - 1]!,
+          fmtMoney(m.incomeCents),
+          fmtMoney(m.expenseCents),
+          fmtMoney(m.netCents),
+        ])}
+      />
     </div>
   )
 }
@@ -211,7 +402,7 @@ export function YearBars({ meses }: { meses: MesReporte[] }) {
  * línea, porque deber más de lo que tienes se ve distinto a tener poco.
  */
 export function PatrimonioLinea({ patrimonio }: { patrimonio: PuntoPatrimonio[] }) {
-  const [hover, setHover] = useState<number | null>(null)
+  const [activo, setActivo] = useState<number | null>(null)
   const valores = patrimonio.map((p) => p.totalCents)
   const max = Math.max(...valores, 0)
   const min = Math.min(...valores, 0)
@@ -222,16 +413,18 @@ export function PatrimonioLinea({ patrimonio }: { patrimonio: PuntoPatrimonio[] 
   // Medio paso de aire a cada lado: sin él, el primer y el último punto se
   // parten contra el borde del recuadro.
   const margen = step / 2
-  const width = (patrimonio.length - 1) * step + margen * 2
+  const ancho = (patrimonio.length - 1) * step + margen * 2
+  const width = MARGEN_EJE + ancho
   const height = chartH + 24
   const y = (cents: number) => chartH - ((cents - min) / rango) * chartH * 0.9 - chartH * 0.05
-  const puntos = patrimonio.map((p, i) => ({ x: margen + i * step, y: y(p.totalCents), p }))
+  const puntos = patrimonio.map((p, i) => ({ x: MARGEN_EJE + margen + i * step, y: y(p.totalCents), p }))
   const linea = puntos.map((q) => `${q.x},${q.y}`).join(' ')
   // El relleno baja hasta el cero, no hasta el fondo del recuadro: así se ve
   // de un vistazo cuánto del año se pasó en números rojos.
   const base = y(0)
   const area = `${puntos[0]!.x},${base} ${linea} ${puntos.at(-1)!.x},${base}`
-  const hovered = hover === null ? null : patrimonio[hover]
+  const destacado = activo === null ? null : patrimonio[activo]
+  const nav = useNavegable(patrimonio.length, setActivo)
 
   return (
     <div className="grafica">
@@ -239,41 +432,53 @@ export function PatrimonioLinea({ patrimonio }: { patrimonio: PuntoPatrimonio[] 
         viewBox={`0 0 ${width} ${height}`}
         className="grafica-svg"
         role="img"
-        aria-label="Patrimonio al cierre de cada mes"
-        onMouseLeave={() => setHover(null)}
+        aria-label="Patrimonio al cierre de cada mes. Usa las flechas para recorrer los meses."
+        {...nav}
       >
+        <EjeY marcas={ticksBonitos(min, max, 4)} y={y} x0={MARGEN_EJE} x1={width} />
         <polygon points={area} className="serie-area" />
         <polyline points={linea} className="serie-linea" />
-        {min < 0 && <line x1="0" y1={base} x2={width} y2={base} className="grafica-base" />}
+        {min < 0 && <line x1={MARGEN_EJE} y1={base} x2={width} y2={base} className="grafica-base" />}
         {puntos.map((q, i) => (
-          <g key={q.p.month} onMouseEnter={() => setHover(i)}>
+          <g key={q.p.month} onMouseEnter={() => setActivo(i)}>
             <rect x={q.x - step / 2} y="0" width={step} height={chartH} fill="transparent" />
-            <circle cx={q.x} cy={q.y} r={hover === i ? 4 : 2.5} className="serie-punto" />
+            <circle cx={q.x} cy={q.y} r={activo === i ? 4 : 2.5} className="serie-punto" />
             <text x={q.x} y={chartH + 16} className="grafica-tick" textAnchor="middle">
               {INICIAL[i]}
             </text>
           </g>
         ))}
       </svg>
-      <div className="grafica-pie">
-        {hovered ? (
+      <div className="grafica-pie" aria-live="polite">
+        {destacado ? (
           <span className="grafica-dato">
-            <strong>{MESES[Number(hovered.month.slice(5)) - 1]}</strong>
+            <strong>{MESES[Number(destacado.month.slice(5)) - 1]}</strong>
             {' · '}
-            <span className="cifra-chica">{fmtMoney(hovered.totalCents)}</span>
+            <span className="cifra-chica">{fmtMoney(destacado.totalCents)}</span>
             {' · en cuentas '}
-            <span className="cifra-chica">{fmtMoney(hovered.cuentasCents)}</span>
-            {hovered.inversionesCents > 0 && (
-              <> · invertido <span className="cifra-chica">{fmtMoney(hovered.inversionesCents)}</span></>
+            <span className="cifra-chica">{fmtMoney(destacado.cuentasCents)}</span>
+            {destacado.inversionesCents > 0 && (
+              <> · invertido <span className="cifra-chica">{fmtMoney(destacado.inversionesCents)}</span></>
             )}
-            {hovered.porPagarCents > 0 && (
-              <> · debes <span className="cifra-chica">{fmtMoney(hovered.porPagarCents)}</span></>
+            {destacado.porPagarCents > 0 && (
+              <> · debes <span className="cifra-chica">{fmtMoney(destacado.porPagarCents)}</span></>
             )}
           </span>
         ) : (
           <span className="grafica-leyenda">Cuentas + inversiones + lo que te deben − lo que debes</span>
         )}
       </div>
+      <TablaDatos
+        titulo="Patrimonio al cierre de cada mes"
+        columnas={['Mes', 'Patrimonio', 'En cuentas', 'Invertido', 'Debes']}
+        filas={patrimonio.map((p) => [
+          MESES[Number(p.month.slice(5)) - 1]!,
+          fmtMoney(p.totalCents),
+          fmtMoney(p.cuentasCents),
+          fmtMoney(p.inversionesCents),
+          fmtMoney(p.porPagarCents),
+        ])}
+      />
     </div>
   )
 }
@@ -284,6 +489,7 @@ export function CategoryBars({ byCategory }: { byCategory: Summary['byCategory']
     return <p className="grafica-vacia">Sin gastos este mes.</p>
   }
   const max = byCategory[0]!.expenseCents || 1
+  const total = byCategory.reduce((s, c) => s + c.expenseCents, 0)
   return (
     <ul className="cat-bars">
       {byCategory.map((c, i) => (
@@ -299,6 +505,9 @@ export function CategoryBars({ byCategory }: { byCategory: Summary['byCategory']
             />
           </span>
           <span className="cifra cifra-chica">{fmtMoney(c.expenseCents)}</span>
+          {/* La barra compara contra la categoría más grande; el porcentaje
+              dice la parte del total, que es otra pregunta. */}
+          <span className="cat-parte">{total > 0 ? Math.round((c.expenseCents / total) * 100) : 0} %</span>
         </li>
       ))}
     </ul>
@@ -316,7 +525,8 @@ export function HistorialValor({
 }: {
   puntos: { date: string; valueCents: number }[]
 }) {
-  const [hover, setHover] = useState<number | null>(null)
+  const [activo, setActivo] = useState<number | null>(null)
+  const nav = useNavegable(puntos.length, setActivo)
   if (puntos.length < 2) return null
 
   const valores = puntos.map((p) => p.valueCents)
@@ -325,41 +535,44 @@ export function HistorialValor({
   const rango = max - min || 1
 
   const chartH = 110
-  const width = 640
+  const ancho = 600
+  const width = MARGEN_EJE + ancho
   const margen = 14
-  const paso = (width - margen * 2) / (puntos.length - 1)
+  const paso = (ancho - margen * 2) / (puntos.length - 1)
   const y = (cents: number) => chartH - ((cents - min) / rango) * chartH * 0.88 - chartH * 0.06
-  const coords = puntos.map((p, i) => ({ x: margen + i * paso, y: y(p.valueCents), p }))
+  const coords = puntos.map((p, i) => ({ x: MARGEN_EJE + margen + i * paso, y: y(p.valueCents), p }))
   const linea = coords.map((q) => `${q.x.toFixed(1)},${q.y.toFixed(1)}`).join(' ')
   const base = y(min < 0 ? 0 : min)
   const area = `${coords[0]!.x},${base} ${linea} ${coords.at(-1)!.x},${base}`
-  const hovered = hover === null ? null : puntos[hover]
+  const destacado = activo === null ? null : puntos[activo]
 
   return (
     <div className="grafica">
+      {/* Sin `preserveAspectRatio="none"`: estirarlo al ancho del contenedor
+          cambiaba la pendiente del trazo, y la pendiente **es** el dato. */}
       <svg
         viewBox={`0 0 ${width} ${chartH}`}
         className="grafica-svg"
         role="img"
-        aria-label="Valor de la inversión después de cada registro"
-        onMouseLeave={() => setHover(null)}
-        preserveAspectRatio="none"
+        aria-label="Valor de la inversión después de cada registro. Usa las flechas para recorrerlos."
+        {...nav}
       >
+        <EjeY marcas={ticksBonitos(min, max, 3)} y={y} x0={MARGEN_EJE} x1={width} />
         <polygon points={area} className="serie-area" />
         <polyline points={linea} className="serie-linea" />
         {coords.map((q, i) => (
-          <g key={`${q.p.date}-${i}`} onMouseEnter={() => setHover(i)}>
+          <g key={`${q.p.date}-${i}`} onMouseEnter={() => setActivo(i)}>
             <rect x={q.x - paso / 2} y="0" width={paso} height={chartH} fill="transparent" />
-            <circle cx={q.x} cy={q.y} r={hover === i ? 4 : 2.5} className="serie-punto" />
+            <circle cx={q.x} cy={q.y} r={activo === i ? 4 : 2.5} className="serie-punto" />
           </g>
         ))}
       </svg>
-      <div className="grafica-pie">
-        {hovered ? (
+      <div className="grafica-pie" aria-live="polite">
+        {destacado ? (
           <span className="grafica-dato">
-            <strong>{fmtDate(hovered.date)}</strong>
+            <strong>{fmtDate(destacado.date)}</strong>
             {' · '}
-            <span className="cifra-chica">{fmtMoney(hovered.valueCents)}</span>
+            <span className="cifra-chica">{fmtMoney(destacado.valueCents)}</span>
           </span>
         ) : (
           <span className="grafica-leyenda">
@@ -367,6 +580,11 @@ export function HistorialValor({
           </span>
         )}
       </div>
+      <TablaDatos
+        titulo="Valor de la inversión después de cada registro"
+        columnas={['Fecha', 'Valor']}
+        filas={puntos.map((p) => [fmtDate(p.date), fmtMoney(p.valueCents)])}
+      />
     </div>
   )
 }
@@ -381,20 +599,23 @@ export function ProyeccionLineas({
 }: {
   series: { nombre: string; puntos: { mes: number; patrimonioCents: number }[]; punteada?: boolean }[]
 }) {
-  const [hover, setHover] = useState<number | null>(null)
+  const [activo, setActivo] = useState<number | null>(null)
   const todos = series.flatMap((s) => s.puntos.map((p) => p.patrimonioCents))
+  const meses = Math.max(...series.map((s) => s.puntos.length), 1) - 1
+  const nav = useNavegable(meses + 1, setActivo)
   if (todos.length === 0) return null
   const max = Math.max(...todos)
   const min = Math.min(...todos, 0)
   const rango = max - min || 1
-  const meses = Math.max(...series.map((s) => s.puntos.length)) - 1
 
   const chartH = 150
-  const width = 640
+  const ancho = 600
+  const width = MARGEN_EJE + ancho
   const margen = 14
-  const paso = (width - margen * 2) / (meses || 1)
+  const paso = (ancho - margen * 2) / (meses || 1)
   const y = (cents: number) => chartH - ((cents - min) / rango) * chartH * 0.88 - chartH * 0.06
   const base = y(0)
+  const x = (mes: number) => MARGEN_EJE + margen + mes * paso
 
   return (
     <div className="grafica">
@@ -402,53 +623,45 @@ export function ProyeccionLineas({
         viewBox={`0 0 ${width} ${chartH}`}
         className="grafica-svg"
         role="img"
-        aria-label="Patrimonio proyectado con cada estrategia"
-        onMouseLeave={() => setHover(null)}
-        preserveAspectRatio="none"
+        aria-label="Patrimonio proyectado con cada estrategia. Usa las flechas para recorrer los meses."
+        {...nav}
       >
-        {min < 0 && <line x1="0" y1={base} x2={width} y2={base} className="grafica-base" />}
+        <EjeY marcas={ticksBonitos(min, max, 4)} y={y} x0={MARGEN_EJE} x1={width} />
+        {min < 0 && <line x1={MARGEN_EJE} y1={base} x2={width} y2={base} className="grafica-base" />}
         {series.map((s) => (
           <polyline
             key={s.nombre}
-            points={s.puntos
-              .map((p) => `${(margen + p.mes * paso).toFixed(1)},${y(p.patrimonioCents).toFixed(1)}`)
-              .join(' ')}
+            points={s.puntos.map((p) => `${x(p.mes).toFixed(1)},${y(p.patrimonioCents).toFixed(1)}`).join(' ')}
             className={`serie-linea ${s.punteada ? 'serie-punteada' : ''}`}
           />
         ))}
         {Array.from({ length: meses + 1 }, (_, i) => (
           <rect
             key={i}
-            x={margen + i * paso - paso / 2}
+            x={x(i) - paso / 2}
             y="0"
             width={paso}
             height={chartH}
             fill="transparent"
-            onMouseEnter={() => setHover(i)}
+            onMouseEnter={() => setActivo(i)}
           />
         ))}
-        {hover !== null &&
+        {activo !== null &&
           series.map((s) => {
-            const p = s.puntos[hover]
+            const p = s.puntos[activo]
             return p ? (
-              <circle
-                key={s.nombre}
-                cx={margen + p.mes * paso}
-                cy={y(p.patrimonioCents)}
-                r="4"
-                className="serie-punto"
-              />
+              <circle key={s.nombre} cx={x(p.mes)} cy={y(p.patrimonioCents)} r="4" className="serie-punto" />
             ) : null
           })}
       </svg>
-      <div className="grafica-pie">
-        {hover !== null ? (
+      <div className="grafica-pie" aria-live="polite">
+        {activo !== null ? (
           <span className="grafica-dato">
-            <strong>Mes {hover}</strong>
+            <strong>Mes {activo}</strong>
             {series.map((s) => (
               <span key={s.nombre}>
                 {' · '}
-                {s.nombre}: <span className="cifra-chica">{fmtMoney(s.puntos[hover]?.patrimonioCents ?? 0)}</span>
+                {s.nombre}: <span className="cifra-chica">{fmtMoney(s.puntos[activo]?.patrimonioCents ?? 0)}</span>
               </span>
             ))}
           </span>
@@ -464,6 +677,14 @@ export function ProyeccionLineas({
           </span>
         )}
       </div>
+      <TablaDatos
+        titulo="Patrimonio proyectado con cada estrategia"
+        columnas={['Mes', ...series.map((s) => s.nombre)]}
+        filas={Array.from({ length: meses + 1 }, (_, i) => [
+          String(i),
+          ...series.map((s) => fmtMoney(s.puntos[i]?.patrimonioCents ?? 0)),
+        ])}
+      />
     </div>
   )
 }

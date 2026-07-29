@@ -512,12 +512,30 @@ input, select { font: inherit; color: inherit; }
   font-size: 9px;
   fill: var(--tinta-2);
 }
+.eje-rotulo { fill: var(--tinta-3); }
+/* La punta serrada de una barra que se sale de la escala: se dibuja en el
+   color de la hoja, así que se lee como un mordisco y no como otra serie. */
+.barra-recorte {
+  fill: none;
+  stroke: var(--hoja);
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+}
+/* El SVG entra en el orden de tabulación (las flechas recorren la serie), así
+   que necesita foco visible como cualquier control. */
+.grafica-svg:focus { outline: none; }
+.grafica-svg:focus-visible {
+  outline: 2px solid var(--acento);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
 .grafica-pie {
   min-height: 22px;
   margin-top: 8px;
   font-size: 12.5px;
   color: var(--tinta-2);
 }
+.grafica-aviso { color: var(--tinta-3); font-style: italic; margin-left: 4px; }
 .grafica-leyenda { display: inline-flex; align-items: center; gap: 8px; }
 .muestra {
   display: inline-block;
@@ -559,12 +577,20 @@ input, select { font: inherit; color: inherit; }
 .cat-bars { display: flex; flex-direction: column; gap: 11px; }
 .cat-row {
   display: grid;
-  grid-template-columns: 104px 1fr auto;
+  /* La cuarta columna es la parte del total. Ancho fijo para que la coma
+     decimal de los montos siga alineada de renglón a renglón. */
+  grid-template-columns: 104px 1fr auto 38px;
   align-items: center;
   gap: 12px;
   font-size: 13px;
 }
 .cat-nombre { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cat-parte {
+  font-family: var(--f-mono);
+  font-size: 11px;
+  color: var(--tinta-3);
+  text-align: right;
+}
 .cat-riel {
   height: 8px;
   background: var(--papel);
