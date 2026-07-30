@@ -107,11 +107,15 @@ describe('migraciones', () => {
     assert.ok(columnasTx.includes('investment_entry_id'))
 
     // El presupuesto que existía conserva su monto y cae en el mes en curso.
+    // Desde la 16 la columna se llama `period` y sigue siendo un mes: el tope
+    // de siempre es mensual y no arrastra nada.
     const presupuestos = db.prepare('SELECT * FROM budgets').all() as any[]
     const mesEnCurso = new Date().toLocaleDateString('sv-SE').slice(0, 7)
     assert.equal(presupuestos.length, 1)
     assert.equal(presupuestos[0].amount_cents, 350000)
-    assert.equal(presupuestos[0].month, mesEnCurso)
+    assert.equal(presupuestos[0].period, mesEnCurso)
+    assert.equal(presupuestos[0].period_kind, 'mes')
+    assert.equal(presupuestos[0].rollover, 0)
 
     // Y nada más se movió.
     const movimiento = db.prepare('SELECT * FROM transactions WHERE id = 1').get() as any
@@ -450,6 +454,42 @@ describe('migraciones', () => {
     assert.equal(mov.category_id, 77)
     assert.equal(mov.reconciled_at, null, 'sin conciliar, que es como estaba')
     assert.equal(mov.refund_of_id, null)
+    assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0)
+    db.close()
+  })
+
+  test('un libro en la versión 15 estrena el ritmo sin estrenar un solo tope', () => {
+    const db = baseEnVersion(15)
+    db.exec(`
+      INSERT INTO categories (id, profile_id, name, kind) VALUES (88, 1, 'Gasolina', 'gasto');
+      INSERT INTO budgets (id, profile_id, category_id, month, amount_cents)
+        VALUES (7, 1, 88, '2026-07', 240000);
+    `)
+
+    migrate(db)
+
+    assert.equal((db.prepare('PRAGMA user_version').get() as any).user_version, SCHEMA_VERSION)
+
+    // El renombre es de metadatos: la fila es la misma, con el mismo id y el
+    // mismo monto, y su periodo sigue siendo el mes que el usuario escribió.
+    const tope = db.prepare('SELECT * FROM budgets WHERE id = 7').get() as any
+    assert.equal(tope.amount_cents, 240000)
+    assert.equal(tope.period, '2026-07')
+    // Y significa exactamente lo que significaba: mensual y sin arrastre. Los
+    // valores por omisión son los que dejan el libro igual que ayer (R2).
+    assert.equal(tope.period_kind, 'mes')
+    assert.equal(tope.rollover, 0)
+
+    // La columna vieja ya no existe y el índice sobrevivió al renombre.
+    const columnas = (db.prepare('PRAGMA table_info(budgets)').all() as any[]).map((c) => c.name)
+    assert.ok(!columnas.includes('month'))
+    const indice = db
+      .prepare("SELECT sql FROM sqlite_master WHERE name = 'idx_budgets_profile_month'")
+      .get() as any
+    assert.match(indice.sql, /period/)
+
+    // Y nadie hereda un tope total que no pidió.
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM budget_totals').get() as any).n, 0)
     assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0)
     db.close()
   })

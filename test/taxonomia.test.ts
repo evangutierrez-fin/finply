@@ -108,13 +108,16 @@ describe('categorías', () => {
     const { perfil, categorias } = await libroBase(c, 'Con tope')
     const gasto = categorias.find((x: any) => x.kind === 'gasto')
     await c.post('/api/budgets', {
-      profileId: perfil.id, categoryId: gasto.id, month: '2026-07', amountCents: 100000,
+      profileId: perfil.id, categoryId: gasto.id, period: '2026-07', amountCents: 100000,
     })
 
     const res = await c.del(`/api/categories/${gasto.id}`)
     assert.equal(res.status, 200)
     assert.equal(res.body.presupuestosBorrados, 1)
-    assert.deepEqual((await c.get(`/api/budgets?profileId=${perfil.id}&month=2026-07`)).body, [])
+    assert.deepEqual(
+      (await c.get(`/api/budgets?profileId=${perfil.id}&month=2026-07`)).body.mensuales,
+      [],
+    )
   })
 })
 

@@ -42,6 +42,9 @@ export const TABLES = [
   'assets',
   'asset_valuations',
   'budgets',
+  // El tope de todo el mes es una tabla más, y una tabla que se olvide aquí
+  // se pierde en cada respaldo sin decir nada.
+  'budget_totals',
   'notes',
   'import_batches',
   'recurrences',

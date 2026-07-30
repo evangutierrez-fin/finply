@@ -14,11 +14,11 @@ describe('presupuestos por mes', () => {
     const gasto = categorias.find((cat: any) => cat.kind === 'gasto')
 
     await c.post('/api/budgets', {
-      profileId: perfil.id, categoryId: gasto.id, month: '2026-07', amountCents: 300000,
+      profileId: perfil.id, categoryId: gasto.id, period: '2026-07', amountCents: 300000,
     })
 
-    const julio = (await c.get(`/api/budgets?profileId=${perfil.id}&month=2026-07`)).body
-    const agosto = (await c.get(`/api/budgets?profileId=${perfil.id}&month=2026-08`)).body
+    const julio = (await c.get(`/api/budgets?profileId=${perfil.id}&month=2026-07`)).body.mensuales
+    const agosto = (await c.get(`/api/budgets?profileId=${perfil.id}&month=2026-08`)).body.mensuales
     assert.equal(julio.length, 1)
     assert.equal(julio[0].amountCents, 300000)
     assert.equal(agosto.length, 0)
@@ -35,14 +35,14 @@ describe('presupuestos por mes', () => {
       })
     }
     await c.post('/api/budgets', {
-      profileId: perfil.id, categoryId: gasto.id, month: '2026-07', amountCents: 100000,
+      profileId: perfil.id, categoryId: gasto.id, period: '2026-07', amountCents: 100000,
     })
     await c.post('/api/budgets', {
-      profileId: perfil.id, categoryId: gasto.id, month: '2026-08', amountCents: 100000,
+      profileId: perfil.id, categoryId: gasto.id, period: '2026-08', amountCents: 100000,
     })
 
-    const julio = (await c.get(`/api/budgets?profileId=${perfil.id}&month=2026-07`)).body[0]
-    const agosto = (await c.get(`/api/budgets?profileId=${perfil.id}&month=2026-08`)).body[0]
+    const julio = (await c.get(`/api/budgets?profileId=${perfil.id}&month=2026-07`)).body.mensuales[0]
+    const agosto = (await c.get(`/api/budgets?profileId=${perfil.id}&month=2026-08`)).body.mensuales[0]
     assert.equal(julio.spentCents, 20000)
     assert.equal(agosto.spentCents, 90000)
   })
@@ -50,12 +50,12 @@ describe('presupuestos por mes', () => {
   test('fijar el mismo mes y categoría actualiza en vez de duplicar', async () => {
     const { perfil, categorias } = await libroBase(c, 'Upsert')
     const gasto = categorias.find((cat: any) => cat.kind === 'gasto')
-    const base = { profileId: perfil.id, categoryId: gasto.id, month: '2026-07' }
+    const base = { profileId: perfil.id, categoryId: gasto.id, period: '2026-07' }
 
     await c.post('/api/budgets', { ...base, amountCents: 100000 })
     await c.post('/api/budgets', { ...base, amountCents: 250000 })
 
-    const filas = (await c.get(`/api/budgets?profileId=${perfil.id}&month=2026-07`)).body
+    const filas = (await c.get(`/api/budgets?profileId=${perfil.id}&month=2026-07`)).body.mensuales
     assert.equal(filas.length, 1)
     assert.equal(filas[0].amountCents, 250000)
   })
@@ -65,14 +65,14 @@ describe('presupuestos por mes', () => {
     const gastos = categorias.filter((cat: any) => cat.kind === 'gasto').slice(0, 2)
 
     await c.post('/api/budgets', {
-      profileId: perfil.id, categoryId: gastos[0].id, month: '2026-07', amountCents: 100000,
+      profileId: perfil.id, categoryId: gastos[0].id, period: '2026-07', amountCents: 100000,
     })
     await c.post('/api/budgets', {
-      profileId: perfil.id, categoryId: gastos[1].id, month: '2026-07', amountCents: 200000,
+      profileId: perfil.id, categoryId: gastos[1].id, period: '2026-07', amountCents: 200000,
     })
     // Agosto ya tiene su propio ajuste en la primera categoría.
     await c.post('/api/budgets', {
-      profileId: perfil.id, categoryId: gastos[0].id, month: '2026-08', amountCents: 555000,
+      profileId: perfil.id, categoryId: gastos[0].id, period: '2026-08', amountCents: 555000,
     })
 
     const res = await c.post('/api/budgets/copiar', {
@@ -81,7 +81,7 @@ describe('presupuestos por mes', () => {
     assert.equal(res.status, 200)
     assert.equal(res.body.copiados, 1)
 
-    const agosto = (await c.get(`/api/budgets?profileId=${perfil.id}&month=2026-08`)).body
+    const agosto = (await c.get(`/api/budgets?profileId=${perfil.id}&month=2026-08`)).body.mensuales
     const ajustado = agosto.find((b: any) => b.categoryId === gastos[0].id)
     const copiado = agosto.find((b: any) => b.categoryId === gastos[1].id)
     assert.equal(ajustado.amountCents, 555000)
@@ -92,7 +92,7 @@ describe('presupuestos por mes', () => {
     const { perfil, categorias } = await libroBase(c, 'Ingreso')
     const ingreso = categorias.find((cat: any) => cat.kind === 'ingreso')
     const res = await c.post('/api/budgets', {
-      profileId: perfil.id, categoryId: ingreso.id, month: '2026-07', amountCents: 1000,
+      profileId: perfil.id, categoryId: ingreso.id, period: '2026-07', amountCents: 1000,
     })
     assert.equal(res.status, 400)
   })

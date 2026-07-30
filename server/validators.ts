@@ -433,12 +433,32 @@ export const simuladorQuery = z.object({
   rendimientoAnualBp: z.coerce.number().int().min(-9_999).max(20_000).default(700),
 })
 
-export const budgetInput = z.object({
-  profileId: z.number().int().positive(),
-  categoryId: z.number().int().positive(),
-  month: isoMonth,
-  amountCents: z.number().int().positive('El presupuesto debe ser mayor a cero'),
-})
+/** Un año suelto, 'AAAA'. El periodo de un tope anual. */
+const isoAnio = z.string().regex(/^\d{4}$/, 'El año va como AAAA')
+
+export const budgetInput = z
+  .object({
+    profileId: z.number().int().positive(),
+    categoryId: z.number().int().positive(),
+    /** 'AAAA-MM' o 'AAAA', según `periodKind`. */
+    period: z.union([isoMonth, isoAnio]),
+    periodKind: z.enum(['mes', 'anio']).default('mes'),
+    amountCents: z.number().int().positive('El presupuesto debe ser mayor a cero'),
+    rollover: z.boolean().default(false),
+  })
+  // El tipo y el texto tienen que concordar: guardar 'anio' con '2026-03'
+  // dejaría un tope que se mide contra un recorte de cuatro caracteres y
+  // nunca cuadraría con nada.
+  .refine((v) => (v.periodKind === 'anio' ? isoAnio.safeParse(v.period) : isoMonth.safeParse(v.period)).success, {
+    message: 'Un tope mensual lleva AAAA-MM y uno anual lleva AAAA',
+    path: ['period'],
+  })
+  // El arrastre es "traer lo del mes pasado". Un tope anual no tiene mes
+  // pasado, así que la casilla no significaría nada.
+  .refine((v) => !(v.rollover && v.periodKind === 'anio'), {
+    message: 'Un tope anual no arrastra: no hay mes anterior del cual traer',
+    path: ['rollover'],
+  })
 
 export const budgetQuery = z.object({
   profileId: z.coerce.number().int().positive(),
@@ -449,6 +469,12 @@ export const budgetCopyInput = z.object({
   profileId: z.number().int().positive(),
   from: isoMonth,
   to: isoMonth,
+})
+
+export const budgetTotalInput = z.object({
+  profileId: z.number().int().positive(),
+  month: isoMonth,
+  amountCents: z.number().int().positive('El tope total debe ser mayor a cero'),
 })
 
 export const goalInput = z.object({

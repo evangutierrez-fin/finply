@@ -460,6 +460,8 @@ export interface Calendario {
 
 export type TipoAlerta =
   | 'presupuesto'
+  /** El techo de todo el mes: no es la suma de los otros, por eso va aparte. */
+  | 'presupuesto_total'
   | 'tarjeta'
   | 'saldo_minimo'
   | 'recurrencia'
@@ -622,10 +624,42 @@ export interface Budget {
   profileId: number
   categoryId: number
   categoryName: string
-  /** Mes al que aplica el tope, 'AAAA-MM'. */
-  month: string
+  /** Periodo al que aplica: 'AAAA-MM' si es mensual, 'AAAA' si es anual. */
+  period: string
+  periodKind: 'mes' | 'anio'
+  /** El tope que escribió el usuario, sin el arrastre. */
   amountCents: number
   spentCents: number
+  /** Si este renglón recibe el saldo del mes anterior. Solo los mensuales. */
+  rollover: boolean
+  /** Lo que trajo del mes pasado. Negativo si aquel mes se pasó del tope. */
+  arrastreCents: number
+  /** El techo de verdad contra el que se mide: `amountCents + arrastreCents`. */
+  topeCents: number
+  /** Lo que llevarías gastado yendo parejo: `topeCents` por lo que va del periodo. */
+  esperadoCents: number
+}
+
+/** El techo de **todo** un mes, por encima del de cada categoría. */
+export interface TopeTotal {
+  id: number
+  profileId: number
+  month: string
+  amountCents: number
+  /** Todo el gasto operativo del mes, también el de categorías sin tope. */
+  spentCents: number
+  esperadoCents: number
+}
+
+export interface PresupuestoMes {
+  /** Cuánto del mes ha transcurrido, de 0 a 1. Un mes cerrado vale 1. */
+  avance: number
+  /** Lo mismo para el año, que es contra lo que se mide un tope anual. */
+  avanceAnual: number
+  mensuales: Budget[]
+  /** Los topes anuales del año de ese mes. Viajan con todos sus meses. */
+  anuales: Budget[]
+  total: TopeTotal | null
 }
 
 export interface GoalEntry {

@@ -179,7 +179,7 @@ describe('partida dividida', () => {
     await c.post('/api/budgets', {
       profileId: perfil.id,
       categoryId: gastoDe('Súper').id,
-      month: '2026-06',
+      period: '2026-06',
       amountCents: 100000,
     })
     await gasto(90000, '2026-06-03', {
@@ -190,7 +190,7 @@ describe('partida dividida', () => {
     })
     const presupuestos = (
       await c.get(`/api/budgets?profileId=${perfil.id}&month=2026-06`)
-    ).body as any[]
+    ).body.mensuales as any[]
     const superr = presupuestos.find((b) => b.categoryId === gastoDe('Súper').id)!
     assert.equal(superr.spentCents, 30000, 'solo el renglón de Súper, no los $900 del ticket')
   })

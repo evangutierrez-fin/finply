@@ -4,7 +4,7 @@ import type {
   Factura, FlujoProyectado, Frecuencia, Goal, InformeImport, InformePrecios, Investment,
   InvestmentEntryType, LoteImport, MapeoImport, ModuloId, Note, Profile, Recurrencia, ReporteAnual,
   ResultadoImport, RolCategoria, Simulacion, Summary, Tag, Tx, TxAttachment, TxType,
-  Bien, BienKind, CorteConciliacion, SerieCuenta,
+  Bien, BienKind, CorteConciliacion, SerieCuenta, PresupuestoMes, TopeTotal,
 } from '../shared/types.ts'
 
 /** Error de la API que conserva el código y el cuerpo, para poder reaccionar. */
@@ -507,16 +507,29 @@ export const api = {
         `&rendimientoAnualBp=${opciones.rendimientoAnualBp}`,
     ),
   budgets: {
+    /** El mes entero: topes mensuales, anuales del año, tope total y el avance. */
     list: (profileId: number, month: string) =>
-      req<Budget[]>(`/api/budgets?profileId=${profileId}&month=${month}`),
-    set: (data: { profileId: number; categoryId: number; month: string; amountCents: number }) =>
-      req<Budget>('/api/budgets', { method: 'POST', body: JSON.stringify(data) }),
+      req<PresupuestoMes>(`/api/budgets?profileId=${profileId}&month=${month}`),
+    set: (data: {
+      profileId: number
+      categoryId: number
+      /** 'AAAA-MM' si es mensual, 'AAAA' si es anual. */
+      period: string
+      periodKind?: 'mes' | 'anio'
+      amountCents: number
+      /** Si este mes recibe el saldo del anterior. Solo mensuales. */
+      rollover?: boolean
+    }) => req<PresupuestoMes>('/api/budgets', { method: 'POST', body: JSON.stringify(data) }),
     copy: (data: { profileId: number; from: string; to: string }) =>
-      req<{ copiados: number; budgets: Budget[] }>('/api/budgets/copiar', {
+      req<{ copiados: number; presupuesto: PresupuestoMes }>('/api/budgets/copiar', {
         method: 'POST',
         body: JSON.stringify(data),
       }),
     remove: (id: number) => req<{ ok: true }>(`/api/budgets/${id}`, { method: 'DELETE' }),
+    setTotal: (data: { profileId: number; month: string; amountCents: number }) =>
+      req<TopeTotal>('/api/budgets/total', { method: 'PUT', body: JSON.stringify(data) }),
+    removeTotal: (id: number) =>
+      req<{ ok: true }>(`/api/budgets/total/${id}`, { method: 'DELETE' }),
   },
   goals: {
     list: (profileId: number) => req<Goal[]>(`/api/goals?profileId=${profileId}`),

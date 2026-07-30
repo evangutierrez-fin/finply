@@ -78,10 +78,15 @@ export const DESDE_MOVIMIENTOS = `
 `
 
 /**
- * Lo gastado contra un presupuesto `b` (su perfil, su categoría y su mes).
+ * Lo gastado contra un presupuesto `b` (su perfil, su categoría y su periodo).
  * Vive aquí, y no escrito dos veces, porque lo miden la vista de Presupuestos
  * y la alerta de tope excedido: dos expresiones separadas acabarían dando dos
  * cifras del mismo tope.
+ *
+ * El periodo se compara **por su propio largo**: `b.period` es 'AAAA-MM' en un
+ * tope mensual y 'AAAA' en uno anual, así que `length` decide sola si el
+ * recorte de la fecha son siete caracteres o cuatro. Un solo fragmento sirve a
+ * los dos y no hay forma de que uno se actualice sin el otro.
  */
 export const GASTO_DE_PRESUPUESTO = `
   COALESCE((SELECT SUM(${MONTO_OPERATIVO})
@@ -89,7 +94,20 @@ export const GASTO_DE_PRESUPUESTO = `
     WHERE t.profile_id = b.profile_id
       AND ${CATEGORIA_OPERATIVA} = b.category_id
       AND ${TIPO_OPERATIVO} = 'gasto'
-      AND substr(t.date, 1, 7) = b.month), 0)`
+      AND substr(t.date, 1, length(b.period)) = b.period), 0)`
+
+/**
+ * Lo gastado contra el tope **total** de un mes `bt`. No se parece a la suma de
+ * los topes por categoría y ese es justo el punto: cuenta todo el gasto del
+ * mes, también el de las categorías que nadie presupuestó. Un techo total que
+ * ignorara lo no presupuestado no sería un techo.
+ */
+export const GASTO_DE_TOPE_TOTAL = `
+  COALESCE((SELECT SUM(${MONTO_OPERATIVO})
+    ${DESDE_MOVIMIENTOS}
+    WHERE t.profile_id = bt.profile_id
+      AND ${TIPO_OPERATIVO} = 'gasto'
+      AND substr(t.date, 1, 7) = bt.month), 0)`
 
 /** Los doce meses de un año, en orden, como 'AAAA-MM'. */
 function mesesDelAnio(year: number): string[] {

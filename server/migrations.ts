@@ -804,6 +804,52 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    id: 16,
+    name: 'el presupuesto que se adelanta: periodo, tope total y sobrante que rueda',
+    up: (db) => {
+      // `month` pasa a llamarse `period` porque ya no siempre es un mes: un
+      // tope anual guarda 'AAAA' y uno mensual 'AAAA-MM'. Dejar el nombre
+      // viejo sería una columna llamada "mes" con un año adentro, y eso se
+      // cobra caro el día que alguien la lea de prisa.
+      //
+      // El renombre es solo metadatos —SQLite reescribe el texto del esquema y
+      // arrastra el índice solo—, así que ninguna fila se toca.
+      if (hasColumn(db, 'budgets', 'month')) {
+        db.exec('ALTER TABLE budgets RENAME COLUMN month TO period')
+      }
+
+      // Las dos columnas nuevas nacen con el valor que deja todo igual: los
+      // topes que ya existen son mensuales y no arrastran nada. Un libro de
+      // ayer se ve idéntico hoy (R2).
+      if (!hasColumn(db, 'budgets', 'period_kind')) {
+        db.exec(
+          `ALTER TABLE budgets ADD COLUMN period_kind TEXT NOT NULL DEFAULT 'mes'
+           CHECK (period_kind IN ('mes', 'anio'))`,
+        )
+      }
+      if (!hasColumn(db, 'budgets', 'rollover')) {
+        db.exec(
+          `ALTER TABLE budgets ADD COLUMN rollover INTEGER NOT NULL DEFAULT 0
+           CHECK (rollover IN (0, 1))`,
+        )
+      }
+
+      // El tope de **todo** el mes vive aparte y no en `budgets` con categoría
+      // nula: en SQLite dos NULL no chocan en un UNIQUE, así que la llave
+      // `(perfil, categoría, periodo)` dejaría meter dos topes totales del
+      // mismo mes sin quejarse. Una tabla propia lo hace imposible.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS budget_totals (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          month TEXT NOT NULL,
+          amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+          UNIQUE (profile_id, month)
+        );
+      `)
+    },
+  },
 ]
 
 /** Versión de esquema que espera este código. */

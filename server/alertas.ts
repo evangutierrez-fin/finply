@@ -17,7 +17,7 @@
 // no se reescribe. Hay una prueba que cuenta las consultas.
 
 import { db, modulosDe } from './db.ts'
-import { GASTO_DE_PRESUPUESTO } from './reportes.ts'
+import { presupuestosDelMes } from './presupuestos.ts'
 import type { ModuloId } from '../shared/modulos.ts'
 import { estadoTarjetas } from './tarjetas.ts'
 import { listar as listarRecurrencias } from './recurrencias.ts'
@@ -71,36 +71,55 @@ function deSaldoMinimo(profileId: number): Alerta[] {
 }
 
 /**
- * Presupuestos rebasados del mes en curso.
+ * Presupuestos rebasados del mes en curso, y el tope total si lo hay.
  *
  * El umbral es **estrictamente mayor**: gastar exactamente el tope no es
  * excederlo —cerraste justo, que es lo que el presupuesto pedía—; un centavo
- * más sí. Se mide con la misma expresión que usa `GET /api/budgets`, para que
- * la alerta y la vista de Presupuestos no puedan decir cosas distintas.
+ * más sí. Sale del mismo cálculo que sirve `GET /api/budgets`, no de una
+ * consulta paralela, para que la alerta y la vista de Presupuestos no puedan
+ * decir cifras distintas del mismo mes.
+ *
+ * Se mide contra `topeCents` —el tope más lo que arrastró— y no contra lo
+ * escrito: si el mes pasado sobraron $500 y este mes te pasaste por $300, no
+ * te pasaste de nada, y gritarlo sería mentir con la cifra correcta.
  */
-function dePresupuestos(profileId: number, mes: string): Alerta[] {
-  const filas: any[] = db
-    .prepare(
-      `SELECT b.id, b.amount_cents, c.name AS category_name,
-        ${GASTO_DE_PRESUPUESTO} AS spent_cents
-       FROM budgets b
-       JOIN categories c ON c.id = b.category_id
-       WHERE b.profile_id = ? AND b.month = ?
-       ORDER BY c.name ASC`,
-    )
-    .all(profileId, mes)
+function dePresupuestos(profileId: number, mes: string, hoy: string): Alerta[] {
+  const { mensuales, anuales, total } = presupuestosDelMes(profileId, mes, hoy)
 
-  return filas
-    .filter((f) => f.spent_cents > f.amount_cents)
-    .map((f) => ({
+  const deCategoria = [...mensuales, ...anuales]
+    .filter((b) => b.spentCents > b.topeCents)
+    .map((b) => ({
       tipo: 'presupuesto' as const,
       severidad: 'media' as const,
-      titulo: `${f.category_name}: te pasaste del tope`,
-      detalle: `Llevas ${pesos(f.spent_cents)} de ${pesos(f.amount_cents)} este mes`,
-      montoCents: f.spent_cents - f.amount_cents,
-      refId: f.id,
+      titulo: `${b.categoryName}: te pasaste del tope`,
+      detalle:
+        `Llevas ${pesos(b.spentCents)} de ${pesos(b.topeCents)} ` +
+        (b.periodKind === 'anio' ? 'este año' : 'este mes'),
+      montoCents: b.spentCents - b.topeCents,
+      refId: b.id,
       vista: 'presupuestos' as const,
     }))
+
+  // El total va aparte porque no es la suma de los otros: incluye lo gastado
+  // en categorías sin tope, así que puede saltar aunque ninguna categoría se
+  // haya pasado. Con su propio tipo para que no se mezcle en el orden ni
+  // comparta `refId` con un renglón de otra tabla.
+  const deTotal: Alerta[] =
+    total && total.spentCents > total.amountCents
+      ? [
+          {
+            tipo: 'presupuesto_total',
+            severidad: 'media',
+            titulo: 'Te pasaste del tope del mes',
+            detalle: `Llevas ${pesos(total.spentCents)} de ${pesos(total.amountCents)} en todo el mes`,
+            montoCents: total.spentCents - total.amountCents,
+            refId: total.id,
+            vista: 'presupuestos',
+          },
+        ]
+      : []
+
+  return [...deTotal, ...deCategoria]
 }
 
 /**
@@ -361,9 +380,10 @@ const ORDEN: Record<Alerta['tipo'], number> = {
   tarjeta: 0,
   saldo_minimo: 1,
   deuda: 2,
-  presupuesto: 3,
-  recurrencia: 4,
-  meta: 5,
+  presupuesto_total: 3,
+  presupuesto: 4,
+  recurrencia: 5,
+  meta: 6,
 }
 
 /** Qué módulo tiene que estar encendido para que una familia hable. */
@@ -373,6 +393,7 @@ const MODULO_DE: Record<Alerta['tipo'], ModuloId | null> = {
   saldo_minimo: null,
   deuda: 'deudas',
   presupuesto: 'presupuestos',
+  presupuesto_total: 'presupuestos',
   recurrencia: 'recurrencias',
   meta: 'metas',
 }
@@ -394,7 +415,7 @@ export function alertas(profileId: number, hoy = hoyISO()): Alerta[] {
     ...(con('tarjetas') ? deTarjetas(profileId, hoy) : []),
     ...deSaldoMinimo(profileId),
     ...(con('deudas') ? deDeudas(profileId, hoy) : []),
-    ...(con('presupuestos') ? dePresupuestos(profileId, hoy.slice(0, 7)) : []),
+    ...(con('presupuestos') ? dePresupuestos(profileId, hoy.slice(0, 7), hoy) : []),
     ...(con('recurrencias') ? deRecurrencias(profileId, hoy) : []),
     ...(con('metas') ? deMetas(profileId, hoy) : []),
   ].filter((a) => {

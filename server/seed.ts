@@ -26,6 +26,7 @@ function wipe(): void {
     DELETE FROM investment_entries;
     DELETE FROM investments;
     DELETE FROM budgets;
+    DELETE FROM budget_totals;
     DELETE FROM goal_entries;
     DELETE FROM goals;
     DELETE FROM notes;
@@ -220,16 +221,32 @@ inTransaction(() => {
   // Un tope por categoría y por mes: julio afloja en Ocio y aprieta en Súper,
   // como pasa de verdad cuando ajustas el plan sobre la marcha.
   const insertBudget = db.prepare(
-    'INSERT INTO budgets (profile_id, category_id, month, amount_cents) VALUES (?, ?, ?, ?)',
+    `INSERT INTO budgets (profile_id, category_id, period, period_kind, amount_cents, rollover)
+     VALUES (?, ?, ?, ?, ?, ?)`,
   )
+  const topeMes = (profileId: number, categoryId: number, mes: string, cents: number, rueda = 0) =>
+    insertBudget.run(profileId, categoryId, mes, 'mes', cents, rueda)
+
   for (const m of months) {
-    insertBudget.run(personal, cSuper, m, m === '2026-07' ? 320000 : 350000)
-    insertBudget.run(personal, cComida, m, 90000)
-    insertBudget.run(personal, cTransporte, m, 90000)
-    insertBudget.run(personal, cOcio, m, m === '2026-07' ? 120000 : 80000)
-    insertBudget.run(negocio, nInsumos, m, 1500000)
-    insertBudget.run(negocio, nServicios, m, 120000)
+    topeMes(personal, cSuper, m, m === '2026-07' ? 320000 : 350000)
+    topeMes(personal, cComida, m, 90000)
+    topeMes(personal, cTransporte, m, 90000)
+    // Ocio arrastra: es la categoría donde el sobrante de un mes tranquilo
+    // paga el concierto del siguiente, que es justo para lo que sirve.
+    topeMes(personal, cOcio, m, m === '2026-07' ? 120000 : 80000, 1)
+    topeMes(negocio, nInsumos, m, 1500000)
+    topeMes(negocio, nServicios, m, 120000)
   }
+
+  // Un tope anual para lo que no es mensual. Transporte carga la tenencia y el
+  // seguro: pensarlos por mes no dice nada; pensarlos por año, todo.
+  insertBudget.run(personal, cTransporte, '2026', 'anio', 1400000, 0)
+
+  // Y el techo de todo el mes, que incluye lo que no tiene tope.
+  const insertTotal = db.prepare(
+    'INSERT INTO budget_totals (profile_id, month, amount_cents) VALUES (?, ?, ?)',
+  )
+  for (const m of months) insertTotal.run(personal, m, 3800000)
 
   // ── Etiquetas ─────────────────────────────────────────────────────────
   // Cruzan categorías: el mismo viaje lleva comida, transporte y hospedaje.

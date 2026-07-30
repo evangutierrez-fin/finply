@@ -149,7 +149,8 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   ahorro. Imprimible como cierre de año.
 - **Alertas que no se descartan** — en el Resumen: la fecha límite de una
   tarjeta que ya venció sin cubrirse, la que vence en cinco días, un
-  presupuesto rebasado, las partidas recurrentes por confirmar, una deuda
+  presupuesto rebasado —o el techo de todo el mes, que puede saltar sin que
+  ninguna categoría se pase—, las partidas recurrentes por confirmar, una deuda
   atrasada y una meta que va más lenta que su plazo. No se calculan una vez y
   se guardan: se derivan cada vez que abres, así que **se apagan solas** en
   cuanto pagas o corriges. No hay «marcar como visto» porque no hace falta.
@@ -158,9 +159,17 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   meses de colchón —tu líquido entre tu gasto promedio; una tarjeta no es
   colchón—, gasto recurrente contra discrecional y qué tan concentrado está tu
   gasto en una sola categoría. Los supuestos van escritos junto a las cifras.
-- **Presupuestos** — un tope por categoría de gasto **y por mes**, con barra de
-  avance, alerta al 80 % y estado de excedido con la cifra exacta. Cada mes
-  lleva su propio plan; puedes arrastrar el del mes anterior de un clic.
+- **Presupuestos que saben qué día es** — un tope por categoría **y por mes**,
+  con barra de avance, alerta al 80 % y la cifra exacta de lo excedido. Encima,
+  el **ritmo**: cada barra lleva la marca de dónde irías gastando parejo, y
+  debajo dice con palabras cuánto vas arriba o abajo de ella — gastar el 80 %
+  del tope el día 3 y gastarlo el día 28 son dos noticias opuestas. Además:
+  un **tope de todo el mes** que cuenta también lo que gastas en categorías sin
+  tope, **topes anuales** para lo que no es mensual (la tenencia, el seguro) y
+  el **sobrante que rueda** al mes siguiente en las categorías que elijas.
+  Rueda en los dos sentidos: si sobró sube tu techo, y si te pasaste lo baja,
+  con la resta escrita a la vista. Cada mes lleva su propio plan; puedes
+  arrastrar el del mes anterior de un clic.
 - **Metas** — fondos de emergencia, viajes, enganches. Aporta cuando puedas;
   la meta se marca cumplida sola.
 - **Notas** — apuntes con renglones de libreta y margen rojo, fijables al
@@ -325,7 +334,8 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 | `POST /api/investments/:id/entries` · `DELETE /api/investments/entries/:id` | Aportes, retiros y valuaciones, con unidades y precio por unidad |
 | `POST /api/precios/analizar` | Lee un CSV de precios y dice qué pasaría. **No escribe nada** |
 | `POST /api/precios/aplicar` | Asienta solo las filas marcadas, en una transacción |
-| `GET/POST /api/budgets` · `DELETE /:id` | Presupuestos por categoría y mes (upsert) con gastado del mes |
+| `GET/POST /api/budgets` · `DELETE /:id` | El presupuesto de un mes: topes por categoría, anuales del año, tope total, lo gastado, el arrastre y el ritmo |
+| `PUT /api/budgets/total` · `DELETE /total/:id` | El techo de **todo** el mes, incluidas las categorías sin tope |
 | `POST /api/budgets/copiar` | Copia los topes de un mes a otro sin pisar los que ya existen |
 | `GET/POST /api/bienes` · `PATCH/DELETE /:id` | Bienes con su valor de hoy y su liga a la deuda que los financia |
 | `POST /api/bienes/:id/valuaciones` · `DELETE /valuaciones/:id` | Cuánto vale hoy, declarado por ti. Repetir fecha corrige |
@@ -406,8 +416,7 @@ donde aparece, que en el tema oscuro es la hoja, no el fondo.
 
 - **¿Llego a fin de mes?** — saldo proyectado día a día con lo que ya sabe tu
   calendario, y el primer día en rojo si lo hay
-- Presupuesto que sabe qué día del mes es; Resumen con el cambio contra el mes
-  pasado y la composición de tu patrimonio
+- Resumen con el cambio contra el mes pasado y la composición de tu patrimonio
 - Más ángulos de análisis: tendencia, estacionalidad, gasto hormiga
 - Simulador: la gráfica del **rendimiento solo**, sin el patrimonio, que es lo
   que de verdad distingue una ruta de la otra

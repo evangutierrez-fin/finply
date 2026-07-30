@@ -121,3 +121,37 @@ export function semanaISO(iso: string): { anio: number; semana: number } {
   const enero1 = `${String(anio).padStart(4, '0')}-01-01`
   return { anio, semana: Math.floor(diasEntre(enero1, jueves) / 7) + 1 }
 }
+
+/**
+ * Cuánto lleva transcurrido un periodo de presupuesto, de 0 a 1.
+ *
+ * Es la mitad que le faltaba a la barra de presupuestos: gastar el 80 % del
+ * tope el día 3 y gastarlo el día 28 son dos noticias opuestas, y hasta hoy se
+ * pintaban idénticas. El periodo es 'AAAA-MM' o 'AAAA', el mismo texto que
+ * guarda `budgets.period`.
+ *
+ * Un periodo ya cerrado vale 1 y uno que no empieza vale 0: el ritmo solo
+ * tiene algo que decir mientras el periodo corre. Se cuenta por **días
+ * completos vividos**, con el día en curso incluido —el día 1 de un mes de 31
+ * vale 1/31, no 0—, porque el gasto de hoy ya está hecho.
+ */
+export function avanceDelPeriodo(periodo: string, hoy: string): number {
+  const anual = periodo.length === 4
+  const actual = anual ? hoy.slice(0, 4) : hoy.slice(0, 7)
+  if (periodo < actual) return 1
+  if (periodo > actual) return 0
+
+  const { anio, mes, dia } = partesFecha(hoy)
+  if (!anual) return dia / diasDelMes(anio, mes)
+
+  const transcurridos = diasEntre(`${String(anio).padStart(4, '0')}-01-01`, hoy) + 1
+  const delAnio = diasEntre(`${anio}-01-01`, `${anio + 1}-01-01`)
+  return transcurridos / delAnio
+}
+
+/** Mueve un mes 'AAAA-MM' N meses, como texto. */
+export function correrMesTexto(mes: string, meses: number): string {
+  const [anio, m] = mes.split('-').map(Number)
+  const destino = correrMes(anio!, m!, meses)
+  return `${String(destino.anio).padStart(4, '0')}-${String(destino.mes).padStart(2, '0')}`
+}
