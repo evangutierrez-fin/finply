@@ -64,6 +64,12 @@ export const TABLES = [
   // movimientos, como todo lo demás.
   'invoice_credit_notes',
   'invoice_recurrences',
+  // Los módulos de giro (Fase 15). El arrendamiento va después de `assets`
+  // —renta un bien— y **antes de los movimientos**, que lo referencian: un
+  // movimiento con `rental_id` no puede restaurarse sin su contrato. El
+  // producto va aquí por simetría, antes de sus movimientos de existencias.
+  'rentals',
+  'products',
   'transactions',
   'transaction_tags',
   // Todo lo que cuelga del movimiento va después de él: el reparto por
@@ -76,6 +82,9 @@ export const TABLES = [
   'recurrence_runs',
   // Y los de facturas apuntan a la factura que salió de ellos.
   'invoice_recurrence_runs',
+  // Estas dos van al final porque apuntan a movimientos y facturas.
+  'stock_moves',
+  'time_entries',
 ] as const
 
 export interface Snapshot {

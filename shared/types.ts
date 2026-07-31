@@ -18,6 +18,11 @@ import type { Tendencia } from './estadistica.ts'
 export type { PlanPagoMinimo } from './credito.ts'
 import type { PlanPagoMinimo } from './credito.ts'
 
+// Y con el rendimiento de un inmueble rentado, que vive en `shared/giro.ts`
+// con el resto de la aritmética de los módulos de giro.
+export type { RendimientoInmueble } from './giro.ts'
+import type { RendimientoInmueble } from './giro.ts'
+
 export interface Profile {
   id: number
   name: string
@@ -124,6 +129,12 @@ export interface Tx {
   msiPurchaseId: number | null
   /** Si viene, este movimiento es el desembolso de una deuda. */
   debtId: number | null
+  /**
+   * Si viene, este movimiento pertenece a un arrendamiento. El papel importa:
+   * la renta es ingreso y el depósito **no**, porque ese dinero no es tuyo.
+   */
+  rentalId: number | null
+  rentalRole: 'renta' | 'deposito' | 'devolucion_deposito' | 'mantenimiento' | null
   /** Si viene, este movimiento cobra o paga esa factura. */
   invoiceId: number | null
   counterpartyId: number | null
@@ -481,6 +492,8 @@ export interface Bandeja {
 }
 
 export type TipoEvento =
+  /** La renta de un inmueble arrendado (Fase 15). */
+  | 'renta'
   | 'recurrencia'
   | 'corte'
   | 'pago_tarjeta'
@@ -528,6 +541,9 @@ export interface Calendario {
 
 export type TipoAlerta =
   | 'presupuesto'
+  /** Módulos de giro (Fase 15): el contrato que se acaba y el anaquel vacío. */
+  | 'arrendamiento'
+  | 'existencias'
   /** El techo de todo el mes: no es la suma de los otros, por eso va aparte. */
   | 'presupuesto_total'
   | 'tarjeta'
@@ -548,7 +564,15 @@ export interface Alerta {
   montoCents: number | null
   refId: number | null
   /** A qué sección lleva el clic. */
-  vista: 'presupuestos' | 'tarjetas' | 'cuentas' | 'recurrencias' | 'deudas' | 'metas'
+  vista:
+    | 'presupuestos'
+    | 'tarjetas'
+    | 'cuentas'
+    | 'recurrencias'
+    | 'deudas'
+    | 'metas'
+    | 'inmuebles'
+    | 'inventario'
 }
 
 export interface CategoriaParte {
@@ -1153,6 +1177,134 @@ export interface BandejaFacturas {
   items: PropuestaFactura[]
   total: number
   truncado: boolean
+}
+
+// ── Módulos de giro (Fase 15) ──────────────────────────────────────────────
+//
+// Los tres son opt-in y ninguno cambia una cifra ya calculada (R18). Lo que
+// registran dinero lo registran como movimientos normales, con las mismas
+// reglas de D6 que todo lo demás.
+
+/**
+ * El arrendamiento de un bien que ya existe. El inmueble **no vive aquí**: es
+ * un `Bien` de la Fase 11, y esto es el contrato que lo renta. Duplicarlo
+ * habría metido la misma casa dos veces en el patrimonio.
+ */
+export interface Arrendamiento {
+  id: number
+  profileId: number
+  assetId: number
+  assetName: string
+  /** Lo que vale hoy el bien, según su última valuación. */
+  assetValueCents: number
+  assetCostCents: number
+  tenant: string
+  rentCents: number
+  depositCents: number
+  /** Día del mes en que toca cobrar. 31 cae el último. */
+  paymentDay: number
+  startDate: string
+  endDate: string | null
+  note: string
+  archived: boolean
+  /** Renta cobrada en la ventana mirada, ya sin el depósito. */
+  cobradoCents: number
+  /** Mantenimiento y demás gasto atribuido a este arrendamiento. */
+  gastoCents: number
+  /** El depósito que de verdad tienes en la mano: recibido menos devuelto. */
+  depositoEnManoCents: number
+  /** Cuántos meses mide la ventana de las dos cifras de arriba. */
+  meses: number
+  rendimiento: RendimientoInmueble
+  /** La próxima fecha de cobro, dentro del contrato. `null` si ya terminó. */
+  proximoCobro: string | null
+}
+
+/** Un renglón de trabajo: minutos a una tarifa, de un cliente. */
+export interface Hora {
+  id: number
+  profileId: number
+  date: string
+  minutes: number
+  /** La tarifa por hora **de ese renglón**: subirla no reescribe el pasado. */
+  rateCents: number
+  /** Minutos × tarifa, redondeado una sola vez. */
+  importeCents: number
+  counterpartyId: number | null
+  counterpartyName: string | null
+  costCenterId: number | null
+  costCenterName: string | null
+  note: string
+  /** Si viene, esas horas ya se facturaron. Derivado: borrar la factura las libera. */
+  invoiceId: number | null
+  invoiceFolio: string | null
+}
+
+/** Lo trabajado y no cobrado de un cliente: lo que se puede facturar de un jalón. */
+export interface HorasPorCobrar {
+  counterpartyId: number | null
+  counterpartyName: string
+  minutos: number
+  importeCents: number
+  entradas: number
+  desde: string
+  hasta: string
+}
+
+export interface ResumenHoras {
+  desde: string
+  hasta: string
+  minutosTotal: number
+  importeTotalCents: number
+  minutosSinFacturar: number
+  importeSinFacturarCents: number
+  /** Tarifa media efectiva del periodo, en centavos por hora. `null` sin horas. */
+  tarifaMediaCents: number | null
+  porCobrar: HorasPorCobrar[]
+}
+
+export interface Producto {
+  id: number
+  profileId: number
+  sku: string
+  name: string
+  unit: string
+  /** Debajo de esto Finply avisa. `null` = sin aviso. */
+  minQtyMilli: number | null
+  archived: boolean
+  /** Todo lo de abajo se **deriva** recorriendo los movimientos, nunca se guarda. */
+  cantidadMilli: number
+  costoUnitarioCents: number
+  valorCents: number
+  /** Costo de lo que salió en la ventana mirada. */
+  costoVendidoCents: number
+  ajusteCents: number
+  movimientos: number
+  ultimoMovimiento: string | null
+  bajoMinimo: boolean
+}
+
+export interface MovimientoStock {
+  id: number
+  productId: number
+  date: string
+  kind: 'entrada' | 'salida' | 'ajuste'
+  qtyMilli: number
+  unitCostCents: number
+  note: string
+  txId: number | null
+}
+
+export interface Almacen {
+  desde: string
+  hasta: string
+  /** Lo que vale todo lo que tienes hoy, a costo promedio. */
+  valorCents: number
+  /** Lo que costó lo que salió en la ventana. **No** entra al estado de resultados. */
+  costoVendidoCents: number
+  ajusteCents: number
+  productos: Producto[]
+  bajoMinimo: number
 }
 
 export interface RenglonResultados {

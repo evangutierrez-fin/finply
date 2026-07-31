@@ -33,12 +33,19 @@ function correrMes(month: string, delta: number): string {
  * Desde la Fase 10 lee además el **reparto** de una partida dividida (D17) y
  * pone en **negativo** una devolución: un reembolso no es dinero que ganaste,
  * es gasto que no acabaste haciendo.
+ *
+ * Y desde la Fase 15, el **depósito de un arrendamiento vale cero**: recibirlo
+ * no es ingreso y devolverlo no es gasto, porque ese dinero nunca fue tuyo —
+ * lo tienes en la mano y lo debes. Es D6 otra vez, con otra ropa. Ojo: la
+ * regla vive en el movimiento, no en el módulo, así que apagar Inmuebles no
+ * convierte un depósito viejo en ingreso (R18).
  */
 export const MONTO_OPERATIVO = `
   CASE
     WHEN t.debt_id IS NOT NULL THEN 0
     WHEN t.investment_entry_id IS NOT NULL THEN 0
     WHEN t.goal_entry_id IS NOT NULL THEN 0
+    WHEN t.rental_role IN ('deposito', 'devolucion_deposito') THEN 0
     WHEN t.debt_payment_id IS NOT NULL THEN COALESCE(dp.interest_cents, 0)
     WHEN t.refund_of_id IS NOT NULL THEN -COALESCE(s.amount_cents, t.amount_cents)
     ELSE COALESCE(s.amount_cents, t.amount_cents)
@@ -93,6 +100,7 @@ export const MONTO_DEL_MOVIMIENTO = `
     WHEN t.debt_id IS NOT NULL THEN 0
     WHEN t.investment_entry_id IS NOT NULL THEN 0
     WHEN t.goal_entry_id IS NOT NULL THEN 0
+    WHEN t.rental_role IN ('deposito', 'devolucion_deposito') THEN 0
     WHEN t.debt_payment_id IS NOT NULL THEN COALESCE(dp.interest_cents, 0)
     WHEN t.refund_of_id IS NOT NULL THEN -t.amount_cents
     ELSE t.amount_cents

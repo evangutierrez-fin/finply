@@ -29,6 +29,7 @@ function ensureReferences(input: {
   counterpartyId?: number | null
   costCenterId?: number | null
   invoiceId?: number | null
+  rentalId?: number | null
 }): void {
   ensureAccount(input.profileId, input.accountId)
   if (input.type === 'transferencia') {
@@ -43,12 +44,14 @@ function ensureReferences(input: {
   ensurePropio(input.profileId, 'counterparties', input.counterpartyId, 'La contraparte')
   ensurePropio(input.profileId, 'cost_centers', input.costCenterId, 'Ese centro')
   ensurePropio(input.profileId, 'invoices', input.invoiceId, 'La factura')
+  ensurePropio(input.profileId, 'rentals', input.rentalId, 'Ese arrendamiento')
 }
 
 const TABLAS_PROPIAS = {
   counterparties: 'counterparties',
   cost_centers: 'cost_centers',
   invoices: 'invoices',
+  rentals: 'rentals',
 } as const
 
 function ensurePropio(
@@ -282,8 +285,9 @@ router.post('/', (req, res) => {
       .prepare(
         `INSERT INTO transactions
           (profile_id, account_id, type, amount_cents, date, category_id, note, transfer_account_id,
-           counterparty_id, cost_center_id, invoice_id, tax_cents, deductible, refund_of_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           counterparty_id, cost_center_id, invoice_id, tax_cents, deductible, refund_of_id,
+           rental_id, rental_role)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.profileId,
@@ -300,6 +304,8 @@ router.post('/', (req, res) => {
         input.taxCents,
         input.deductible ? 1 : 0,
         input.refundOfId ?? null,
+        input.rentalId ?? null,
+        input.rentalRole ?? null,
       )
     const nuevo = Number(result.lastInsertRowid)
     if (input.tagIds) setTxTags(nuevo, input.tagIds)
@@ -346,7 +352,7 @@ router.patch('/:id', (req, res) => {
       `UPDATE transactions SET account_id = ?, type = ?, amount_cents = ?, date = ?,
         category_id = ?, note = ?, transfer_account_id = ?,
         counterparty_id = ?, cost_center_id = ?, tax_cents = ?, deductible = ?,
-        refund_of_id = ?
+        refund_of_id = ?, rental_id = ?, rental_role = ?
        WHERE id = ?`,
     ).run(
       input.accountId,
@@ -361,6 +367,8 @@ router.patch('/:id', (req, res) => {
       input.taxCents,
       input.deductible ? 1 : 0,
       refundOfId,
+      input.rentalId ?? null,
+      input.rentalRole ?? null,
       id,
     )
     // `tagIds` ausente deja las etiquetas como estaban; un arreglo vacío las quita.

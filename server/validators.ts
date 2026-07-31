@@ -182,6 +182,12 @@ export const txInput = z
     // desliga la devolución. Es la diferencia entre "no opiné" y "quítalo".
     splits: z.array(txSplit).max(MAX_RENGLONES).optional(),
     refundOfId: z.number().int().positive().nullish(),
+    // Fase 15. El papel vive **en el movimiento**, no en el módulo: por eso
+    // apagar Inmuebles no convierte un depósito viejo en ingreso (R18).
+    rentalId: z.number().int().positive().nullish(),
+    rentalRole: z
+      .enum(['renta', 'deposito', 'devolucion_deposito', 'mantenimiento'])
+      .nullish(),
   })
   .superRefine((t, ctx) => {
     if (t.splits && t.splits.length > 0) {
@@ -226,6 +232,22 @@ export const txInput = z
       } else if (t.transferAccountId === t.accountId) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Origen y destino deben ser distintas' })
       }
+    }
+    // Un papel sin contrato no significa nada: "esto es un depósito" solo se
+    // entiende junto a "de qué arrendamiento". Y al revés, ligar un movimiento
+    // a un contrato sin decir qué es dejaría al rendimiento sin saber si
+    // sumarlo, restarlo o ignorarlo.
+    if (t.rentalRole && !t.rentalId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Di de qué arrendamiento es ese cobro',
+      })
+    }
+    if (t.rentalId && !t.rentalRole) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Di qué es: renta, depósito, devolución del depósito o mantenimiento',
+      })
     }
   })
 
@@ -750,6 +772,96 @@ export const periodoQuery = z.object({
   profileId: z.coerce.number().int().positive(),
   desde: isoDate,
   hasta: isoDate,
+})
+
+// ── Fase 15 · módulos de giro ────────────────────────────────────────────────
+
+/**
+ * El arrendamiento de un bien. La renta admite **cero** a propósito: un
+ * comodato o un préstamo de la casa a un familiar sigue teniendo inquilino,
+ * fechas y mantenimiento, y esconderlo no lo haría desaparecer.
+ */
+export const arrendamientoInput = z.object({
+  profileId: z.number().int().positive(),
+  assetId: z.number().int().positive(),
+  tenant: z.string().trim().max(80).default(''),
+  rentCents: z.number().int().nonnegative('La renta no puede ser negativa'),
+  depositCents: z.number().int().nonnegative('El depósito no puede ser negativo').default(0),
+  paymentDay: diaDelMes.default(1),
+  startDate: isoDate,
+  endDate: isoDate.nullish(),
+  note: z.string().trim().max(200).default(''),
+  archived: z.boolean().default(false),
+})
+
+export const giroQuery = z.object({
+  profileId: z.coerce.number().int().positive(),
+  hoy: isoDate.optional(),
+})
+
+/**
+ * Un renglón de horas. La tarifa va **en el renglón** y admite cero: se apunta
+ * el tiempo primero y se le pone precio después, que es como se trabaja.
+ */
+export const horaInput = z.object({
+  profileId: z.number().int().positive(),
+  date: isoDate,
+  minutes: z
+    .number()
+    .int()
+    .positive('Las horas se apuntan en minutos, y tienen que ser más de cero')
+    .max(24 * 60, 'Eso es más de un día'),
+  rateCents: z.number().int().nonnegative('La tarifa no puede ser negativa').default(0),
+  counterpartyId: z.number().int().positive().nullish(),
+  costCenterId: z.number().int().positive().nullish(),
+  note: z.string().trim().max(200).default(''),
+})
+
+export const horasQuery = z.object({
+  profileId: z.coerce.number().int().positive(),
+  desde: isoDate.optional(),
+  hasta: isoDate.optional(),
+  counterpartyId: z.coerce.number().int().positive().optional(),
+  sinFacturar: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+})
+
+/** Convierte en una factura todas las horas sin facturar de un cliente (R4). */
+export const facturarHorasInput = z.object({
+  counterpartyId: z.number().int().positive(),
+  issueDate: isoDate,
+  dueDate: isoDate.nullish(),
+  folio: z.string().trim().max(40).default(''),
+  concept: z.string().trim().max(200).default(''),
+  taxCents: z.number().int().min(0).default(0),
+})
+
+export const productoInput = z.object({
+  profileId: z.number().int().positive(),
+  sku: z.string().trim().max(40).default(''),
+  name: z.string().trim().min(1, 'El producto necesita un nombre').max(80),
+  unit: z.string().trim().min(1).max(16).default('pieza'),
+  /** Debajo de esto Finply avisa. `null` quita el aviso. */
+  minQtyMilli: z.number().int().nonnegative().nullish(),
+  archived: z.boolean().default(false),
+})
+
+/**
+ * Un movimiento de existencias. La cantidad va en **milésimas de unidad** y en
+ * un ajuste puede ser negativa: ahí es un delta —una merma, un conteo que no
+ * cuadró—, no una cantidad. Cero no es un movimiento.
+ */
+export const movimientoStockInput = z.object({
+  profileId: z.number().int().positive(),
+  productId: z.number().int().positive(),
+  date: isoDate,
+  kind: z.enum(['entrada', 'salida', 'ajuste']),
+  qtyMilli: z.number().int().refine((n) => n !== 0, 'Un movimiento de cero no es un movimiento'),
+  unitCostCents: z.number().int().nonnegative('El costo no puede ser negativo').default(0),
+  note: z.string().trim().max(200).default(''),
+  txId: z.number().int().positive().nullish(),
 })
 
 export const agingQuery = z.object({

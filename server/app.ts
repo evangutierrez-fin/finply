@@ -31,6 +31,9 @@ import bienes from './routes/bienes.ts'
 import calendario from './routes/calendario.ts'
 import flujo from './routes/flujo.ts'
 import conciliacion from './routes/conciliacion.ts'
+import inmuebles from './routes/inmuebles.ts'
+import horas from './routes/horas.ts'
+import inventario from './routes/inventario.ts'
 import backup from './routes/backup.ts'
 
 /**
@@ -74,6 +77,11 @@ export function createApp(): express.Express {
   app.use('/api/calendario', calendario)
   app.use('/api/flujo', flujo)
   app.use('/api/conciliacion', conciliacion)
+  // Módulos de giro (Fase 15). Las rutas existen siempre, como las tablas: es
+  // el lomo el que decide qué se ve (D16), no el servidor.
+  app.use('/api/inmuebles', inmuebles)
+  app.use('/api/horas', horas)
+  app.use('/api/inventario', inventario)
   app.use('/api/respaldo', backup)
 
   app.use('/api', (_req, res) => {

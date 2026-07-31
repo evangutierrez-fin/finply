@@ -2784,3 +2784,71 @@ select.campo-input { cursor: pointer; }
   justify-content: flex-end;
   gap: 4px 12px;
 }
+
+/* ── Módulos de giro (Fase 15) ─────────────────────────────────────────────
+   Los tres son opt-in y ninguno inventa un componente nuevo: reusan .hoja,
+   .tabla y .hero-stats. Lo que sí hace falta es que sus acciones se vean sin
+   pasar el ratón —viven en tablas normales, no en .libro-fila, donde la regla
+   de .acciones las deja invisibles. */
+.giro-acciones { display: inline-flex; gap: 2px; white-space: nowrap; }
+
+/* La tira de cifras de Bienes, pero con un número variable de columnas: estas
+   secciones tienen tres o cuatro según lo que haya que decir, y una rejilla
+   fija de cuatro dejaría un hueco cuando son tres. */
+.stats-auto { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+
+/* Inmuebles: una carta por contrato, en dos columnas cuando caben. */
+.rentas-lista {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 16px;
+}
+.renta-carta { animation: aparecer 0.35s ease-out backwards; }
+.renta-sub {
+  font-size: 13px;
+  color: var(--tinta-2);
+  margin: -4px 0 16px;
+}
+.renta-acciones { display: inline-flex; gap: 14px; }
+/* Las cifras de la carta van en línea, no en cajas: la caja ya es la carta. */
+.renta-cifras {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 28px;
+  margin: 14px 0 0;
+}
+.renta-cifras div { display: flex; flex-direction: column; gap: 2px; }
+.renta-cifras dt { font-size: 11px; text-transform: uppercase; color: var(--tinta-3); }
+.renta-cifras dd { margin: 0; font-family: var(--f-mono); font-size: 14px; }
+.renta-pie {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--regla);
+}
+/* Sin chips no hay pie que dibujar: la regla sola se lee como un renglón vacío. */
+.renta-pie:empty { display: none; }
+
+/* Inventario: el historial cuelga de su producto, así que se sangra y se
+   apaga un poco para no competir con la tabla del almacén. */
+.alm-historial {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--regla-fuerte);
+}
+.alm-historial th, .alm-historial td { font-size: 13px; }
+.tabla tfoot td {
+  padding-top: 12px;
+  border-top: 1px solid var(--regla-fuerte);
+  border-bottom: none;
+  font-family: var(--f-mono);
+  font-size: 12.5px;
+  color: var(--tinta-2);
+}
+
+@media (max-width: 720px) {
+  .rentas-lista { grid-template-columns: 1fr; }
+  .giro-acciones { opacity: 1; }
+}

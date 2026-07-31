@@ -30,7 +30,9 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   elige su tinta (verde banca, latón, cobalto o vino).
 - **Cada libro lleva solo lo suyo** — al crear un perfil, Finply te pregunta
   qué llevas en él: tarjetas de crédito, deudas, inversiones, recurrencias,
-  presupuestos, metas, notas, negocio. Lo que no marques no aparece en el lomo
+  presupuestos, metas, notas, negocio. Hay tres más que **nadie trae
+  encendido** porque solo le sirven a quien vive de eso: inmuebles en renta,
+  horas facturables e inventario. Lo que no marques no aparece en el lomo
   ni te llena el formulario de campos que nunca usas. Viene todo encendido
   según el tipo de libro, así que aceptar sin leer también funciona, y se
   cambia cuando quieras desde Ajustes. **Apagar una sección no borra nada**: el
@@ -175,6 +177,25 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
 - **La contraparte que ya sabe cómo te paga** — contacto, días de crédito que
   proponen el vencimiento al facturarle, y un límite de crédito que **avisa,
   nunca impide**: a quién le fías y cuánto es tu decisión.
+- **Tu inmueble rentado, y qué deja de verdad** — el contrato sobre una casa
+  que ya llevas en Bienes: inquilino, renta, depósito y mantenimiento. Te dice
+  lo cobrado del año, lo que se fue en arreglos y qué tasa anual sale de eso
+  sobre lo que la propiedad vale hoy. El **depósito no es un ingreso**: entra a
+  tu cuenta y sube tu saldo, pero lo tienes que devolver, así que queda fuera de
+  tu ingreso del mes y del rendimiento. Esa regla vive en el movimiento, no en
+  la sección: apagar el módulo no convierte un depósito viejo en ingreso.
+- **Horas que todavía no son dinero** — apuntas el tiempo con su tarifa y
+  Finply te dice lo que llevas trabajado **sin cobrar**, por cliente, mirando
+  todo tu historial y no solo el mes: una hora de hace medio año sin facturar
+  sigue sin cobrarse. De ahí sale la factura, todas las horas del cliente en
+  una. La tarifa se guarda en cada renglón, así que subirla no reescribe lo que
+  trabajaste antes.
+- **Inventario simple** — entradas, salidas y ajustes; qué tienes, cuánto vale
+  a costo promedio y cuánto costó lo que salió en el mes. Avisa cuando un
+  producto baja de su mínimo. Dos cosas que **no** hace, a propósito: no suma a
+  tu patrimonio —para eso están los bienes— y no cambia tu estado de resultados,
+  que lleva la mercancía como gasto el día que la pagaste. Son dos verdades
+  sobre el mismo peso, y la vista dice cuál es cuál.
 - **Simulador de patrimonio** — qué pasa si apartas X al mes durante N años, y
   si conviene más invertirlo o pagar primero la deuda cara. Sale de tus cifras
   de hoy, la tasa la pones tú y los cinco supuestos van escritos junto al
@@ -352,12 +373,14 @@ shared/
   simulador.ts   proyección de patrimonio mes a mes (puro)
   negocio.ts     tramos de antigüedad y punto de equilibrio (puro)
   modulos.ts     catálogo de secciones por perfil y su resolución (puro)
+  giro.ts        promedio ponderado, horas y rendimiento de un inmueble (puro)
   escalas.ts     marcas del eje y techo de una escala con atípico (puro)
 src/
   views/         Resumen · Movimientos · Cuentas · Categorías · Reportes
                  · Análisis · Tarjetas · Deudas · Inversiones · Simulador
-                 · Contrapartes · Facturas · Negocio · Recurrencias
-                 · Calendario · Flujo · Presupuestos · Metas · Notas · Ajustes
+                 · Contrapartes · Facturas · Negocio · Inmuebles · Horas
+                 · Inventario · Recurrencias · Calendario · Flujo
+                 · Presupuestos · Metas · Notas · Ajustes
   components/    formularios, gráficas, sello, barra lateral
   styles/        tokens.css (temas claro/oscuro) + app.css
 test/            pruebas de integridad contra una base temporal
@@ -431,6 +454,11 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 | `GET/POST /api/facturas/recurrentes` · `PATCH/DELETE /:id` | Plantillas de factura que se repite |
 | `GET /api/facturas/recurrentes/pendientes` · `POST /:id/emitir` · `/descartar` · `/reabrir` | La bandeja derivada y su resolución (R4, R5) |
 | `GET /api/negocio/resultados?profileId&desde&hasta` | Estado de resultados, rentabilidad por cliente y por centro, impuestos, equilibrio y el periodo anterior |
+| `GET/POST /api/inmuebles` · `PATCH/DELETE /:id` | Contratos de renta sobre un bien, con lo cobrado, el depósito en mano y qué deja la propiedad |
+| `GET/POST /api/horas` · `PATCH/DELETE /:id` · `GET /resumen` | Horas con su tarifa y cuánto llevas trabajado sin cobrar, por cliente |
+| `POST /api/horas/facturar?profileId` | Todas las horas sin facturar de un cliente, en una factura. No asienta un peso |
+| `GET/POST /api/inventario` · `PATCH/DELETE /:id` · `GET /:id/movimientos` | Productos con existencia, costo promedio y costo de lo que salió |
+| `POST /api/inventario/movimientos` · `DELETE /movimientos/:id` | Entradas, salidas y ajustes. No mueven dinero |
 | `GET /api/flujo?profileId&dias&hoy` | La caja proyectada día a día: puntos, eventos que la mueven y primer día en rojo |
 | `GET /api/respaldo` · `GET /info` · `POST /restaurar` | Respaldo completo en JSON |
 
@@ -491,8 +519,6 @@ donde aparece, que en el tema oscuro es la hoja, no el fondo.
 **Negocio**
 
 - Cotizaciones que se vuelven factura, corte de caja, compras y órdenes
-- Módulos de giro opcionales: inmuebles en renta, horas facturables e
-  inventario simple
 
 **Cómo se usa**
 

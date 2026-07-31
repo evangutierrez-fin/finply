@@ -28,6 +28,9 @@ import { Presupuestos } from './views/Presupuestos.tsx'
 import { Metas } from './views/Metas.tsx'
 import { Notas } from './views/Notas.tsx'
 import { Ajustes } from './views/Ajustes.tsx'
+import { Inmuebles } from './views/Inmuebles.tsx'
+import { Horas } from './views/Horas.tsx'
+import { Inventario } from './views/Inventario.tsx'
 import { Taxonomia } from './views/Taxonomia.tsx'
 import { Importar } from './views/Importar.tsx'
 
@@ -35,7 +38,7 @@ import { Importar } from './views/Importar.tsx'
 // donde uno la busca.
 const VIEWS: View[] = [
   'resumen', 'movimientos', 'cuentas', 'taxonomia', 'reportes', 'analisis', 'importar', 'tarjetas',
-  'deudas', 'bienes', 'inversiones', 'simulador', 'contrapartes', 'facturas', 'negocio', 'recurrencias', 'calendario', 'flujo', 'presupuestos', 'metas', 'notas', 'ajustes',
+  'deudas', 'bienes', 'inversiones', 'simulador', 'contrapartes', 'facturas', 'negocio', 'inmuebles', 'horas', 'inventario', 'recurrencias', 'calendario', 'flujo', 'presupuestos', 'metas', 'notas', 'ajustes',
 ]
 
 const THEME_CYCLE: Record<ThemePref, ThemePref> = { claro: 'oscuro', oscuro: 'auto', auto: 'claro' }
@@ -332,6 +335,9 @@ export default function App() {
           {view === 'contrapartes' && <Contrapartes />}
           {view === 'facturas' && <Facturas />}
           {view === 'negocio' && <Negocio onNav={nav} />}
+          {view === 'inmuebles' && <Inmuebles onNav={nav} />}
+          {view === 'horas' && <Horas onNav={nav} />}
+          {view === 'inventario' && <Inventario onNav={nav} />}
           {view === 'recurrencias' && <Recurrencias />}
           {view === 'calendario' && <Calendario />}
           {view === 'flujo' && <Flujo onNav={nav} />}

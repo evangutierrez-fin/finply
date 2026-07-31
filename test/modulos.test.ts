@@ -22,6 +22,7 @@ import {
   porOmision,
   resolverModulos,
   vistaVisible,
+  type ModuloId,
 } from '../shared/modulos.ts'
 
 let c: Cliente
@@ -35,6 +36,13 @@ after(() => {
   for (const d of dirs) rmSync(d, { recursive: true, force: true })
 })
 
+/**
+ * Los tres de la Fase 15. Nacen apagados **para todo el mundo**: cada uno es
+ * inútil para casi cualquiera y decisivo para algunos, y un despacho y una
+ * panadería son los dos de negocio sin querer los módulos del otro.
+ */
+const GIRO: ModuloId[] = ['inmuebles', 'horas', 'inventario']
+
 describe('el catálogo (aritmética pura)', () => {
   test('sin overrides manda el tipo de perfil', () => {
     const personal = resolverModulos('personal', {})
@@ -42,7 +50,27 @@ describe('el catálogo (aritmética pura)', () => {
     assert.deepEqual(personal, porOmision('personal'))
     assert.ok(!personal.includes('negocio'), 'un libro personal no nace con facturas')
     assert.ok(negocio.includes('negocio'))
-    assert.equal(negocio.length, MODULOS.length, 'uno de negocio nace con todo')
+    assert.deepEqual(
+      negocio,
+      MODULOS.filter((m) => !GIRO.includes(m.id)).map((m) => m.id),
+      'uno de negocio nace con todo lo que no es de giro',
+    )
+  })
+
+  test('los de giro nacen apagados para los dos tipos, y se encienden a mano', () => {
+    for (const kind of ['personal', 'negocio'] as const) {
+      const nace = resolverModulos(kind, {})
+      for (const id of GIRO) {
+        assert.ok(!nace.includes(id), `un libro ${kind} no nace con ${id}`)
+      }
+    }
+    // Apagado no es escondido: siguen en el catálogo, con su descripción, y una
+    // fila explícita los enciende sin migración — las tablas ya existen (D16).
+    assert.ok(resolverModulos('personal', { inmuebles: true }).includes('inmuebles'))
+    assert.ok(resolverModulos('negocio', { inventario: true }).includes('inventario'))
+    for (const id of GIRO) {
+      assert.ok(MODULOS.some((m) => m.id === id && m.descripcion.length > 0), `${id} se describe`)
+    }
   })
 
   test('una fila explícita gana, en los dos sentidos', () => {

@@ -6,6 +6,7 @@ import type {
   ResultadoImport, RolCategoria, Simulacion, Summary, Tag, Tx, TxAttachment, TxType,
   Bien, BienKind, CorteConciliacion, SerieCuenta, PresupuestoMes, TopeTotal,
   Anticipo, BandejaFacturas, Cobranza, FacturaRecurrente,
+  Almacen, Arrendamiento, Hora, MovimientoStock, Producto, ResumenHoras,
 } from '../shared/types.ts'
 
 /** Error de la API que conserva el código y el cuerpo, para poder reaccionar. */
@@ -113,6 +114,13 @@ export interface TxDraft {
   splits?: { categoryId?: number | null; amountCents: number; note?: string }[]
   /** El gasto que este movimiento devuelve. `null` explícito lo desliga. */
   refundOfId?: number | null
+  /**
+   * Módulo Inmuebles. Van los dos o ninguno: el papel es lo que hace que un
+   * depósito no cuente como ingreso, y vive en el movimiento —no en el
+   * módulo—, así que apagar Inmuebles no lo convierte en ingreso (R18).
+   */
+  rentalId?: number | null
+  rentalRole?: 'renta' | 'deposito' | 'devolucion_deposito' | 'mantenimiento' | null
 }
 
 export interface ImportDraft {
@@ -203,6 +211,62 @@ export interface AsentarDraft {
   accountId?: number
   note?: string
   tagIds?: number[]
+}
+
+/** El contrato que renta un bien. El inmueble vive en Bienes, no aquí. */
+export interface ArrendamientoDraft {
+  profileId: number
+  assetId: number
+  tenant: string
+  rentCents: number
+  depositCents: number
+  paymentDay: number
+  startDate: string
+  endDate?: string | null
+  note?: string
+  archived?: boolean
+}
+
+export interface HoraDraft {
+  profileId: number
+  date: string
+  minutes: number
+  /** La tarifa **de este renglón**. Admite cero: primero el tiempo, luego el precio. */
+  rateCents: number
+  counterpartyId?: number | null
+  costCenterId?: number | null
+  note?: string
+}
+
+export interface FiltroHoras {
+  profileId: number
+  desde?: string
+  hasta?: string
+  counterpartyId?: number
+  sinFacturar?: boolean
+}
+
+export interface ProductoDraft {
+  profileId: number
+  sku?: string
+  name: string
+  unit?: string
+  /** Debajo de esto Finply avisa. `null` quita el aviso. */
+  minQtyMilli?: number | null
+  archived?: boolean
+}
+
+export interface MovimientoStockDraft {
+  profileId: number
+  productId: number
+  date: string
+  kind: 'entrada' | 'salida' | 'ajuste'
+  /** Milésimas de unidad. En un ajuste puede ser negativa: es un delta. */
+  qtyMilli: number
+  unitCostCents?: number
+  note?: string
+  /** El movimiento del libro que pagó esta entrada. Ligarlo no lo crea (R4). */
+  txId?: number | null
 }
 
 /**
@@ -542,6 +606,98 @@ export const api = {
   negocio: {
     resultados: (profileId: number, desde: string, hasta: string) =>
       req<EstadoResultados>(`/api/negocio/resultados?profileId=${profileId}&desde=${desde}&hasta=${hasta}`),
+  },
+  // ── Módulos de giro (Fase 15). Los tres son opt-in y ninguno asienta dinero
+  // por su cuenta: lo que mueve el libro se registra como movimiento normal.
+  inmuebles: {
+    list: (profileId: number) => req<Arrendamiento[]>(`/api/inmuebles?profileId=${profileId}`),
+    create: (data: ArrendamientoDraft) =>
+      req<Arrendamiento>('/api/inmuebles', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: number, data: ArrendamientoDraft) =>
+      req<Arrendamiento>(`/api/inmuebles/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    /**
+     * Los movimientos se quedan en el libro: ese dinero se movió. Pierden la
+     * liga —y con ella su papel—, así que dice cuántos depósitos vuelven a
+     * contar como ingreso.
+     */
+    remove: (profileId: number, id: number) =>
+      req<{ ok: true; movimientos: number; depositos: number }>(
+        `/api/inmuebles/${id}?profileId=${profileId}`,
+        { method: 'DELETE' },
+      ),
+  },
+  horas: {
+    list: (filtro: FiltroHoras) => {
+      const q = new URLSearchParams({ profileId: String(filtro.profileId) })
+      if (filtro.desde) q.set('desde', filtro.desde)
+      if (filtro.hasta) q.set('hasta', filtro.hasta)
+      if (filtro.counterpartyId) q.set('counterpartyId', String(filtro.counterpartyId))
+      if (filtro.sinFacturar) q.set('sinFacturar', 'true')
+      return req<Hora[]>(`/api/horas?${q}`)
+    },
+    /** Los totales miran la ventana; lo por cobrar mira **todo** el historial. */
+    resumen: (profileId: number, desde?: string, hasta?: string) => {
+      const q = new URLSearchParams({ profileId: String(profileId) })
+      if (desde) q.set('desde', desde)
+      if (hasta) q.set('hasta', hasta)
+      return req<ResumenHoras>(`/api/horas/resumen?${q}`)
+    },
+    create: (data: HoraDraft) =>
+      req<Hora>('/api/horas', { method: 'POST', body: JSON.stringify(data) }),
+    /** 409 si ya se facturaron: editarlas cambiaría el respaldo de la factura. */
+    update: (id: number, data: HoraDraft) =>
+      req<Hora>(`/api/horas/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    remove: (profileId: number, id: number) =>
+      req<{ ok: true }>(`/api/horas/${id}?profileId=${profileId}`, { method: 'DELETE' }),
+    /**
+     * Todas las horas sin facturar de un cliente, en una factura. **No asienta
+     * un peso**: el ingreso nace al cobrarla (D14).
+     */
+    facturar: (
+      profileId: number,
+      data: {
+        counterpartyId: number
+        issueDate: string
+        dueDate?: string | null
+        folio?: string
+        concept?: string
+        taxCents?: number
+      },
+    ) =>
+      req<Factura>(`/api/horas/facturar?profileId=${profileId}`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+  },
+  inventario: {
+    /**
+     * La ventana solo afecta al **costo de ventas**: la existencia y el valor
+     * miran todo el historial, porque lo que tienes hoy es lo que entró menos
+     * lo que salió desde siempre.
+     */
+    almacen: (profileId: number, periodo?: { desde: string; hasta: string }) => {
+      const q = new URLSearchParams({ profileId: String(profileId) })
+      if (periodo) {
+        q.set('desde', periodo.desde)
+        q.set('hasta', periodo.hasta)
+      }
+      return req<Almacen>(`/api/inventario?${q}`)
+    },
+    movimientos: (profileId: number, productId: number) =>
+      req<MovimientoStock[]>(`/api/inventario/${productId}/movimientos?profileId=${profileId}`),
+    create: (data: ProductoDraft) =>
+      req<Producto>('/api/inventario', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: number, data: ProductoDraft) =>
+      req<Producto>(`/api/inventario/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    /** Con historial responde 409: lo que toca es archivar, no perder el pasado. */
+    remove: (profileId: number, id: number) =>
+      req<{ ok: true }>(`/api/inventario/${id}?profileId=${profileId}`, { method: 'DELETE' }),
+    registrar: (data: MovimientoStockDraft) =>
+      req<Producto>('/api/inventario/movimientos', { method: 'POST', body: JSON.stringify(data) }),
+    borrarMovimiento: (profileId: number, id: number) =>
+      req<{ ok: true }>(`/api/inventario/movimientos/${id}?profileId=${profileId}`, {
+        method: 'DELETE',
+      }),
   },
   precios: {
     analizar: (data: { profileId: number; texto: string; fecha?: string | null }) =>

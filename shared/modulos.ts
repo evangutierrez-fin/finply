@@ -24,6 +24,9 @@ export type ModuloId =
   | 'metas'
   | 'notas'
   | 'negocio'
+  | 'inmuebles'
+  | 'horas'
+  | 'inventario'
 
 export interface Modulo {
   id: ModuloId
@@ -110,6 +113,41 @@ export const MODULOS: readonly Modulo[] = [
       'Clientes y proveedores, facturas con vencimiento, antigüedad de saldos, estado de resultados y flujo proyectado.',
     vistas: ['contrapartes', 'facturas', 'negocio'],
     omision: ['negocio'],
+  },
+  // ── Módulos de giro (Fase 15) ─────────────────────────────────────────
+  //
+  // Los tres nacen **apagados para todo el mundo** (`omision` vacía), y esa es
+  // toda la diferencia con los de arriba: cada uno es inútil para casi
+  // cualquiera y decisivo para algunos. Un libro personal no tiene por qué
+  // cargar con un almacén, y una panadería no tiene por qué cargar con horas
+  // facturables.
+  //
+  // Nacer apagados no los esconde: aparecen con su descripción en el alta del
+  // perfil y en Ajustes, que es donde se encienden. Y encenderlos no exige
+  // migración porque las tablas ya existen (D16).
+  {
+    id: 'inmuebles',
+    label: 'Inmuebles en renta',
+    descripcion:
+      'Inquilino, renta, depósito y mantenimiento de una propiedad que ya llevas como bien, y cuánto deja de verdad.',
+    vistas: ['inmuebles'],
+    omision: [],
+  },
+  {
+    id: 'horas',
+    label: 'Horas facturables',
+    descripcion:
+      'Horas por cliente con su tarifa, cuánto llevas trabajado sin cobrar, y de ahí la factura.',
+    vistas: ['horas'],
+    omision: [],
+  },
+  {
+    id: 'inventario',
+    label: 'Inventario simple',
+    descripcion:
+      'Entradas, salidas, qué vale lo que tienes y cuánto costó lo que vendiste, a costo promedio.',
+    vistas: ['inventario'],
+    omision: [],
   },
 ]
 

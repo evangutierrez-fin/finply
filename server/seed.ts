@@ -2,6 +2,7 @@
 //   npm run seed   → dos perfiles demo con tres meses de movimientos
 //   npm run reset  → borra todo y deja un perfil vacío para empezar de cero
 import { db, inTransaction, seedCategories } from './db.ts'
+import { porOmision } from '../shared/modulos.ts'
 
 const empty = process.argv.includes('--empty')
 
@@ -36,10 +37,32 @@ function wipe(): void {
     DELETE FROM invoices;
     DELETE FROM counterparties;
     DELETE FROM cost_centers;
+    DELETE FROM stock_moves;
+    DELETE FROM products;
+    DELETE FROM time_entries;
+    DELETE FROM rentals;
+    DELETE FROM asset_valuations;
+    DELETE FROM assets;
     DELETE FROM categories;
     DELETE FROM accounts;
     DELETE FROM profiles;
   `)
+}
+
+/**
+ * Enciende módulos que **no vienen por omisión**. Los tres de giro nacen
+ * apagados para todo el mundo (Fase 15), así que el demo tiene que pedirlos
+ * explícitamente o sus secciones no aparecen en el lomo.
+ *
+ * Ojo con R17: una fila explícita manda sobre el juego del tipo, así que hay
+ * que escribir **todas** las del perfil, no solo las nuevas — si no, encender
+ * Inmuebles apagaría todo lo demás.
+ */
+function encenderModulos(profileId: number, modulos: string[]): void {
+  const stmt = db.prepare(
+    'INSERT OR REPLACE INTO profile_modules (profile_id, module, enabled) VALUES (?, ?, 1)',
+  )
+  for (const m of modulos) stmt.run(profileId, m)
 }
 
 function createProfile(name: string, kind: 'personal' | 'negocio', accent: string): number {
@@ -240,6 +263,60 @@ inTransaction(() => {
     }
   })
   tx(personal, banco, 'ingreso', 240000, '2026-06-20', cOtrosIn, 'Proyecto freelance')
+
+  // ── Un inmueble rentado (Fase 15) ─────────────────────────────────────
+  //
+  // Vive en el perfil personal porque así es como se tiene: un depto heredado
+  // que se renta. El bien va en Bienes —ahí es donde suma al patrimonio— y el
+  // contrato solo le pone inquilino, renta y depósito.
+  const depto = Number(
+    db
+      .prepare(
+        `INSERT INTO assets (profile_id, name, kind, cost_cents, acquired_date, note)
+         VALUES (?, 'Depto de Narvarte', 'inmueble', 165000000, '2019-03-15', ?)`,
+      )
+      .run(personal, 'Se renta desde 2021').lastInsertRowid,
+  )
+  db.prepare(
+    `INSERT INTO asset_valuations (asset_id, date, value_cents, note)
+     VALUES (?, '2026-01-10', 218000000, 'Lo que piden por uno igual en la misma calle')`,
+  ).run(depto)
+  const contrato = Number(
+    db
+      .prepare(
+        `INSERT INTO rentals (profile_id, asset_id, tenant, rent_cents, deposit_cents,
+           payment_day, start_date, end_date, note)
+         VALUES (?, ?, 'Familia Robles', 1450000, 1450000, 5, '2025-09-01', '2026-08-31', ?)`,
+      )
+      .run(personal, depto, 'Contrato a un año, renovable').lastInsertRowid,
+  )
+
+  /** Un movimiento del contrato: es el papel lo que decide si cuenta o no. */
+  const movInmueble = (
+    type: 'ingreso' | 'gasto',
+    cents: number,
+    date: string,
+    role: string,
+    note: string,
+  ) =>
+    db
+      .prepare(
+        `INSERT INTO transactions (profile_id, account_id, type, amount_cents, date,
+           category_id, note, rental_id, rental_role)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(personal, banco, type, cents, date, type === 'ingreso' ? cOtrosIn : cServicios, note, contrato, role)
+
+  // El depósito entró al empezar el contrato y sigue en la cuenta: se ve en el
+  // saldo, no en el ingreso. Es la cifra que este módulo existe para separar.
+  movInmueble('ingreso', 1450000, '2025-09-01', 'deposito', 'Depósito en garantía')
+  for (const m of months.filter((m) => m >= '2025-09')) {
+    movInmueble('ingreso', 1450000, day(m, 5), 'renta', 'Renta Narvarte')
+  }
+  movInmueble('gasto', 620000, '2026-02-18', 'mantenimiento', 'Boiler nuevo')
+  movInmueble('gasto', 185000, '2026-05-09', 'mantenimiento', 'Pintura y plomería')
+  // Y con el contrato venciendo el 31 de agosto, la alerta tiene de qué hablar.
+  encenderModulos(personal, [...porOmision('personal'), 'inmuebles'])
   // El mes disparado: junio se fue de viaje. Sirve a tres secciones a la vez —
   // se sale de su promedio, separa la mediana del promedio y no es hormiga.
   tx(personal, banco, 'gasto', 1450000, '2026-06-12', cOcio, 'Vuelos y hotel Oaxaca')
@@ -440,6 +517,61 @@ inTransaction(() => {
      VALUES (?, ?, 'emitida', ?, ?, ?, ?, ?, ?, ?, 'mensual', 1, '2026-06-01')`,
   ).run(negocio, merida, 'Iguala mensual de pan', 800000, 128000, 85333, 17333, eventos, 30)
 
+  // ── Horas facturables e inventario (Fase 15) ──────────────────────────
+  //
+  // La panadería también da cursos, y eso se cobra por hora. Lo que el demo
+  // tiene que enseñar es el hueco: hay horas de julio **sin facturar** y una
+  // tanda de junio que ya se facturó, para ver la diferencia entre "trabajado"
+  // y "cobrable".
+  const insertHora = db.prepare(
+    `INSERT INTO time_entries (profile_id, date, minutes, rate_cents, counterparty_id,
+       cost_center_id, note, invoice_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  )
+  const fCurso = factura(
+    pitagoras, 'emitida', 'A-121', 'Curso de repostería · junio',
+    '2026-06-30', '2026-07-30', 900000, 144000, 0, 0, mostrador,
+  )
+  for (const [d, min] of [[3, 180], [10, 180], [17, 180], [24, 180]] as const) {
+    insertHora.run(negocio, day('2026-06', d), min, 75000, pitagoras, mostrador, 'Curso de repostería', fCurso)
+  }
+  // Julio: trabajado y sin facturar. Dos clientes, para que el panel tenga que
+  // agrupar, y una tarifa distinta en cada uno — la tarifa vive en el renglón.
+  for (const [d, min] of [[2, 180], [9, 180], [16, 240]] as const) {
+    insertHora.run(negocio, day('2026-07', d), min, 75000, pitagoras, mostrador, 'Curso de repostería', null)
+  }
+  for (const [d, min] of [[7, 120], [21, 90]] as const) {
+    insertHora.run(negocio, day('2026-07', d), min, 95000, merida, eventos, 'Asesoría de menú', null)
+  }
+
+  // El almacén. La harina entra a dos precios distintos para que el promedio
+  // ponderado tenga algo que promediar, y los empaques quedan bajo su mínimo
+  // para que la alerta tenga de qué hablar.
+  const insertProducto = db.prepare(
+    `INSERT INTO products (profile_id, sku, name, unit, min_qty_milli) VALUES (?, ?, ?, ?, ?)`,
+  )
+  const insertMov = db.prepare(
+    `INSERT INTO stock_moves (product_id, date, kind, qty_milli, unit_cost_cents, note)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  )
+  const harina = Number(insertProducto.run(negocio, 'HAR-01', 'Harina de trigo', 'kg', 50_000).lastInsertRowid)
+  insertMov.run(harina, '2026-06-02', 'entrada', 120_000, 2450, 'La Espiga')
+  insertMov.run(harina, '2026-06-20', 'salida', 78_000, 0, 'Producción de junio')
+  insertMov.run(harina, '2026-07-06', 'entrada', 100_000, 2780, 'La Espiga · subió el precio')
+  insertMov.run(harina, '2026-07-18', 'salida', 64_000, 0, 'Producción de julio')
+
+  const cafe = Number(insertProducto.run(negocio, 'CAF-01', 'Café en grano', 'kg', 8_000).lastInsertRowid)
+  insertMov.run(cafe, '2026-07-03', 'entrada', 24_000, 38_000, 'Tostador Casa Torres')
+  insertMov.run(cafe, '2026-07-19', 'salida', 9_500, 0, 'Barra')
+
+  const cajas = Number(insertProducto.run(negocio, 'EMP-01', 'Caja para pastel', 'pieza', 200_000).lastInsertRowid)
+  insertMov.run(cajas, '2026-06-11', 'entrada', 500_000, 1150, 'Empaques del Centro')
+  insertMov.run(cajas, '2026-07-14', 'salida', 340_000, 0, 'Pedidos de julio')
+  // Un conteo que no cuadró: se valúa al promedio y **no** es costo de ventas.
+  insertMov.run(cajas, '2026-07-22', 'ajuste', -18_000, 0, 'Conteo: cajas mojadas')
+
+  encenderModulos(negocio, [...porOmision('negocio'), 'horas', 'inventario'])
+
   // ── Deudas y retornos ─────────────────────────────────────────────────
   const insertDebt = db.prepare(
     `INSERT INTO debts (profile_id, direction, counterparty, concept, principal_cents, start_date, due_date)
@@ -602,6 +734,7 @@ inTransaction(() => {
   console.log(
     '[finply] Libro demo listo: 2 perfiles, 6 cuentas (una tarjeta con su tasa), ' +
       'quince meses de movimientos, deudas, inversiones, presupuestos, metas, notas, ' +
-      'y facturas con retención, nota de crédito, anticipo y plantilla.',
+      'facturas con retención, nota de crédito, anticipo y plantilla, ' +
+      'y los tres módulos de giro: un depto rentado, horas sin facturar y un almacén.',
   )
 })

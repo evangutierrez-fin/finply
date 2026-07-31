@@ -976,6 +976,130 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    id: 18,
+    name: 'módulos de giro: inmuebles en renta, horas facturables e inventario simple',
+    up: (db) => {
+      // Tres módulos **opt-in**, que nacen apagados para todo el mundo. Y aun
+      // así sus tablas se crean para todos, porque el esquema es siempre el
+      // completo (D16): encender un módulo a media vida del libro no puede
+      // exigir una migración (R1), y apagarlo no puede perder un dato (R17).
+      // Cuatro tablas vacías en SQLite no cuestan nada.
+
+      // ── Inmuebles en renta ───────────────────────────────────────────────
+      // El inmueble **no vive aquí**: es un bien de la Fase 11, y esto es su
+      // arrendamiento. Duplicarlo habría metido la misma casa dos veces en el
+      // patrimonio, que es exactamente la mentira que la Fase 11 vino a
+      // cerrar.
+      //
+      // El inquilino es texto libre, como el de una deuda, y no una
+      // contraparte: obligar a `counterparties` haría que encender Inmuebles
+      // encendiera Negocio de rebote, y un módulo no manda sobre otro (R17).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS rentals (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+          tenant TEXT NOT NULL DEFAULT '',
+          rent_cents INTEGER NOT NULL CHECK (rent_cents >= 0),
+          deposit_cents INTEGER NOT NULL DEFAULT 0 CHECK (deposit_cents >= 0),
+          -- Día del mes en que toca cobrar. 31 cae el último, como en todo el
+          -- resto de Finply.
+          payment_day INTEGER NOT NULL DEFAULT 1 CHECK (payment_day BETWEEN 1 AND 31),
+          start_date TEXT NOT NULL,
+          end_date TEXT,
+          note TEXT NOT NULL DEFAULT '',
+          archived INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_rentas_perfil ON rentals(profile_id, archived);
+        CREATE INDEX IF NOT EXISTS idx_rentas_bien ON rentals(asset_id);
+      `)
+
+      // La liga del movimiento con su arrendamiento, y qué papel juega ahí.
+      // Es el mismo par que ya llevan las deudas (`debt_id` + `debt_role`), y
+      // por la misma razón: sin el papel habría que adivinar si un ingreso de
+      // un inquilino es la renta o el depósito, y **no es lo mismo**.
+      if (!hasColumn(db, 'transactions', 'rental_id')) {
+        db.exec(
+          `ALTER TABLE transactions ADD COLUMN rental_id INTEGER
+           REFERENCES rentals(id) ON DELETE SET NULL`,
+        )
+      }
+      if (!hasColumn(db, 'transactions', 'rental_role')) {
+        db.exec(
+          `ALTER TABLE transactions ADD COLUMN rental_role TEXT
+           CHECK (rental_role IS NULL OR rental_role IN
+             ('renta', 'deposito', 'devolucion_deposito', 'mantenimiento'))`,
+        )
+      }
+      db.exec('CREATE INDEX IF NOT EXISTS idx_tx_renta ON transactions(rental_id)')
+
+      // ── Horas facturables ────────────────────────────────────────────────
+      // La tarifa vive en **cada renglón** y no en el cliente: se sube a mitad
+      // de un proyecto, y una tarifa guardada aparte reescribiría el precio de
+      // las horas de hace tres meses. Es el mismo criterio que ya rige a una
+      // recurrencia asentada.
+      //
+      // `invoice_id` es lo único que marca una hora como facturada, y es
+      // derivado: borrar la factura las devuelve a "sin facturar" solas.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS time_entries (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          date TEXT NOT NULL,
+          minutes INTEGER NOT NULL CHECK (minutes > 0),
+          rate_cents INTEGER NOT NULL DEFAULT 0 CHECK (rate_cents >= 0),
+          counterparty_id INTEGER REFERENCES counterparties(id) ON DELETE SET NULL,
+          cost_center_id INTEGER REFERENCES cost_centers(id) ON DELETE SET NULL,
+          note TEXT NOT NULL DEFAULT '',
+          invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_horas_perfil ON time_entries(profile_id, date);
+        CREATE INDEX IF NOT EXISTS idx_horas_factura ON time_entries(invoice_id);
+      `)
+
+      // ── Inventario simple ────────────────────────────────────────────────
+      // Las cantidades van en **milésimas de unidad** para que quepa 1.5 kg
+      // sin punto flotante, con el mismo criterio que los centavos.
+      //
+      // No hay columna de existencia ni de costo promedio: los dos se derivan
+      // recorriendo los movimientos, como la bandeja de recurrencias (D7) y el
+      // saldo de una factura. Una existencia guardada envejece en cuanto
+      // alguien corrige una entrada de hace un mes.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS products (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          sku TEXT NOT NULL DEFAULT '',
+          name TEXT NOT NULL,
+          unit TEXT NOT NULL DEFAULT 'pieza',
+          -- Debajo de esto, Finply avisa. NULL quita el aviso.
+          min_qty_milli INTEGER,
+          archived INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE (profile_id, name)
+        );
+
+        CREATE TABLE IF NOT EXISTS stock_moves (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+          date TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('entrada', 'salida', 'ajuste')),
+          -- En un ajuste puede ser negativa: ahí es un delta, no una cantidad.
+          qty_milli INTEGER NOT NULL CHECK (qty_milli <> 0),
+          unit_cost_cents INTEGER NOT NULL DEFAULT 0 CHECK (unit_cost_cents >= 0),
+          note TEXT NOT NULL DEFAULT '',
+          -- Liga opcional al movimiento del libro que pagó esa entrada. El
+          -- inventario **no asienta dinero** por su cuenta (R4).
+          tx_id INTEGER REFERENCES transactions(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_stock_producto ON stock_moves(product_id, date, id);
+      `)
+    },
+  },
 ]
 
 /** Versión de esquema que espera este código. */

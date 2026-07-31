@@ -294,6 +294,9 @@ export function mapTx(row: any) {
     investmentEntryId: row.investment_entry_id ?? null,
     msiPurchaseId: row.msi_purchase_id ?? null,
     debtId: row.debt_id ?? null,
+    /** Si viene, este movimiento es de un arrendamiento, con su papel (Fase 15). */
+    rentalId: row.rental_id ?? null,
+    rentalRole: row.rental_role ?? null,
     invoiceId: row.invoice_id ?? null,
     counterpartyId: row.counterparty_id ?? null,
     counterpartyName: row.counterparty_name ?? null,

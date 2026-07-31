@@ -133,6 +133,86 @@ describe('respaldo', () => {
     )
   })
 
+  test('los tres módulos de giro viajan enteros, con el papel de cada movimiento', async () => {
+    // Misma trampa que las facturas: la lista de tablas del respaldo es a mano.
+    // Cuatro tablas nuevas y dos columnas, y la que más duele perder es
+    // `rental_role` — sin ella el depósito restaurado vuelve a ser ingreso.
+    const { perfil, cuenta } = await libroBase(c, 'Respaldo de giro', 'negocio')
+    await c.patch(`/api/profiles/${perfil.id}`, {
+      modules: ['negocio', 'bienes', 'inmuebles', 'horas', 'inventario'],
+    })
+    const bien = (
+      await c.post('/api/bienes', {
+        profileId: perfil.id, name: 'Casa de Coyoacán', kind: 'inmueble',
+        costCents: 200000000, acquiredDate: '2020-01-01',
+      })
+    ).body
+    const renta = (
+      await c.post('/api/inmuebles', {
+        profileId: perfil.id, assetId: bien.id, tenant: 'Familia Pérez',
+        rentCents: 1500000, depositCents: 1500000, paymentDay: 5, startDate: '2026-01-01',
+      })
+    ).body
+    for (const [role, type] of [['renta', 'ingreso'], ['deposito', 'ingreso'], ['mantenimiento', 'gasto']]) {
+      await c.post('/api/transactions', {
+        profileId: perfil.id, accountId: cuenta.id, type, amountCents: 100000,
+        date: '2026-07-05', rentalId: renta.id, rentalRole: role,
+      })
+    }
+    const cliente = (await c.post('/api/contrapartes', { profileId: perfil.id, name: 'Despacho' })).body
+    await c.post('/api/horas', {
+      profileId: perfil.id, date: '2026-07-10', minutes: 90, rateCents: 100000,
+      counterpartyId: cliente.id, note: 'Junta',
+    })
+    const producto = (
+      await c.post('/api/inventario', {
+        profileId: perfil.id, sku: 'CAF-1', name: 'Café', unit: 'kg', minQtyMilli: 5000,
+      })
+    ).body
+    await c.post('/api/inventario/movimientos', {
+      profileId: perfil.id, productId: producto.id, date: '2026-07-01',
+      kind: 'entrada', qtyMilli: 10000, unitCostCents: 20000,
+    })
+    await c.post('/api/inventario/movimientos', {
+      profileId: perfil.id, productId: producto.id, date: '2026-07-05',
+      kind: 'salida', qtyMilli: 4000,
+    })
+
+    const antes = {
+      inmuebles: (await c.get(`/api/inmuebles?profileId=${perfil.id}&hoy=2026-07-15`)).body,
+      horas: (await c.get(`/api/horas?profileId=${perfil.id}`)).body,
+      almacen: (await c.get(`/api/inventario?profileId=${perfil.id}&desde=2026-07-01&hasta=2026-07-31`)).body,
+      resultados: (
+        await c.get(`/api/negocio/resultados?profileId=${perfil.id}&desde=2026-07-01&hasta=2026-07-31`)
+      ).body,
+    }
+    const respaldo = (await c.get('/api/respaldo')).body
+
+    await c.del(`/api/profiles/${perfil.id}`)
+    const res = await c.post('/api/respaldo/restaurar', respaldo)
+    assert.equal(res.status, 200)
+
+    assert.deepEqual(
+      (await c.get(`/api/inmuebles?profileId=${perfil.id}&hoy=2026-07-15`)).body,
+      antes.inmuebles,
+      'el contrato vuelve con lo cobrado, el depósito en mano y su rendimiento',
+    )
+    assert.deepEqual((await c.get(`/api/horas?profileId=${perfil.id}`)).body, antes.horas)
+    assert.deepEqual(
+      (await c.get(`/api/inventario?profileId=${perfil.id}&desde=2026-07-01&hasta=2026-07-31`)).body,
+      antes.almacen,
+      'y el almacén con su costo promedio, que se deriva de los movimientos',
+    )
+    // La que de verdad duele: si `rental_role` no viajara, el depósito
+    // restaurado contaría como ingreso y esta cifra subiría sola.
+    assert.deepEqual(
+      (
+        await c.get(`/api/negocio/resultados?profileId=${perfil.id}&desde=2026-07-01&hasta=2026-07-31`)
+      ).body,
+      antes.resultados,
+    )
+  })
+
   test('informa dónde vive la base', async () => {
     const res = await c.get('/api/respaldo/info')
     assert.equal(res.status, 200)

@@ -589,6 +589,67 @@ describe('migraciones', () => {
     db.close()
   })
 
+  test('un libro llega a la 18 sin que cambie una sola cifra, y sin módulos que no pidió', () => {
+    const db = baseEnVersion(17)
+    // Lo que ese libro ya tenía: un bien, un movimiento y su saldo.
+    db.exec(`
+      INSERT INTO assets (id, profile_id, name, kind, cost_cents, acquired_date)
+        VALUES (1, 1, 'Casa de Coyoacán', 'inmueble', 200000000, '2020-01-01');
+      INSERT INTO transactions (id, profile_id, account_id, type, amount_cents, date)
+        VALUES (7, 1, 1, 'ingreso', 1500000, '2026-07-05');
+    `)
+
+    migrate(db)
+
+    assert.equal((db.prepare('PRAGMA user_version').get() as any).user_version, SCHEMA_VERSION)
+
+    // D16: las tablas existen aunque nadie tenga el módulo encendido, para que
+    // prenderlo a media vida del libro no exija una migración (R1).
+    for (const tabla of ['rentals', 'time_entries', 'products', 'stock_moves']) {
+      assert.equal((db.prepare(`SELECT COUNT(*) AS n FROM ${tabla}`).get() as any).n, 0, tabla)
+    }
+
+    // Y el movimiento que ya estaba sigue siendo lo que era: sin papel de
+    // arrendamiento, así que ningún ingreso viejo se vuelve depósito.
+    const tx = db.prepare('SELECT * FROM transactions WHERE id = 7').get() as any
+    assert.equal(tx.amount_cents, 1500000)
+    assert.equal(tx.rental_id, null)
+    assert.equal(tx.rental_role, null)
+    assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0)
+    db.close()
+  })
+
+  test('un papel de arrendamiento inventado no entra a la base', () => {
+    const db = baseEnVersion(17)
+    migrate(db)
+    db.exec(`
+      INSERT INTO assets (id, profile_id, name, kind, cost_cents, acquired_date)
+        VALUES (1, 1, 'Local', 'inmueble', 100000, '2020-01-01');
+      INSERT INTO rentals (id, profile_id, asset_id, tenant, rent_cents, deposit_cents,
+        payment_day, start_date) VALUES (1, 1, 1, 'Inquilino', 1000, 0, 5, '2026-01-01');
+    `)
+    // Solo los cuatro papeles que el rendimiento sabe interpretar: uno de más y
+    // el depósito dejaría de ser reconocible como tal.
+    assert.throws(
+      () =>
+        db.exec(
+          `INSERT INTO transactions (id, profile_id, account_id, type, amount_cents, date,
+             rental_id, rental_role) VALUES (9, 1, 1, 'ingreso', 1000, '2026-07-05', 1, 'renta_atrasada')`,
+        ),
+      /CHECK/,
+    )
+    // Y el contrato se puede borrar dejando el movimiento: ese dinero se movió.
+    db.exec(
+      `INSERT INTO transactions (id, profile_id, account_id, type, amount_cents, date,
+         rental_id, rental_role) VALUES (10, 1, 1, 'ingreso', 1000, '2026-07-05', 1, 'deposito')`,
+    )
+    db.exec('DELETE FROM rentals WHERE id = 1')
+    const tx = db.prepare('SELECT * FROM transactions WHERE id = 10').get() as any
+    assert.equal(tx.amount_cents, 1000, 'el movimiento se queda')
+    assert.equal(tx.rental_id, null, 'solo pierde la liga')
+    db.close()
+  })
+
   test('una base de una versión más nueva no se toca', () => {
     const db = baseVieja()
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`)

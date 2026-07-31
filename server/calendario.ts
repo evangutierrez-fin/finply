@@ -252,10 +252,55 @@ function deFacturas(profileId: number, desde: string, hasta: string): EventoCale
     }))
 }
 
+/**
+ * Las rentas que caen en la ventana. Entran por lo mismo que las facturas y
+ * las deudas (D9): el calendario junta lo que Finply **ya sabe** que va a caer,
+ * y una renta pactada es de lo más seguro que hay.
+ *
+ * ⚠ Si el usuario además guardó la renta como recurrencia, saldrá dos veces:
+ * son dos cosas que él escribió y Finply no puede saber que hablan del mismo
+ * dinero. Lo mismo pasa ya entre facturas y recurrencias.
+ */
+function deRentas(profileId: number, desde: string, hasta: string): EventoCalendario[] {
+  const filas: any[] = db
+    .prepare(
+      `SELECT r.id, r.tenant, r.rent_cents, r.payment_day, r.start_date, r.end_date,
+        a.name AS bien
+       FROM rentals r
+       JOIN assets a ON a.id = r.asset_id
+       WHERE r.profile_id = ? AND r.archived = 0 AND r.rent_cents > 0
+         AND r.start_date <= ? AND (r.end_date IS NULL OR r.end_date >= ?)`,
+    )
+    .all(profileId, hasta, desde)
+
+  const eventos: EventoCalendario[] = []
+  for (const r of filas) {
+    // Se recorren los cobros que caen dentro de la ventana. Son pocos —una
+    // ventana de 90 días son tres— así que no hace falta consulta por mes.
+    let fecha = proximoDiaDelMes(desde > r.start_date ? desde : r.start_date, r.payment_day)
+    while (fecha <= hasta) {
+      if (fecha >= desde && (r.end_date === null || fecha <= r.end_date)) {
+        eventos.push({
+          fecha,
+          tipo: 'renta' as const,
+          titulo: `Cobrar la renta de ${r.bien}`,
+          detalle: r.tenant || 'Sin inquilino apuntado',
+          montoCents: r.rent_cents as number,
+          refId: r.id as number,
+          direccion: 'entra' as const,
+        })
+      }
+      fecha = proximoDiaDelMes(sumarDias(fecha, 1), r.payment_day)
+    }
+  }
+  return eventos
+}
+
 const ORDEN: Record<EventoCalendario['tipo'], number> = {
   pago_tarjeta: 0,
   deuda: 1,
   factura: 2,
+  renta: 3,
   recurrencia: 3,
   msi: 4,
   corte: 5,
@@ -283,6 +328,7 @@ export function calendario(profileId: number, hoy = hoyISO(), dias = 30): Calend
     ...(con('deudas') ? deDeudas(profileId, hoy, hasta) : []),
     ...(con('tarjetas') ? deMSI(profileId, hoy, hasta) : []),
     ...(con('negocio') ? deFacturas(profileId, hoy, hasta) : []),
+    ...(con('inmuebles') ? deRentas(profileId, hoy, hasta) : []),
   ]
   // Dentro de un mismo día manda lo que cuesta dinero si se te pasa.
   eventos.sort(

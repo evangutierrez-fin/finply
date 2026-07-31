@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
-  Account, CentroCosto, Category, Contraparte, Tag, Tx, TxAttachment, TxType,
+  Account, Arrendamiento, CentroCosto, Category, Contraparte, Tag, Tx, TxAttachment, TxType,
 } from '../../shared/types.ts'
 import { api } from '../api.ts'
 import { fmtDate, parseAmount, todayISO } from '../format.ts'
@@ -57,6 +57,13 @@ export function TxModal({
   // Fase 9 el tipo solo elige el juego por omisión, y un libro personal que
   // encienda Negocio tiene que verlos igual.
   const esNegocio = profile.modules.includes('negocio')
+  // Fase 15. El papel del movimiento en un arrendamiento: es lo que hace que el
+  // depósito no cuente como ingreso (D6). Vive **en el movimiento**, así que
+  // apagar Inmuebles después no lo convierte en ingreso (R18).
+  const conInmuebles = profile.modules.includes('inmuebles')
+  const [arrendamientos, setArrendamientos] = useState<Arrendamiento[]>([])
+  const [rentalId, setRentalId] = useState<number>(tx?.rentalId ?? 0)
+  const [rentalRole, setRentalRole] = useState<string>(tx?.rentalRole ?? '')
   const [newTag, setNewTag] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -113,6 +120,16 @@ export function TxModal({
       },
     )
   }, [profile.id, esNegocio])
+
+  useEffect(() => {
+    if (!conInmuebles) return
+    api.inmuebles.list(profile.id).then(
+      (rs) => setArrendamientos(rs.filter((r) => !r.archived)),
+      () => {
+        // Que falten no impide registrar el movimiento: el campo es opcional.
+      },
+    )
+  }, [profile.id, conInmuebles])
 
   // Los gastos a los que se puede ligar una devolución. Solo se piden cuando el
   // movimiento es un ingreso: en cualquier otro caso la pregunta no existe.
@@ -266,6 +283,11 @@ export function TxModal({
             }))
           : [],
         refundOfId: type === 'ingreso' ? refundOfId || null : null,
+        // Los dos juntos o ninguno: un papel sin contrato no significa nada, y
+        // un contrato sin papel deja al rendimiento sin saber qué hacer con el
+        // monto. Misma regla de R17 que los campos de negocio.
+        rentalId: rentalRole ? rentalId || null : null,
+        rentalRole: rentalId && rentalRole ? (rentalRole as Tx['rentalRole']) : null,
       }
       if (tx) await api.tx.update(tx.id, draft)
       else await api.tx.create(draft)
@@ -596,6 +618,53 @@ export function TxModal({
                 </label>
               )}
             </div>
+          </>
+        )}
+
+        {/* Un movimiento de un inmueble rentado. Se pregunta solo si hay
+            contratos: sin ellos son dos selects vacíos en cada partida. */}
+        {conInmuebles && arrendamientos.length > 0 && (
+          <>
+            <div className="campos-2">
+              <label className="campo">
+                <span className="campo-label">De qué inmueble</span>
+                <select
+                  className="campo-input"
+                  value={rentalId}
+                  onChange={(e) => setRentalId(Number(e.target.value))}
+                >
+                  <option value={0}>No es de un inmueble</option>
+                  {arrendamientos.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.assetName}{r.tenant && ` · ${r.tenant}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {rentalId > 0 && (
+                <label className="campo">
+                  <span className="campo-label">Qué es</span>
+                  <select
+                    className="campo-input"
+                    value={rentalRole}
+                    onChange={(e) => setRentalRole(e.target.value)}
+                  >
+                    <option value="">Elige…</option>
+                    <option value="renta">La renta del mes</option>
+                    <option value="deposito">El depósito</option>
+                    <option value="devolucion_deposito">Devolución del depósito</option>
+                    <option value="mantenimiento">Mantenimiento</option>
+                  </select>
+                </label>
+              )}
+            </div>
+            {(rentalRole === 'deposito' || rentalRole === 'devolucion_deposito') && (
+              <p className="forma-nota">
+                El depósito <strong>no es tuyo</strong>: entra a tu cuenta y sube tu saldo, pero
+                Finply lo deja fuera de tu ingreso del mes y del rendimiento del inmueble, porque
+                lo tienes que devolver.
+              </p>
+            )}
           </>
         )}
 

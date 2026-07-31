@@ -34,6 +34,7 @@ const ETIQUETA: Record<TipoEvento, string> = {
   deuda: 'Deuda',
   msi: 'A meses',
   factura: 'Factura',
+  renta: 'Renta',
   movimiento: 'Ya asentado',
 }
 
@@ -49,6 +50,7 @@ const DESTINO: Record<TipoEvento, View> = {
   msi: 'tarjetas',
   deuda: 'deudas',
   factura: 'facturas',
+  renta: 'inmuebles',
   movimiento: 'movimientos',
 }
 

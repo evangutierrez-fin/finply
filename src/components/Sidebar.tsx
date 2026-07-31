@@ -43,6 +43,9 @@ export type View =
   | 'recurrencias'
   | 'calendario'
   | 'flujo'
+  | 'inmuebles'
+  | 'horas'
+  | 'inventario'
   | 'ajustes'
 
 export type ThemePref = 'claro' | 'oscuro' | 'auto'
@@ -92,6 +95,18 @@ const NAV_GROUPS: { label: string | null; items: { id: View; label: string }[] }
       { id: 'contrapartes', label: 'Contrapartes' },
       { id: 'facturas', label: 'Facturas' },
       { id: 'negocio', label: 'Resultados' },
+    ],
+  },
+  // Los tres módulos de giro (Fase 15). Van en su propio grupo y no repartidos
+  // entre los de arriba: nacen apagados y son de quien los pidió, así que un
+  // libro que no los use ni siquiera ve el rótulo — el grupo desaparece entero
+  // cuando se queda sin renglones.
+  {
+    label: 'Tu giro',
+    items: [
+      { id: 'inmuebles', label: 'Inmuebles' },
+      { id: 'horas', label: 'Horas' },
+      { id: 'inventario', label: 'Inventario' },
     ],
   },
 ]

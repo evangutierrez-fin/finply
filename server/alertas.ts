@@ -22,7 +22,8 @@ import type { ModuloId } from '../shared/modulos.ts'
 import { estadoTarjetas } from './tarjetas.ts'
 import { listar as listarRecurrencias } from './recurrencias.ts'
 import { tablaAmortizacion } from '../shared/credito.ts'
-import { diasEntre, hoyISO } from '../shared/fechas.ts'
+import { diasEntre, hoyISO, sumarDias } from '../shared/fechas.ts'
+import { cantidadTexto } from '../shared/giro.ts'
 import type { Alerta } from '../shared/types.ts'
 
 /**
@@ -363,6 +364,77 @@ function deMetas(profileId: number, hoy: string): Alerta[] {
   return alertas
 }
 
+// ── Módulos de giro (Fase 15) ─────────────────────────────────────────────
+
+/** Cuánto antes se avisa que un contrato se acaba. */
+const DIAS_FIN_CONTRATO = 60
+
+/**
+ * El contrato que se acaba. Es la única alerta de inmuebles porque es la única
+ * que **no se puede ver de otro modo**: la renta que no llegó ya la enseña el
+ * flujo, pero un contrato que vence en un mes no aparece en ningún lado hasta
+ * que el inquilino avisa.
+ */
+function deArrendamientos(profileId: number, hoy: string): Alerta[] {
+  const filas: any[] = db
+    .prepare(
+      `SELECT r.id, r.tenant, r.end_date, r.rent_cents, a.name AS bien
+       FROM rentals r
+       JOIN assets a ON a.id = r.asset_id
+       WHERE r.profile_id = ? AND r.archived = 0 AND r.end_date IS NOT NULL
+         AND r.end_date >= ? AND r.end_date <= ?
+       ORDER BY r.end_date ASC`,
+    )
+    .all(profileId, hoy, sumarDias(hoy, DIAS_FIN_CONTRATO))
+
+  return filas.map((r) => {
+    const dias = diasEntre(hoy, r.end_date)
+    return {
+      tipo: 'arrendamiento' as const,
+      severidad: dias <= 30 ? ('alta' as const) : ('media' as const),
+      titulo: `El contrato de ${r.bien} termina ${cuando(hoy, r.end_date)}`,
+      detalle:
+        `${r.tenant || 'El inquilino'} paga ${pesos(r.rent_cents)} al mes: ` +
+        'si no se renueva, esa entrada deja de estar',
+      montoCents: r.rent_cents,
+      refId: r.id,
+      vista: 'inmuebles' as const,
+    }
+  })
+}
+
+/**
+ * El anaquel que se está vaciando. Solo habla de productos con mínimo puesto:
+ * sin él, Finply no tiene forma de saber cuánto es poco para ese negocio.
+ */
+function deExistencias(profileId: number): Alerta[] {
+  const filas: any[] = db
+    .prepare(
+      `SELECT p.id, p.name, p.unit, p.min_qty_milli AS minimo,
+        COALESCE((SELECT SUM(CASE WHEN m.kind = 'salida' THEN -m.qty_milli ELSE m.qty_milli END)
+          FROM stock_moves m WHERE m.product_id = p.id), 0) AS existencia
+       FROM products p
+       WHERE p.profile_id = ? AND p.archived = 0 AND p.min_qty_milli IS NOT NULL
+       ORDER BY p.name ASC`,
+    )
+    .all(profileId)
+
+  return filas
+    .filter((p) => p.existencia < p.minimo)
+    .map((p) => ({
+      tipo: 'existencias' as const,
+      severidad: p.existencia <= 0 ? ('alta' as const) : ('media' as const),
+      titulo:
+        p.existencia <= 0 ? `Te quedaste sin ${p.name}` : `Queda poco ${p.name}`,
+      detalle:
+        `${cantidadTexto(p.existencia)} ${p.unit} contra un mínimo de ` +
+        `${cantidadTexto(p.minimo)}`,
+      montoCents: null,
+      refId: p.id,
+      vista: 'inventario' as const,
+    }))
+}
+
 // ── Formato ───────────────────────────────────────────────────────────────
 
 function pesos(cents: number): string {
@@ -393,6 +465,10 @@ const ORDEN: Record<Alerta['tipo'], number> = {
   presupuesto: 4,
   recurrencia: 5,
   meta: 6,
+  // Las de giro van al final dentro de su severidad: son de quien encendió ese
+  // módulo, no de todo el mundo.
+  arrendamiento: 7,
+  existencias: 8,
 }
 
 /** Qué módulo tiene que estar encendido para que una familia hable. */
@@ -405,6 +481,8 @@ const MODULO_DE: Record<Alerta['tipo'], ModuloId | null> = {
   presupuesto_total: 'presupuestos',
   recurrencia: 'recurrencias',
   meta: 'metas',
+  arrendamiento: 'inmuebles',
+  existencias: 'inventario',
 }
 
 /**
@@ -427,6 +505,8 @@ export function alertas(profileId: number, hoy = hoyISO()): Alerta[] {
     ...(con('presupuestos') ? dePresupuestos(profileId, hoy.slice(0, 7), hoy) : []),
     ...(con('recurrencias') ? deRecurrencias(profileId, hoy) : []),
     ...(con('metas') ? deMetas(profileId, hoy) : []),
+    ...(con('inmuebles') ? deArrendamientos(profileId, hoy) : []),
+    ...(con('inventario') ? deExistencias(profileId) : []),
   ].filter((a) => {
     const modulo = MODULO_DE[a.tipo]
     return modulo === null || con(modulo)
