@@ -295,6 +295,18 @@ export interface Summary {
   month: string
   accounts: Account[]
   totalCents: number
+  /**
+   * El mismo total al **cierre del mes pasado**, para poder restar. Un total
+   * sin nada contra qué medirlo no dice si vas bien. Cuentas activas, como el
+   * de arriba: si no, la resta no cuadraría con la cifra que se ve.
+   */
+  totalPrevioCents: number
+  /** Los últimos 30 días de saldo de cada cuenta activa, un punto por día. */
+  sparks: {
+    desde: string
+    hasta: string
+    porCuenta: { accountId: number; puntos: number[] }[]
+  }
   incomeCents: number
   expenseCents: number
   byDay: { date: string; incomeCents: number; expenseCents: number }[]

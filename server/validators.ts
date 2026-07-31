@@ -575,6 +575,8 @@ export const analisisQuery = z.object({
 export const summaryQuery = z.object({
   profileId: z.coerce.number().int().positive(),
   month: isoMonth,
+  /** Fija el "hoy" de las minigráficas. Sin él, cada día darían otra cosa. */
+  hoy: isoDate.optional(),
 })
 
 export const txQuery = z

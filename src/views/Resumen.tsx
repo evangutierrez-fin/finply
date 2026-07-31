@@ -1,9 +1,9 @@
 import { api } from '../api.ts'
 import { useApp } from '../context.ts'
 import { useFetch } from '../hooks.ts'
-import { currentMonth, fmtDate, fmtMoney, monthLabel, todayISO } from '../format.ts'
+import { currentMonth, fmtDate, fmtMoney, monthLabel, shiftMonth, todayISO } from '../format.ts'
 import { CountUpMoney, Money } from '../components/Money.tsx'
-import { CategoryBars, MonthBars } from '../components/Charts.tsx'
+import { CategoryBars, Composicion, MonthBars, Spark } from '../components/Charts.tsx'
 import type { View } from '../components/Sidebar.tsx'
 import { diasEntre, finDeMes } from '../../shared/fechas.ts'
 import type { Alerta, FlujoProyectado, Tx } from '../../shared/types.ts'
@@ -38,6 +38,29 @@ function Alertas({ alertas, onNav }: { alertas: Alerta[]; onNav: (view: View) =>
         ))}
       </ul>
     </section>
+  )
+}
+
+/**
+ * El cambio contra el cierre del mes pasado, debajo del total.
+ *
+ * La resta es contra **la misma cifra que se ve arriba** —cuentas activas—, así
+ * que quien quiera comprobarla puede hacerlo a mano. El porcentaje solo se
+ * escribe cuando el mes pasado cerró en positivo: contra cero o contra un
+ * número negativo, un porcentaje es un número grande que no significa nada.
+ */
+function Delta({ actual, previo, mes }: { actual: number; previo: number; mes: string }) {
+  const delta = actual - previo
+  if (delta === 0) {
+    return <span className="hero-delta">Igual que al cierre de {mes.toLowerCase()}</span>
+  }
+  const pct = previo > 0 ? Math.round((delta / previo) * 1000) / 10 : null
+  return (
+    <span className={`hero-delta${delta > 0 ? ' delta-sube' : ' delta-baja'}`}>
+      <span aria-hidden="true">{delta > 0 ? '▲' : '▼'}</span>{' '}
+      <Money cents={delta} signed className="cifra-chica" />
+      {pct !== null && ` · ${delta > 0 ? '+' : ''}${pct} %`} contra el cierre de {mes.toLowerCase()}
+    </span>
   )
 }
 
@@ -113,6 +136,7 @@ export function Resumen({ onNav }: { onNav: (view: View) => void }) {
 
   const active = data.accounts.filter((a) => !a.archived)
   const neto = data.incomeCents - data.expenseCents
+  const sparks = new Map(data.sparks.porCuenta.map((s) => [s.accountId, s.puntos]))
   // Un renglón se enseña si su módulo está encendido **o si trae saldo**: quien
   // apagó Deudas teniendo una abierta tiene que seguir viendo de dónde sale su
   // patrimonio, o la resta no cuadra con lo que se ve.
@@ -145,6 +169,11 @@ export function Resumen({ onNav }: { onNav: (view: View) => void }) {
         <div className="hero-total">
           <span className="rotulo">Suma total · {active.length} {active.length === 1 ? 'cuenta' : 'cuentas'}</span>
           <CountUpMoney cents={data.totalCents} className="hero-cifra" />
+          <Delta
+            actual={data.totalCents}
+            previo={data.totalPrevioCents}
+            mes={monthLabel(shiftMonth(month, -1))}
+          />
         </div>
         <dl className="hero-stats">
           <div className="stat">
@@ -165,18 +194,35 @@ export function Resumen({ onNav }: { onNav: (view: View) => void }) {
       {flujo && <FinDeMes flujo={flujo} onNav={onNav} />}
 
       <section className="cuentas-tira" aria-label="Cuentas">
-        {active.map((a, i) => (
-          <button
-            type="button"
-            key={a.id}
-            className="cuenta-mini"
-            style={{ animationDelay: `${i * 50}ms` }}
-            onClick={() => onNav('cuentas')}
-          >
-            <span className="cuenta-mini-nombre">{a.name}</span>
-            <Money cents={a.balanceCents} className="cuenta-mini-saldo" />
-          </button>
-        ))}
+        {active.map((a, i) => {
+          // La minigráfica es la forma; el cambio en pesos es el dato, y va
+          // escrito. Una cuenta abierta esta semana no tiene 30 días que
+          // enseñar y no se le inventan.
+          const puntos = sparks.get(a.id) ?? []
+          const cambio = puntos.length > 1 ? puntos.at(-1)! - puntos[0]! : 0
+          return (
+            <button
+              type="button"
+              key={a.id}
+              className="cuenta-mini"
+              style={{ animationDelay: `${i * 50}ms` }}
+              onClick={() => onNav('cuentas')}
+            >
+              <span className="cuenta-mini-nombre">{a.name}</span>
+              <Money cents={a.balanceCents} className="cuenta-mini-saldo" />
+              <Spark puntos={puntos} />
+              <span className="cuenta-mini-cambio">
+                {cambio === 0 ? (
+                  'sin cambio en 30 días'
+                ) : (
+                  <>
+                    <Money cents={cambio} signed className="cifra-chica" /> en 30 días
+                  </>
+                )}
+              </span>
+            </button>
+          )
+        })}
       </section>
 
       <section className="dos-columnas">
@@ -244,32 +290,47 @@ export function Resumen({ onNav }: { onNav: (view: View) => void }) {
             (R18) — un patrimonio que sube por apagar Deudas sería una mentira
             cómoda, que es la peor clase.
           */}
+          {/*
+            Las dos barras van **antes** de la lista y a la misma escala: cuatro
+            números en fila no dicen si tu casa pesa más que tu deuda. La lista
+            de abajo es la tabla de esta gráfica —cada renglón con su muestra y
+            su cifra—, así que ningún dato vive solo en el color (R19).
+          */}
+          <Composicion
+            partes={[
+              { nombre: 'En cuentas', cents: data.totalCents },
+              { nombre: 'Inversiones', cents: data.investments.valueCents },
+              { nombre: 'Bienes', cents: data.bienes.valueCents },
+              { nombre: 'Te deben', cents: data.debts.porCobrarCents },
+            ]}
+            debesCents={data.debts.porPagarCents}
+          />
           <dl className="deudas-mini-lista">
             <div>
-              <dt>En cuentas</dt>
+              <dt><span className="muestra-parte parte-0" aria-hidden="true" />En cuentas</dt>
               <dd><Money cents={data.totalCents} /></dd>
             </div>
             {(conInversiones || data.investments.valueCents !== 0) && (
               <div>
-                <dt>Inversiones</dt>
+                <dt><span className="muestra-parte parte-1" aria-hidden="true" />Inversiones</dt>
                 <dd><Money cents={data.investments.valueCents} /></dd>
               </div>
             )}
             {(conBienes || data.bienes.valueCents !== 0) && (
               <div>
-                <dt>Bienes</dt>
+                <dt><span className="muestra-parte parte-2" aria-hidden="true" />Bienes</dt>
                 <dd><Money cents={data.bienes.valueCents} /></dd>
               </div>
             )}
             {(conDeudas || data.debts.porCobrarCents !== 0) && (
               <div>
-                <dt>Te deben</dt>
+                <dt><span className="muestra-parte parte-3" aria-hidden="true" />Te deben</dt>
                 <dd><Money cents={data.debts.porCobrarCents} className="stat-in" /></dd>
               </div>
             )}
             {(conDeudas || data.debts.porPagarCents !== 0) && (
               <div>
-                <dt>Debes</dt>
+                <dt><span className="muestra-parte parte-debes" aria-hidden="true" />Debes</dt>
                 <dd><Money cents={-data.debts.porPagarCents} /></dd>
               </div>
             )}

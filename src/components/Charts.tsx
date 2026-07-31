@@ -606,6 +606,101 @@ export function FlujoLinea({
   )
 }
 
+/**
+ * La minigráfica de una cuenta: treinta días de saldo en el ancho de un dedo.
+ *
+ * **Es forma, no magnitud**, y por eso es la única gráfica de Finply que no se
+ * mide desde cero (Fase 10a). La razón es que aquí no hay eje ni cifras que
+ * leer: la cantidad va escrita al lado —el saldo y el cambio de los 30 días, en
+ * pesos—, así que un trazo que arranca en el mínimo no puede confundirse con
+ * una montaña. Medida desde cero, una cuenta de $150,000 que se movió $8,000
+ * dibujaría una raya recta en todos los casos, que es no dibujar nada.
+ *
+ * Va `aria-hidden`: lo que dice ya está en el texto del renglón, y un lector de
+ * pantalla no necesita oír dos veces lo mismo (R19).
+ */
+export function Spark({ puntos }: { puntos: number[] }) {
+  if (puntos.length < 2) return null
+  const max = Math.max(...puntos)
+  const min = Math.min(...puntos)
+  const rango = max - min || 1
+  const w = 100
+  const h = 22
+  const x = (i: number) => (i / (puntos.length - 1)) * w
+  const y = (v: number) => h - 3 - ((v - min) / rango) * (h - 6)
+  const linea = puntos.map((p, i) => `${x(i).toFixed(1)},${y(p).toFixed(1)}`).join(' ')
+  const sube = puntos.at(-1)! >= puntos[0]!
+
+  return (
+    // Sin `preserveAspectRatio="none"`: estirarlo al ancho del renglón cambiaría
+    // la pendiente, y la pendiente es lo único que esta gráfica dice.
+    <svg viewBox={`0 0 ${w} ${h}`} className="spark" aria-hidden="true">
+      <polyline points={linea} className={`spark-linea${sube ? '' : ' spark-baja'}`} />
+      <circle cx={x(puntos.length - 1)} cy={y(puntos.at(-1)!)} r="2" className="spark-punta" />
+    </svg>
+  )
+}
+
+/**
+ * De qué está hecho el patrimonio, en dos barras a la misma escala: lo que
+ * tienes, repartido, y lo que debes debajo. Cuatro números en una lista no
+ * dicen si tu casa pesa más que tu deuda; dos barras sí, de un vistazo.
+ *
+ * Los segmentos se distinguen por **claridad**, no por tono —una rampa de la
+ * misma tinta se lee igual con cualquier daltonismo (R10)— y cada uno lleva su
+ * muestra junto a su cifra en la lista de abajo, que es la tabla de esta
+ * gráfica: aquí no hay dato que viva solo en el color.
+ */
+export function Composicion({
+  partes,
+  debesCents,
+}: {
+  partes: { nombre: string; cents: number }[]
+  debesCents: number
+}) {
+  const bruto = partes.reduce((s, p) => s + p.cents, 0)
+  if (bruto <= 0 && debesCents <= 0) return null
+  const escala = Math.max(bruto, debesCents, 1)
+  const parte = (cents: number) => `${Math.max(0, (cents / escala) * 100)}%`
+
+  return (
+    // `aria-hidden` por lo mismo que la minigráfica: cada tramo está escrito
+    // con su nombre y su cifra en la lista de abajo, y oírlo dos veces no
+    // agrega nada.
+    <div className="composicion" aria-hidden="true">
+      <div className="composicion-fila">
+        <span className="composicion-rotulo">Tienes</span>
+        <span className="composicion-riel">
+          {/*
+            El índice es el del renglón, **no** el de los que sobrevivieron al
+            filtro: con Bienes en cero, "Te deben" se pintaba con el tono de
+            Bienes y su muestra en la lista decía otro. Un dato que vive en el
+            color no puede cambiar de color según qué más haya.
+          */}
+          {partes.map((p, i) =>
+            p.cents > 0 ? (
+              <span
+                key={p.nombre}
+                className={`composicion-parte parte-${i}`}
+                style={{ width: parte(p.cents) }}
+                title={p.nombre}
+              />
+            ) : null,
+          )}
+        </span>
+      </div>
+      {debesCents > 0 && (
+        <div className="composicion-fila">
+          <span className="composicion-rotulo">Debes</span>
+          <span className="composicion-riel">
+            <span className="composicion-parte parte-debes" style={{ width: parte(debesCents) }} />
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** Barras horizontales: en qué se fue el gasto del mes (una sola serie, tono de acento). */
 export function CategoryBars({ byCategory }: { byCategory: Summary['byCategory'] }) {
   if (byCategory.length === 0) {

@@ -18,6 +18,12 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
 
 ## Características
 
+- **El Resumen dice contra qué** — el total lleva su cambio contra el cierre
+  del mes pasado (un total sin comparación no dice si vas bien), cada cuenta su
+  minigráfica de 30 días con el cambio en pesos al lado, y el patrimonio se ve
+  además como dos barras a la misma escala: lo que tienes, repartido, y lo que
+  debes debajo. Cuatro números en fila no dicen si tu casa pesa más que tu
+  deuda.
 - **Perfiles ilimitados** — cada perfil es un libro independiente con sus
   propias cuentas, categorías, movimientos, deudas, inversiones, metas y notas.
   Ideal para separar tus finanzas personales de las de tu negocio. Cada perfil
@@ -376,7 +382,7 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 | `GET/POST /api/goals` · `PATCH/DELETE /:id` | Metas de ahorro |
 | `POST /api/goals/:id/entries` · `DELETE /api/goals/entries/:id` | Aportes a metas |
 | `GET/POST /api/notes` · `PATCH/DELETE /:id` | Notas (con fijado) |
-| `GET /api/summary?profileId&month` | Resumen del mes + patrimonio en una llamada |
+| `GET /api/summary?profileId&month&hoy` | Resumen del mes + patrimonio, con el cambio contra el cierre del mes pasado y 30 días de saldo por cuenta |
 | `GET /api/reportes?profileId&year` | El año: patrimonio mes a mes, ingresos vs gastos, categorías, etiquetas, de dónde vino, tasa de ahorro y mediana |
 | `GET /api/reportes/comparativa?profileId&desde&hasta` | Dos periodos cualesquiera, categoría por categoría. Sin el segundo rango, el bloque anterior del mismo largo |
 | `GET/POST /api/recurrencias` · `PATCH/DELETE /:id` | Plantillas de lo que se repite (mensual, quincenal, semanal, anual) |
@@ -447,9 +453,8 @@ donde aparece, que en el tema oscuro es la hoja, no el fondo.
 
 **El libro, más completo**
 
-- Resumen con el cambio contra el mes pasado y la composición de tu patrimonio
 - Simulador: la gráfica del **rendimiento solo**, sin el patrimonio, que es lo
-  que de verdad distingue una ruta de la otra
+  que de verdad distingue una ruta de la otra; inflación y retiro
 
 **Negocio**
 

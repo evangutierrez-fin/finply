@@ -2643,3 +2643,94 @@ select.campo-input { cursor: pointer; }
   .flujo-evento-monto { grid-column: 2; text-align: left; }
   .flujo-dia-saldo { margin-left: 0; width: 100%; }
 }
+
+/* ── Resumen más denso ────────────────────────────────────────────────────
+   Tres cosas que la vista más visitada no decía: contra qué se compara el
+   total, cómo viene cada cuenta y de qué está hecho el patrimonio. */
+.hero-delta {
+  font-size: 12.5px;
+  color: var(--tinta-2);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  margin-top: 8px;
+}
+/* El signo no va solo en el color: la flecha y el signo de la cifra dicen lo
+   mismo con forma, para quien no distingue verde de rojo (R10). */
+.delta-sube { color: var(--verde-osc); }
+.delta-baja { color: var(--rojo-osc); }
+.hero-delta .cifra { color: inherit; }
+
+.cuenta-mini-cambio {
+  font-size: 11.5px;
+  color: var(--tinta-3);
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.cuenta-mini-cambio .cifra { color: inherit; }
+.spark { width: 100%; height: 22px; margin-top: 2px; overflow: visible; }
+.spark-linea {
+  fill: none;
+  stroke: var(--acento);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.spark-baja { stroke: var(--rojo); }
+.spark-punta { fill: var(--acento); }
+.spark-baja + .spark-punta { fill: var(--rojo); }
+
+/* La composición: dos barras a la misma escala, lo que tienes y lo que debes.
+   Los segmentos se separan por claridad —la misma tinta, distinta densidad—,
+   que es la codificación que sobrevive a cualquier daltonismo (R10). */
+.composicion { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+.composicion-fila { display: flex; align-items: center; gap: 10px; }
+.composicion-rotulo {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--tinta-3);
+  width: 46px;
+  flex-shrink: 0;
+}
+.composicion-riel {
+  flex: 1;
+  display: flex;
+  height: 14px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--tinte-neutro);
+}
+.composicion-parte { display: block; height: 100%; }
+.composicion-parte + .composicion-parte { border-left: 1px solid var(--hoja); }
+.parte-0 { background: var(--acento); }
+.parte-1 { background: var(--acento); opacity: 0.7; }
+.parte-2 { background: var(--acento); opacity: 0.46; }
+.parte-3 { background: var(--acento); opacity: 0.26; }
+/* Lo que debes va rayado además de rojo: la textura es la codificación
+   secundaria que el color por sí solo no da. */
+.parte-debes {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--rojo) 0 3px,
+    var(--rojo-tinte) 3px 6px
+  );
+}
+
+/* La muestra que ata cada renglón de la lista con su tramo de la barra. */
+.muestra-parte {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  margin-right: 7px;
+  vertical-align: baseline;
+  background: var(--acento);
+}
+.muestra-parte.parte-1 { opacity: 0.7; }
+.muestra-parte.parte-2 { opacity: 0.46; }
+.muestra-parte.parte-3 { opacity: 0.26; }
+.muestra-parte.parte-debes { background: var(--rojo); }
+.deudas-mini-lista dt { display: flex; align-items: center; }
