@@ -159,6 +159,30 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   meses de colchón —tu líquido entre tu gasto promedio; una tarjeta no es
   colchón—, gasto recurrente contra discrecional y qué tan concentrado está tu
   gasto en una sola categoría. Los supuestos van escritos junto a las cifras.
+- **¿Voy subiendo o bajando?** — la tendencia de tu gasto y de tu ingreso sobre
+  los meses cerrados, medida con la **pendiente de en medio** entre todos los
+  pares de meses. No es la recta de siempre, y por una razón: con cinco meses
+  parejos y un viaje en el sexto, aquella declara que gastas miles más al mes
+  porque un solo mes le tuerce el brazo. Si menos de dos de cada tres pares van
+  en el mismo sentido, Finply dice que no hay dirección en vez de dibujar una
+  flecha.
+- **Estacionalidad** — el mismo mes contra los años anteriores. Diciembre
+  siempre cuesta más; compararlo con noviembre solo dice que subió, no si subió
+  lo de siempre.
+- **Qué se disparó** — las categorías que se salieron de **su propio** promedio
+  el último mes cerrado. Entra la que se pasó más del 40 % *y* por más de $500:
+  con solo el primer umbral serían siempre las categorías grandes, con solo el
+  segundo cualquier café de más gritaría. Los dos van escritos en la vista.
+- **Gasto hormiga** — cuántas compras chicas hiciste y cuánto suman. Se cuenta
+  por compra, no por renglón: un ticket repartido en tres categorías es una
+  compra, no tres. El umbral lo eliges tú.
+- **De dónde vino el dinero** — el ingreso desmenuzado por fuente, igual que el
+  gasto. Quien vive de un sueldo y quien vive de seis clientes corren riesgos
+  distintos.
+- **Dos periodos cualesquiera** — mes contra mes, trimestre contra trimestre,
+  año contra año o los rangos que tú escribas, categoría por categoría. Y la
+  **mediana** junto al promedio: si cambiaste el refri en marzo, el promedio
+  sube y la mediana no, y la distancia entre las dos es el dato.
 - **Presupuestos que saben qué día es** — un tope por categoría **y por mes**,
   con barra de avance, alerta al 80 % y la cifra exacta de lo excedido. Encima,
   el **ritmo**: cada barra lleva la marca de dónde irías gastando parejo, y
@@ -344,15 +368,15 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 | `POST /api/goals/:id/entries` · `DELETE /api/goals/entries/:id` | Aportes a metas |
 | `GET/POST /api/notes` · `PATCH/DELETE /:id` | Notas (con fijado) |
 | `GET /api/summary?profileId&month` | Resumen del mes + patrimonio en una llamada |
-| `GET /api/reportes?profileId&year` | El año: patrimonio mes a mes, ingresos vs gastos, categorías, etiquetas y tasa de ahorro |
-| `GET /api/reportes/comparativa?profileId&month` | Un mes contra el anterior, categoría por categoría |
+| `GET /api/reportes?profileId&year` | El año: patrimonio mes a mes, ingresos vs gastos, categorías, etiquetas, de dónde vino, tasa de ahorro y mediana |
+| `GET /api/reportes/comparativa?profileId&desde&hasta` | Dos periodos cualesquiera, categoría por categoría. Sin el segundo rango, el bloque anterior del mismo largo |
 | `GET/POST /api/recurrencias` · `PATCH/DELETE /:id` | Plantillas de lo que se repite (mensual, quincenal, semanal, anual) |
 | `GET /api/recurrencias/pendientes?profileId` | La bandeja por confirmar. **Derivada**: no escribe ni guarda propuestas |
 | `POST /api/recurrencias/:id/asentar` | Crea el movimiento y marca el periodo, en una transacción. 409 si ya se resolvió |
 | `POST /api/recurrencias/:id/descartar` · `/reabrir` | Descartar no mueve el libro; reabrir deshace un descarte |
 | `GET /api/calendario?profileId&dias` | Lo que vence: recurrencias, cortes y pagos de tarjeta, deudas y parcialidades |
 | `GET /api/alertas?profileId` | Lo vencido y lo que está por vencer. **Derivadas**: no se guardan ni se descartan |
-| `GET /api/analisis?profileId&meses` | Meses de colchón, tasa de ahorro, gasto recurrente contra discrecional y concentración |
+| `GET /api/analisis?profileId&meses` | Colchón, tasa de ahorro, recurrente contra discrecional, concentración, tendencia, estacionalidad, categorías disparadas, gasto hormiga y fuentes de ingreso |
 | `GET /api/simulador?profileId&meses&ahorroMensualCents&rendimientoAnualBp` | Las dos rutas —invertir o pagar la deuda— proyectadas sobre las mismas cifras |
 | `GET/POST /api/contrapartes` · `PATCH/DELETE /:id` | Clientes y proveedores, con lo que te deben y lo que les debes |
 | `GET/POST /api/centros` · `PATCH/DELETE /:id` | La dimensión libre del perfil (proyecto, obra, sucursal) |
@@ -417,7 +441,6 @@ donde aparece, que en el tema oscuro es la hoja, no el fondo.
 - **¿Llego a fin de mes?** — saldo proyectado día a día con lo que ya sabe tu
   calendario, y el primer día en rojo si lo hay
 - Resumen con el cambio contra el mes pasado y la composición de tu patrimonio
-- Más ángulos de análisis: tendencia, estacionalidad, gasto hormiga
 - Simulador: la gráfica del **rendimiento solo**, sin el patrimonio, que es lo
   que de verdad distingue una ruta de la otra
 

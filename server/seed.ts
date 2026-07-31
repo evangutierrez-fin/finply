@@ -108,38 +108,73 @@ inTransaction(() => {
   const cSueldo = categoryId(personal, 'Sueldo', 'ingreso')
   const cOtrosIn = categoryId(personal, 'Otros', 'ingreso')
 
-  const months = ['2026-05', '2026-06', '2026-07']
-  const lastDay = { '2026-05': 31, '2026-06': 30, '2026-07': 24 } as Record<string, number>
+  // Catorce meses, no tres. El libro demo tenía un trimestre y con eso no se
+  // puede enseñar una tendencia (hacen falta tres meses cerrados), ni la
+  // estacionalidad (hace falta el mismo mes del año pasado), ni un promedio
+  // por categoría contra el que medir un mes disparado. Julio queda a medias a
+  // propósito: es el mes en curso.
+  const months: string[] = []
+  for (let i = 14; i >= 0; i--) {
+    const total = 2026 * 12 + 6 - i
+    months.push(`${Math.floor(total / 12)}-${String((total % 12) + 1).padStart(2, '0')}`)
+  }
+  const lastDay = Object.fromEntries(
+    months.map((m) => {
+      const [y, mo] = m.split('-').map(Number)
+      return [m, m === '2026-07' ? 24 : new Date(Date.UTC(y!, mo!, 0)).getUTCDate()]
+    }),
+  ) as Record<string, number>
 
-  for (const m of months) {
+  // El gasto sube despacio, como en la vida: un 1.2 % al mes acumulado. Sin
+  // esa deriva la tendencia sería plana y la sección de "¿voy subiendo?" no
+  // tendría nada que enseñar; con ella, sube sin que se note mes a mes, que es
+  // justo el caso que la recta existe para detectar.
+  const deriva = (i: number) => 1 + i * 0.012
+
+  months.forEach((m, i) => {
     const limit = lastDay[m]!
-    tx(personal, banco, 'gasto', 450000, day(m, 1), cRenta, 'Renta depto')
-    tx(personal, banco, 'ingreso', 850000, day(m, 15), cSueldo, 'Quincena')
-    if (limit >= 28) tx(personal, banco, 'ingreso', 850000, day(m, limit === 31 ? 30 : 28), cSueldo, 'Quincena')
+    const sube = (pesos: number) => Math.round(pesos * deriva(i))
+    // El sueldo también sube, pero solo una vez al año: el aumento llega en
+    // enero, no repartido en doce.
+    const sueldo = m >= '2026-01' ? 890000 : 850000
+
+    tx(personal, banco, 'gasto', m >= '2026-01' ? 470000 : 450000, day(m, 1), cRenta, 'Renta depto')
+    tx(personal, banco, 'ingreso', sueldo, day(m, 15), cSueldo, 'Quincena')
+    if (limit >= 28) tx(personal, banco, 'ingreso', sueldo, day(m, limit === 31 ? 30 : 28), cSueldo, 'Quincena')
     tx(personal, banco, 'gasto', 49900, day(m, 8), cServicios, 'Internet')
-    if (m !== '2026-06') tx(personal, banco, 'gasto', between(320, 460), day(m, 5), cServicios, 'Luz CFE')
+    if (m !== '2026-06') tx(personal, banco, 'gasto', sube(between(320, 460)), day(m, 5), cServicios, 'Luz CFE')
     if (limit >= 16) tx(personal, banco, 'transferencia', 150000, day(m, 16), null, 'Apartado mensual', ahorro)
     // retiros de cajero: el efectivo sale del banco, nunca de la nada
     tx(personal, banco, 'transferencia', 200000, day(m, 2), null, 'Retiro de cajero', efectivo)
     if (limit >= 18) tx(personal, banco, 'transferencia', 200000, day(m, 18), null, 'Retiro de cajero', efectivo)
     for (const d of [3, 10, 17, 24]) {
       if (d > limit) continue
-      tx(personal, pick([efectivo, banco]), 'gasto', between(420, 980), day(m, d), cSuper, pick(['Súper semanal', 'Despensa', 'Súper y farmacia']))
+      tx(personal, pick([efectivo, banco]), 'gasto', sube(between(420, 980)), day(m, d), cSuper, pick(['Súper semanal', 'Despensa', 'Súper y farmacia']))
     }
     for (let i = 0; i < 7; i++) {
       const d = 1 + Math.floor(rnd() * limit)
-      tx(personal, efectivo, 'gasto', between(38, 120), day(m, d), cTransporte, pick(['Metro', 'Gasolina', 'Uber', 'Estacionamiento']))
+      tx(personal, efectivo, 'gasto', sube(between(38, 120)), day(m, d), cTransporte, pick(['Metro', 'Gasolina', 'Uber', 'Estacionamiento']))
     }
     for (let i = 0; i < 5; i++) {
       const d = 1 + Math.floor(rnd() * limit)
-      tx(personal, pick([efectivo, banco]), 'gasto', between(95, 420), day(m, d), cComida, pick(['Tacos', 'Café', 'Comida corrida', 'Cena fuera']))
+      tx(personal, pick([efectivo, banco]), 'gasto', sube(between(95, 420)), day(m, d), cComida, pick(['Tacos', 'Café', 'Comida corrida', 'Cena fuera']))
     }
     for (let i = 0; i < 2; i++) {
       const d = 1 + Math.floor(rnd() * limit)
       tx(personal, banco, 'gasto', between(150, 600), day(m, d), cOcio, pick(['Cine', 'Streaming', 'Salida', 'Libros']))
     }
-  }
+    // Diciembre cuesta más. Es el caso que la estacionalidad viene a mostrar y
+    // el que un "mes contra el anterior" nunca puede explicar.
+    if (m.endsWith('-12')) {
+      tx(personal, banco, 'gasto', between(3800, 5200), day(m, 18), cOcio, 'Regalos de diciembre')
+      tx(personal, banco, 'gasto', between(1800, 2600), day(m, 24), cComida, 'Cena de Navidad')
+      tx(personal, banco, 'ingreso', 1200000, day(m, 12), cOtrosIn, 'Aguinaldo')
+    }
+  })
   tx(personal, banco, 'ingreso', 240000, '2026-06-20', cOtrosIn, 'Proyecto freelance')
+  // El mes disparado: junio se fue de viaje. Sirve a tres secciones a la vez —
+  // se sale de su promedio, separa la mediana del promedio y no es hormiga.
+  tx(personal, banco, 'gasto', 1450000, '2026-06-12', cOcio, 'Vuelos y hotel Oaxaca')
 
   // ── Perfil 2: negocio ─────────────────────────────────────────────────
   const negocio = createProfile('Negocio', 'negocio', 'laton')
@@ -331,6 +366,7 @@ inTransaction(() => {
   )
 
   console.log(
-    '[finply] Libro demo listo: 2 perfiles, 5 cuentas, ~240 movimientos, deudas, inversiones, presupuestos, metas y notas.',
+    '[finply] Libro demo listo: 2 perfiles, 5 cuentas, quince meses de movimientos, ' +
+      'deudas, inversiones, presupuestos, metas y notas.',
   )
 })

@@ -526,10 +526,32 @@ export const reporteQuery = z.object({
     .max(2200, 'Año fuera de rango'),
 })
 
-export const comparativaQuery = z.object({
-  profileId: z.coerce.number().int().positive(),
-  month: isoMonth,
-})
+/**
+ * Dos periodos cualesquiera, de mes a mes e inclusivos. `desde`/`hasta` son el
+ * periodo que se mira; `contraDesde`/`contraHasta`, contra qué. Sin el segundo,
+ * el servidor toma el bloque de meses inmediatamente anterior del mismo largo,
+ * que es lo que hacía cuando solo sabía comparar un mes con el previo.
+ */
+export const comparativaQuery = z
+  .object({
+    profileId: z.coerce.number().int().positive(),
+    desde: isoMonth,
+    hasta: isoMonth,
+    contraDesde: isoMonth.optional(),
+    contraHasta: isoMonth.optional(),
+  })
+  .refine((v) => v.desde <= v.hasta, {
+    message: 'El mes inicial va antes que el final',
+    path: ['hasta'],
+  })
+  .refine((v) => (v.contraDesde === undefined) === (v.contraHasta === undefined), {
+    message: 'El periodo contra el que comparas necesita sus dos meses',
+    path: ['contraHasta'],
+  })
+  .refine((v) => v.contraDesde === undefined || v.contraDesde <= v.contraHasta!, {
+    message: 'El mes inicial va antes que el final',
+    path: ['contraHasta'],
+  })
 
 export const analisisQuery = z.object({
   profileId: z.coerce.number().int().positive(),
@@ -541,6 +563,13 @@ export const analisisQuery = z.object({
     .max(36, 'El análisis va de 1 a 36 meses')
     .default(6),
   hoy: isoDate.optional(),
+  /** Debajo de cuánto una compra es "hormiga". El usuario lo elige. */
+  umbralHormigaCents: z.coerce
+    .number()
+    .int()
+    .min(1, 'El umbral del gasto hormiga tiene que ser mayor a cero')
+    .max(100_000_000)
+    .optional(),
 })
 
 export const summaryQuery = z.object({

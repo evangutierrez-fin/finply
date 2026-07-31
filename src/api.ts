@@ -631,16 +631,31 @@ export const api = {
    */
   alertas: (profileId: number) => req<Alerta[]>(`/api/alertas?profileId=${profileId}`),
   /** El panel sobre los últimos `meses` **cerrados**; el mes en curso no entra. */
-  analisis: (profileId: number, meses = 6) =>
-    req<Analisis>(`/api/analisis?profileId=${profileId}&meses=${meses}`),
+  analisis: (profileId: number, meses = 6, umbralHormigaCents?: number) =>
+    req<Analisis>(
+      `/api/analisis?profileId=${profileId}&meses=${meses}` +
+        (umbralHormigaCents === undefined ? '' : `&umbralHormigaCents=${umbralHormigaCents}`),
+    ),
   summary: (profileId: number, month: string) =>
     req<Summary>(`/api/summary?profileId=${profileId}&month=${month}`),
   reportes: {
     /** El año completo: series, categorías, etiquetas y totales. */
     anual: (profileId: number, year: number) =>
       req<ReporteAnual>(`/api/reportes?profileId=${profileId}&year=${year}`),
-    comparativa: (profileId: number, month: string) =>
-      req<Comparativa>(`/api/reportes/comparativa?profileId=${profileId}&month=${month}`),
+    /**
+     * Dos periodos cualesquiera, de mes a mes. Sin `contra`, el servidor toma
+     * el bloque inmediatamente anterior del mismo largo.
+     */
+    comparativa: (
+      profileId: number,
+      periodo: { desde: string; hasta: string },
+      contra?: { desde: string; hasta: string },
+    ) =>
+      req<Comparativa>(
+        `/api/reportes/comparativa?profileId=${profileId}` +
+          `&desde=${periodo.desde}&hasta=${periodo.hasta}` +
+          (contra ? `&contraDesde=${contra.desde}&contraHasta=${contra.hasta}` : ''),
+      ),
   },
   backup: {
     /** El navegador descarga el archivo directo desde esta ruta. */

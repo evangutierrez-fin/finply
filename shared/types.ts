@@ -8,6 +8,11 @@ export type Accent = 'verde' | 'laton' | 'cobalto' | 'vino'
 // las dos mitades. Aquí solo se reexporta el id para que `Profile` lo lleve.
 export type { ModuloId } from './modulos.ts'
 
+// La recta de tendencia nace en `shared/estadistica.ts`, donde vive su
+// aritmética y donde se puede probar. Aquí solo se reexporta.
+export type { Tendencia } from './estadistica.ts'
+import type { Tendencia } from './estadistica.ts'
+
 export interface Profile {
   id: number
   name: string
@@ -336,20 +341,35 @@ export interface ReporteAnual {
   patrimonio: PuntoPatrimonio[]
   porCategoria: { name: string; expenseCents: number }[]
   porEtiqueta: { name: string; expenseCents: number }[]
+  /** De dónde vino el ingreso. Antes solo se desmenuzaba el gasto. */
+  porFuente: { name: string; incomeCents: number }[]
   totales: {
     incomeCents: number
     expenseCents: number
     netCents: number
     /** Fracción de lo que entró que no salió. `null` si no hubo ingresos. */
     tasaAhorro: number | null
+    /**
+     * El mes de en medio, sobre los meses **con movimiento**. Los que no han
+     * llegado valen cero y contarlos arrastraría la mediana al suelo.
+     */
+    medianaIngresoCents: number | null
+    medianaGastoCents: number | null
+    mesesConMovimiento: number
   }
 }
 
+/** Un rango de meses con sus totales, inclusivo por los dos lados. */
+export interface PeriodoComparado {
+  desde: string
+  hasta: string
+  incomeCents: number
+  expenseCents: number
+}
+
 export interface Comparativa {
-  month: string
-  anterior: string
-  actual: { incomeCents: number; expenseCents: number }
-  previo: { incomeCents: number; expenseCents: number }
+  actual: PeriodoComparado
+  previo: PeriodoComparado
   categorias: { name: string; actualCents: number; previoCents: number; deltaCents: number }[]
 }
 
@@ -516,6 +536,50 @@ export interface Analisis {
   mesesColchon: number | null
   /** Categorías del periodo con su parte del gasto, de mayor a menor. */
   concentracion: CategoriaParte[]
+  /** De dónde vino el ingreso, con su parte. El espejo de `concentracion`. */
+  fuentes: FuenteParte[]
+  /** Un punto por mes cerrado, con los huecos en cero. */
+  serie: { month: string; incomeCents: number; expenseCents: number }[]
+  /** Recta de mínimos cuadrados sobre `serie`. `null` con menos de tres meses. */
+  tendenciaGasto: Tendencia | null
+  tendenciaIngreso: Tendencia | null
+  /** El mes de en medio. Va junto al promedio, nunca en su lugar. */
+  medianaGastoCents: number | null
+  medianaIngresoCents: number | null
+  /** El mismo mes del calendario, año contra año. Todo el libro, no la ventana. */
+  estacionalidad: { anio: string; expenseCents: number }[]
+  /** Categorías que en el último mes cerrado se salieron de su propio promedio. */
+  disparadas: CategoriaDisparada[]
+  hormiga: GastoHormiga
+}
+
+export interface FuenteParte {
+  name: string
+  incomeCents: number
+  /** Fracción del ingreso del periodo, de 0 a 1. */
+  parte: number
+}
+
+export interface CategoriaDisparada {
+  name: string
+  /** Lo del último mes cerrado. */
+  expenseCents: number
+  /** Su propio promedio en los meses anteriores en que hubo gasto. */
+  promedioCents: number
+  deltaCents: number
+  /** Cuánto se pasó de su promedio, en fracción. 0.6 es 60 % arriba. */
+  salto: number
+  mesesPromediados: number
+}
+
+export interface GastoHormiga {
+  /** Cuántos **movimientos** —no renglones de reparto— cayeron debajo del umbral. */
+  partidas: number
+  sumaCents: number
+  /** El umbral con el que se midió. Va escrito junto al resultado (R9). */
+  umbralCents: number
+  /** Qué fracción del gasto del periodo son. */
+  parte: number
 }
 
 export type InvestmentKind = 'cetes' | 'acciones' | 'cripto' | 'fondo' | 'inmueble' | 'otro'

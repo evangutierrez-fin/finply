@@ -10,9 +10,13 @@ router.get('/', (req, res) => {
   res.json(reporteAnual(profileId, year))
 })
 
+// Dos periodos cualesquiera. Sin el segundo, el bloque inmediatamente
+// anterior del mismo largo, que es lo que hacía cuando solo sabía comparar un
+// mes contra el previo.
 router.get('/comparativa', (req, res) => {
-  const { profileId, month } = comparativaQuery.parse(req.query)
-  res.json(comparativa(profileId, month))
+  const { profileId, desde, hasta, contraDesde, contraHasta } = comparativaQuery.parse(req.query)
+  const contra = contraDesde && contraHasta ? { desde: contraDesde, hasta: contraHasta } : undefined
+  res.json(comparativa(profileId, { desde, hasta }, contra))
 })
 
 export default router

@@ -488,7 +488,9 @@ export function CategoryBars({ byCategory }: { byCategory: Summary['byCategory']
   if (byCategory.length === 0) {
     return <p className="grafica-vacia">Sin gastos este mes.</p>
   }
-  const max = byCategory[0]!.expenseCents || 1
+  // El máximo se busca, no se supone en el primer renglón: una lista que llegue
+  // en cualquier otro orden dibujaba barras más largas que el riel.
+  const max = Math.max(...byCategory.map((c) => c.expenseCents), 1)
   const total = byCategory.reduce((s, c) => s + c.expenseCents, 0)
   return (
     <ul className="cat-bars">

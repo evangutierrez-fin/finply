@@ -1254,6 +1254,32 @@ select.campo-input { cursor: pointer; }
 .presup-ritmo { font-size: 13px; color: var(--tinta-2); }
 .presup-lista > .rotulo { margin-top: 4px; }
 
+/* ── análisis: los ángulos de la Fase 13 ─────────────────────────────── */
+.analisis-frase { font-size: 15px; line-height: 1.55; margin-bottom: 4px; }
+.analisis-frase .cifra { color: var(--tinta); font-weight: 600; }
+
+.tendencia-grafica { margin: 14px 0 10px; color: var(--acento); }
+.tendencia-grafica svg { width: 100%; height: 96px; display: block; }
+.tendencia-pie { margin-top: 6px; font-size: 12.5px; color: var(--tinta-2); }
+
+/* El salto va pegado al nombre, no en su propia columna: es un matiz del
+   nombre, y una columna más volvería la tabla ilegible en móvil. */
+.disparada-salto {
+  margin-left: 8px;
+  font-family: var(--f-mono);
+  font-size: 12px;
+  color: var(--rojo);
+}
+
+.reportes-comparar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.reportes-medida { display: flex; gap: 24px; flex-wrap: wrap; margin: 4px 0 14px; }
+/* Los cuatro campos de mes tienen ancho propio del navegador y en una pantalla
+   angosta se salen de la hoja: el segundo quedaba fuera de alcance. Se dejan
+   encoger y envolver, que es lo único que un `input[type=month]` respeta. */
+.reportes-medida label { display: flex; flex-direction: column; gap: 6px; flex: 1 1 280px; min-width: 0; }
+.reportes-medida-par { display: flex; gap: 8px; flex-wrap: wrap; }
+.reportes-medida-par .filtro { flex: 1 1 130px; min-width: 0; }
+
 /* ── metas ───────────────────────────────────────────────────────────── */
 .metas-resumen { font-size: 14px; color: var(--tinta-2); }
 .metas-grid {

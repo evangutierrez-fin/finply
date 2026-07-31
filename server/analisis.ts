@@ -20,18 +20,30 @@
 
 import { accountsWithBalance, db } from './db.ts'
 import {
+  CATEGORIA_OPERATIVA,
   DESDE_MOVIMIENTOS,
+  DESDE_MOVIMIENTOS_SIN_REPARTO,
+  MONTO_DEL_MOVIMIENTO,
   MONTO_OPERATIVO,
   TIPO_OPERATIVO,
   gastoPorCategoria,
   ingresoGastoPorMes,
+  ingresoPorCategoria,
   tasaDeAhorro,
 } from './reportes.ts'
 import { hoyISO } from '../shared/fechas.ts'
+import { mediana, tendencia } from '../shared/estadistica.ts'
 import type { Analisis } from '../shared/types.ts'
 
 /** Cuentas cuyo saldo se puede gastar mañana. La tarjeta no es una de ellas. */
 const TIPOS_LIQUIDOS = new Set(['efectivo', 'banco', 'ahorro'])
+
+/**
+ * Por debajo de esto una compra es "hormiga". $200 no es una verdad
+ * universal: es un punto de partida que el usuario puede mover desde la vista,
+ * y la cifra elegida va escrita junto al resultado.
+ */
+export const UMBRAL_HORMIGA_CENTS = 20_000
 
 /** Mueve un 'AAAA-MM' N meses. */
 function correrMes(month: string, delta: number): string {
@@ -87,12 +99,137 @@ function primerMes(profileId: number): string | null {
 }
 
 /**
+ * El mismo mes del calendario, año contra año.
+ *
+ * Diciembre siempre cuesta más, y hasta hoy Finply no tenía forma de saberlo:
+ * comparar diciembre con noviembre solo dice que diciembre subió, no si subió
+ * lo de siempre. Se mira **todo** el libro, no la ventana de meses cerrados —
+ * la gracia está justo en los años viejos— y solo entran meses completos, así
+ * que el mes en curso nunca aparece a medias contra uno entero.
+ */
+function estacionalidad(profileId: number, mesCerrado: string) {
+  const mesDelAnio = mesCerrado.slice(5, 7)
+  const filas: any[] = db
+    .prepare(
+      `SELECT substr(t.date, 1, 4) AS anio, SUM(${MONTO_OPERATIVO}) AS gasto
+       ${DESDE_MOVIMIENTOS}
+       WHERE t.profile_id = ? AND ${TIPO_OPERATIVO} = 'gasto'
+         AND substr(t.date, 6, 2) = ? AND substr(t.date, 1, 7) <= ?
+       GROUP BY anio
+       ORDER BY anio ASC`,
+    )
+    .all(profileId, mesDelAnio, mesCerrado)
+  return filas.map((f) => ({ anio: f.anio as string, expenseCents: f.gasto as number }))
+}
+
+/**
+ * Cuántos meses anteriores con gasto propio hacen falta para que una categoría
+ * pueda decirse "disparada". Comparar contra un solo mes no es comparar contra
+ * un promedio: es comparar contra una anécdota.
+ */
+const MESES_PARA_PROMEDIO = 3
+
+/**
+ * Cuánto tiene que pasarse de su propio promedio, y cuánto en pesos. Los dos
+ * son **estrictos**: quedarse justo en el umbral no es pasarse, igual que
+ * gastar exactamente el tope no es excederlo. Hay prueba de los dos lados.
+ */
+const SALTO_MINIMO = 0.4
+const DIFERENCIA_MINIMA_CENTS = 50_000
+
+/**
+ * Categorías que se salieron de su propio promedio en el último mes cerrado.
+ *
+ * Los dos umbrales son necesarios y ninguno basta solo: sin el relativo, la
+ * lista sería siempre las categorías grandes; sin el absoluto, un café de más
+ * duplicaría una categoría de $80 y saldría gritando. Los dos van escritos en
+ * la vista, porque un umbral escondido convierte un dato en una opinión (R9).
+ *
+ * El promedio se hace sobre los meses en que **hubo** gasto de esa categoría,
+ * no sobre todos los del periodo: una categoría que aparece dos veces al año no
+ * está disparada en marzo, es irregular, y llamarle anomalía sería ruido.
+ */
+function disparadas(profileId: number, desde: string, hasta: string) {
+  const filas: any[] = db
+    .prepare(
+      `SELECT COALESCE(c.name, 'Sin categoría') AS name, substr(t.date, 1, 7) AS mes,
+        SUM(${MONTO_OPERATIVO}) AS gasto
+       ${DESDE_MOVIMIENTOS}
+       LEFT JOIN categories c ON c.id = ${CATEGORIA_OPERATIVA}
+       WHERE t.profile_id = ? AND ${TIPO_OPERATIVO} = 'gasto'
+         AND substr(t.date, 1, 7) BETWEEN ? AND ?
+       GROUP BY name, mes
+       HAVING gasto > 0`,
+    )
+    .all(profileId, desde, hasta)
+
+  const porCategoria = new Map<string, { mes: string; gasto: number }[]>()
+  for (const f of filas) {
+    if (!porCategoria.has(f.name)) porCategoria.set(f.name, [])
+    porCategoria.get(f.name)!.push({ mes: f.mes, gasto: f.gasto })
+  }
+
+  const lista = []
+  for (const [name, meses] of porCategoria) {
+    const ultimo = meses.find((m) => m.mes === hasta)
+    if (!ultimo) continue
+    const previos = meses.filter((m) => m.mes !== hasta)
+    if (previos.length < MESES_PARA_PROMEDIO) continue
+
+    const promedio = previos.reduce((s, m) => s + m.gasto, 0) / previos.length
+    const diferencia = ultimo.gasto - promedio
+    if (diferencia <= DIFERENCIA_MINIMA_CENTS) continue
+    if (promedio <= 0 || diferencia / promedio <= SALTO_MINIMO) continue
+
+    lista.push({
+      name,
+      expenseCents: ultimo.gasto,
+      promedioCents: Math.round(promedio),
+      deltaCents: Math.round(diferencia),
+      salto: diferencia / promedio,
+      mesesPromediados: previos.length,
+    })
+  }
+  return lista.sort((a, b) => b.deltaCents - a.deltaCents)
+}
+
+/**
+ * Gasto hormiga: cuánto suman las partidas chicas.
+ *
+ * ⚠ Se mide por **movimiento**, no por renglón del reparto. Un ticket de $900
+ * partido en tres no son tres compras de $300 — al revés: el reparto existe
+ * justamente porque fue una sola compra. Por eso usa `MONTO_DEL_MOVIMIENTO` y
+ * no toca `tx_splits`.
+ *
+ * Las devoluciones quedan fuera solas: su monto operativo es negativo, y el
+ * filtro pide que sea mayor que cero.
+ */
+function hormiga(profileId: number, desde: string, hasta: string, umbralCents: number) {
+  const fila: any = db
+    .prepare(
+      `SELECT COUNT(*) AS partidas, COALESCE(SUM(monto), 0) AS suma FROM (
+        SELECT ${MONTO_DEL_MOVIMIENTO} AS monto
+        ${DESDE_MOVIMIENTOS_SIN_REPARTO}
+        WHERE t.profile_id = ? AND t.type = 'gasto'
+          AND substr(t.date, 1, 7) BETWEEN ? AND ?
+      ) WHERE monto > 0 AND monto <= ?`,
+    )
+    .get(profileId, desde, hasta, umbralCents)
+  return { partidas: fila.partidas as number, sumaCents: fila.suma as number }
+}
+
+/**
  * El panel completo. `meses` es cuántos meses cerrados se piden; los que de
  * verdad entran pueden ser menos, porque un libro de dos meses no tiene seis.
  * Dividir entre seis lo que se gastó en dos inventaría un colchón que no
  * existe, así que el divisor es siempre el número de meses reales.
  */
-export function analisis(profileId: number, meses = 6, hoy = hoyISO()): Analisis {
+export function analisis(
+  profileId: number,
+  meses = 6,
+  hoy = hoyISO(),
+  umbralHormigaCents = UMBRAL_HORMIGA_CENTS,
+): Analisis {
   const hasta = correrMes(hoy.slice(0, 7), -1)
   const pedido = correrMes(hasta, -(meses - 1))
   const primero = primerMes(profileId)
@@ -116,6 +253,15 @@ export function analisis(profileId: number, meses = 6, hoy = hoyISO()): Analisis
       liquidoCents,
       mesesColchon: null,
       concentracion: [],
+      fuentes: [],
+      serie: [],
+      tendenciaGasto: null,
+      tendenciaIngreso: null,
+      medianaGastoCents: null,
+      medianaIngresoCents: null,
+      estacionalidad: [],
+      disparadas: [],
+      hormiga: { partidas: 0, sumaCents: 0, umbralCents: umbralHormigaCents, parte: 0 },
     }
   }
 
@@ -134,6 +280,19 @@ export function analisis(profileId: number, meses = 6, hoy = hoyISO()): Analisis
   const categorias = gastoPorCategoria(profileId, desde, hasta)
   const totalCategorias = categorias.reduce((s, c) => s + c.gasto, 0)
   const gastoPromedioCents = Math.round(expenseCents / cerrados)
+
+  // La serie mes a mes, con los huecos en cero: un mes sin movimiento existió
+  // igual, y saltárselo movería la recta como si el tiempo no hubiera pasado.
+  const serie = []
+  for (let m = desde; m <= hasta; m = correrMes(m, 1)) {
+    const { ingreso, gasto } = porMes.get(m) ?? { ingreso: 0, gasto: 0 }
+    serie.push({ month: m, incomeCents: ingreso, expenseCents: gasto })
+  }
+
+  const fuentes = ingresoPorCategoria(profileId, desde, hasta)
+  const totalFuentes = fuentes.reduce((s, f) => s + f.monto, 0)
+
+  const chica = hormiga(profileId, desde, hasta, umbralHormigaCents)
 
   return {
     desde,
@@ -154,5 +313,25 @@ export function analisis(profileId: number, meses = 6, hoy = hoyISO()): Analisis
       expenseCents: c.gasto,
       parte: totalCategorias > 0 ? c.gasto / totalCategorias : 0,
     })),
+    fuentes: fuentes.map((f) => ({
+      name: f.name,
+      incomeCents: f.monto,
+      parte: totalFuentes > 0 ? f.monto / totalFuentes : 0,
+    })),
+    serie,
+    tendenciaGasto: tendencia(serie.map((m) => m.expenseCents)),
+    tendenciaIngreso: tendencia(serie.map((m) => m.incomeCents)),
+    // La mediana acompaña al promedio, nunca lo sustituye: si cambiaste el
+    // refri en marzo, el promedio sube y la mediana no, y la diferencia entre
+    // las dos **es** el dato.
+    medianaGastoCents: mediana(serie.map((m) => m.expenseCents)),
+    medianaIngresoCents: mediana(serie.map((m) => m.incomeCents)),
+    estacionalidad: estacionalidad(profileId, hasta),
+    disparadas: disparadas(profileId, desde, hasta),
+    hormiga: {
+      ...chica,
+      umbralCents: umbralHormigaCents,
+      parte: expenseCents > 0 ? chica.sumaCents / expenseCents : 0,
+    },
   }
 }
