@@ -850,6 +850,132 @@ export const MIGRATIONS: Migration[] = [
       `)
     },
   },
+  {
+    id: 17,
+    name: 'negocio II: retenciones, notas de crédito, facturas recurrentes y el costo de la tarjeta',
+    up: (db) => {
+      // Todo lo de aquí es aditivo y nace con el valor que deja el libro
+      // exactamente igual que ayer (R2): retenciones en cero, sin notas de
+      // crédito, sin plantillas de factura y sin tasa de tarjeta. Un libro
+      // personal que nunca abra una factura no nota nada.
+
+      // ── Retenciones (D21) ────────────────────────────────────────────────
+      // **Monto y no tasa**, igual que `tax_cents`, para no amarrar el modelo
+      // a ninguna jurisdicción (R15). Son dos y no una porque en la práctica
+      // se retienen por dos conceptos distintos y el usuario los ve separados
+      // en su factura; sumarlos en un solo campo perdería el desglose que él
+      // ya tiene enfrente.
+      //
+      // Lo que de verdad cambian: el total del documento sigue siendo
+      // subtotal + impuesto, pero **lo cobrable** es eso menos lo retenido. Sin
+      // esto, la antigüedad de saldos prometía cobrar un dinero que nunca iba
+      // a llegar y la factura no se saldaba jamás.
+      for (const col of ['withheld_tax_cents', 'withheld_income_cents']) {
+        if (!hasColumn(db, 'invoices', col)) {
+          db.exec(
+            `ALTER TABLE invoices ADD COLUMN ${col} INTEGER NOT NULL DEFAULT 0
+             CHECK (${col} >= 0)`,
+          )
+        }
+      }
+
+      // ── Notas de crédito y cancelación parcial ───────────────────────────
+      // Una nota de crédito **no es un cobro**: no se movió un peso. Por eso
+      // no vive en `transactions` —ahí inventaría un ingreso que nadie
+      // recibió— sino en su propia tabla colgada de la factura. Baja lo
+      // cobrable, y cuando lo baja a cero, la factura queda cancelada por
+      // completo sin borrar nada.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS invoice_credit_notes (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+          date TEXT NOT NULL,
+          folio TEXT NOT NULL DEFAULT '',
+          concept TEXT NOT NULL DEFAULT '',
+          amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_notas_factura ON invoice_credit_notes(invoice_id);
+      `)
+
+      // ── La contraparte que ya sabe cómo te paga ──────────────────────────
+      // Los días de crédito ahorran teclear la fecha de vencimiento en cada
+      // factura; el límite es del usuario, no de Finply, y por eso avisa en
+      // vez de impedir. Nulo significa "no lo uso", que es como nacen todas.
+      if (!hasColumn(db, 'counterparties', 'credit_days')) {
+        db.exec('ALTER TABLE counterparties ADD COLUMN credit_days INTEGER')
+      }
+      if (!hasColumn(db, 'counterparties', 'credit_limit_cents')) {
+        db.exec('ALTER TABLE counterparties ADD COLUMN credit_limit_cents INTEGER')
+      }
+      if (!hasColumn(db, 'counterparties', 'contact')) {
+        db.exec("ALTER TABLE counterparties ADD COLUMN contact TEXT NOT NULL DEFAULT ''")
+      }
+
+      // ── Facturas recurrentes (D28) ───────────────────────────────────────
+      // Tabla propia, motor compartido. `recurrences` exige `account_id` y un
+      // tipo ingreso/gasto/transferencia porque asienta dinero; una factura
+      // recurrente no asienta nada —emite un documento— y no tiene cuenta.
+      // Meterlas juntas obligaría a la bandeja, al calendario, a las alertas y
+      // al flujo a preguntar en cada consulta cuál de las dos están mirando,
+      // que es el argumento con el que ya se separaron facturas y deudas (D15).
+      //
+      // Lo que sí se reparte es el motor: la regla de fechas de
+      // `shared/recurrencias.ts` y la idempotencia por `(plantilla, periodo)`.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS invoice_recurrences (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          counterparty_id INTEGER NOT NULL REFERENCES counterparties(id) ON DELETE CASCADE,
+          direction TEXT NOT NULL CHECK (direction IN ('emitida', 'recibida')),
+          concept TEXT NOT NULL DEFAULT '',
+          subtotal_cents INTEGER NOT NULL CHECK (subtotal_cents > 0),
+          tax_cents INTEGER NOT NULL DEFAULT 0 CHECK (tax_cents >= 0),
+          withheld_tax_cents INTEGER NOT NULL DEFAULT 0 CHECK (withheld_tax_cents >= 0),
+          withheld_income_cents INTEGER NOT NULL DEFAULT 0 CHECK (withheld_income_cents >= 0),
+          cost_center_id INTEGER REFERENCES cost_centers(id) ON DELETE SET NULL,
+          -- Días entre emisión y vencimiento. Nulo: la factura nace sin fecha
+          -- de pago, igual que si se capturara a mano.
+          credit_days INTEGER,
+          frequency TEXT NOT NULL CHECK (frequency IN ('mensual', 'quincenal', 'semanal', 'anual')),
+          day_of_month INTEGER,
+          day_of_month_2 INTEGER,
+          month_of_year INTEGER,
+          weekday INTEGER,
+          start_date TEXT NOT NULL,
+          end_date TEXT,
+          archived INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        -- La misma red que en las recurrencias de movimiento: es el UNIQUE, y
+        -- no el código de la ruta, lo que hace imposible emitir dos veces la
+        -- factura del mismo periodo (R5).
+        CREATE TABLE IF NOT EXISTS invoice_recurrence_runs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          recurrence_id INTEGER NOT NULL REFERENCES invoice_recurrences(id) ON DELETE CASCADE,
+          period TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('emitida', 'descartada')),
+          invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE (recurrence_id, period)
+        );
+        CREATE INDEX IF NOT EXISTS idx_facturas_rec_perfil
+          ON invoice_recurrences(profile_id, archived);
+      `)
+
+      // ── Lo que de verdad cuesta la tarjeta ───────────────────────────────
+      // Tasa anual en puntos base, porcentaje de pago mínimo en puntos base y
+      // el piso en centavos: los tres los escribe el usuario copiando su
+      // contrato. Nulos mientras no los escriba, y con nulo la tarjeta se ve
+      // exactamente como ayer.
+      for (const col of ['annual_rate_bp', 'min_payment_bp', 'min_payment_floor_cents']) {
+        if (!hasColumn(db, 'accounts', col)) {
+          db.exec(`ALTER TABLE accounts ADD COLUMN ${col} INTEGER`)
+        }
+      }
+    },
+  },
 ]
 
 /** Versión de esquema que espera este código. */

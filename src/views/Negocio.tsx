@@ -5,7 +5,11 @@ import { useFetch } from '../hooks.ts'
 import { fmtDate, fmtMoney, currentMonth, shiftMonth, monthLabel } from '../format.ts'
 import { Money } from '../components/Money.tsx'
 import type { View } from '../components/Sidebar.tsx'
-import type { EstadoResultados, RenglonResultados } from '../../shared/types.ts'
+import type {
+  EstadoResultados,
+  RenglonRentabilidad,
+  RenglonResultados,
+} from '../../shared/types.ts'
 
 /** Primer y último día de un mes 'AAAA-MM'. */
 function limites(month: string): { desde: string; hasta: string } {
@@ -35,6 +39,65 @@ function Renglones({ titulo, filas, total }: { titulo: string; filas: RenglonRes
   )
 }
 
+/**
+ * El cambio contra el mismo periodo anterior. El porcentaje solo se dice
+ * cuando el mes pasado había algo contra qué medir: crecer desde cero no es
+ * "infinito por ciento", es que antes no había nada.
+ */
+function Contra({ ahora, antes, label }: { ahora: number; antes: number; label: string }) {
+  const delta = ahora - antes
+  const pct = antes > 0 ? Math.round((delta / antes) * 1000) / 10 : null
+  return (
+    <span className={`negocio-delta${delta >= 0 ? ' stat-in' : ''}`}>
+      {delta === 0 ? '=' : delta > 0 ? '▲' : '▼'} <Money cents={delta} signed className="cifra-chica" />
+      {pct !== null && ` · ${pct > 0 ? '+' : ''}${pct} %`}
+      <span className="negocio-delta-label"> {label}</span>
+    </span>
+  )
+}
+
+/** Ingresos, gasto atribuido y margen. Sirve igual a un cliente y a un centro. */
+function TablaRentabilidad({
+  titulo,
+  filas,
+  vacio,
+}: {
+  titulo: string
+  filas: RenglonRentabilidad[]
+  vacio: string
+}) {
+  if (filas.length === 0) return <p className="grafica-vacia">{vacio}</p>
+  return (
+    <table className="tabla">
+      <thead>
+        <tr>
+          <th>{titulo}</th>
+          <th className="col-num">Entró</th>
+          <th className="col-num">Salió</th>
+          <th className="col-num">Margen</th>
+        </tr>
+      </thead>
+      <tbody>
+        {filas.map((f) => (
+          <tr key={f.id ?? 'sin'}>
+            <td>{f.name}</td>
+            <td className="col-num"><Money cents={f.ingresosCents} className="cifra-chica" /></td>
+            <td className="col-num"><Money cents={f.gastoCents} className="cifra-chica" /></td>
+            <td className="col-num">
+              <span className={f.margenCents >= 0 ? 'stat-in' : ''}>
+                <Money cents={f.margenCents} signed className="cifra-chica" />
+              </span>
+              {f.margenPct !== null && (
+                <span className="cifra-chica"> · {Math.round(f.margenPct * 100)} %</span>
+              )}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
 function Resultados({ datos }: { datos: EstadoResultados }) {
   const pct = datos.margenBrutoPct
   return (
@@ -42,7 +105,10 @@ function Resultados({ datos }: { datos: EstadoResultados }) {
       <table className="tabla resultados">
         <tbody>
           <tr className="resultados-fuerte">
-            <td>Ingresos cobrados</td>
+            <td>
+              Ingresos cobrados
+              <Contra ahora={datos.ingresosCents} antes={datos.previo.ingresosCents} label="contra el periodo anterior" />
+            </td>
             <td className="col-num"><Money cents={datos.ingresosCents} /></td>
           </tr>
           <Renglones titulo="Costo de ventas" filas={datos.detalle.costoVenta} total={datos.costoVentaCents} />
@@ -54,7 +120,14 @@ function Resultados({ datos }: { datos: EstadoResultados }) {
           <Renglones titulo="Gastos variables" filas={datos.detalle.variable} total={datos.gastoVariableCents} />
           <Renglones titulo="Sin clasificar" filas={datos.detalle.sinClasificar} total={datos.sinClasificarCents} />
           <tr className="resultados-fuerte resultados-utilidad">
-            <td>Utilidad</td>
+            <td>
+              Utilidad
+              <Contra
+                ahora={datos.utilidadCents}
+                antes={datos.previo.utilidadCents}
+                label={`contra ${fmtDate(datos.previo.desde)} – ${fmtDate(datos.previo.hasta)}`}
+              />
+            </td>
             <td className="col-num">
               <span className={datos.utilidadCents >= 0 ? 'stat-in' : ''}>
                 <Money cents={datos.utilidadCents} signed />
@@ -168,33 +241,38 @@ export function Negocio({ onNav }: { onNav: (view: View) => void }) {
             </section>
           </div>
 
+          {r.porCliente.length > 0 && (
+            <section className="hoja">
+              <h2 className="hoja-titulo">Qué deja cada cliente</h2>
+              <TablaRentabilidad
+                titulo="Cliente"
+                filas={r.porCliente}
+                vacio="Todavía ningún movimiento lleva contraparte."
+              />
+              <p className="reportes-supuesto">
+                Un gasto solo cuenta aquí si le pusiste contraparte, y la contraparte de un gasto
+                suele ser el proveedor, no el cliente: por eso casi todo el costo vive abajo, en{' '}
+                {profile.dimensionLabel.toLowerCase()}, y no repartido entre clientes.{' '}
+                {r.gastoSinContraparteCents > 0 && (
+                  <>
+                    Este periodo quedaron{' '}
+                    <strong className="cifra-chica">{fmtMoney(r.gastoSinContraparteCents)}</strong>{' '}
+                    de gasto sin atribuir a nadie.{' '}
+                  </>
+                )}
+                No se reparte a ojo, por lo mismo que un gasto sin papel no se supone fijo.
+              </p>
+            </section>
+          )}
+
           {r.porCentro.length > 1 && (
             <section className="hoja">
               <h2 className="hoja-titulo">Por {profile.dimensionLabel.toLowerCase()}</h2>
-              <table className="tabla">
-                <thead>
-                  <tr>
-                    <th>{profile.dimensionLabel}</th>
-                    <th className="col-num">Entró</th>
-                    <th className="col-num">Salió</th>
-                    <th className="col-num">Neto</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {r.porCentro.map((c) => (
-                    <tr key={c.id ?? 'sin'}>
-                      <td>{c.name}</td>
-                      <td className="col-num"><Money cents={c.ingresosCents} className="cifra-chica" /></td>
-                      <td className="col-num"><Money cents={c.gastoCents} className="cifra-chica" /></td>
-                      <td className="col-num">
-                        <span className={c.ingresosCents - c.gastoCents >= 0 ? 'stat-in' : ''}>
-                          <Money cents={c.ingresosCents - c.gastoCents} signed className="cifra-chica" />
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <TablaRentabilidad
+                titulo={profile.dimensionLabel}
+                filas={r.porCentro}
+                vacio="Sin movimientos en el periodo."
+              />
             </section>
           )}
         </>

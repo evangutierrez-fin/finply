@@ -83,6 +83,56 @@ describe('respaldo', () => {
     assert.deepEqual((await c.get(`/api/accounts?profileId=${perfil.id}`)).body, antes)
   })
 
+  test('las facturas vuelven con sus retenciones, sus notas y sus plantillas', async () => {
+    // La lista de tablas del respaldo es a mano, así que una tabla nueva se
+    // pierde en silencio si nadie la agrega. Esto lo comprueba de ida y vuelta.
+    const { perfil } = await libroBase(c, 'Respaldo de facturas', 'negocio')
+    const cliente = (
+      await c.post('/api/contrapartes', {
+        profileId: perfil.id, name: 'Oficinas Mérida', creditDays: 30, creditLimitCents: 500000,
+        contact: 'compras@merida.mx',
+      })
+    ).body
+    const factura = (
+      await c.post('/api/facturas', {
+        profileId: perfil.id, counterpartyId: cliente.id, direction: 'emitida',
+        issueDate: '2026-07-01', dueDate: '2026-07-31',
+        subtotalCents: 1000000, taxCents: 160000,
+        withheldTaxCents: 106667, withheldIncomeCents: 100000,
+      })
+    ).body
+    await c.post(`/api/facturas/${factura.id}/notas`, { date: '2026-07-05', folio: 'NC-1', amountCents: 53333 })
+    const plantilla = (
+      await c.post('/api/facturas/recurrentes', {
+        profileId: perfil.id, counterpartyId: cliente.id, direction: 'emitida',
+        concept: 'Iguala', subtotalCents: 800000, taxCents: 128000, creditDays: 30,
+        frequency: 'mensual', dayOfMonth: 1, startDate: '2026-06-01',
+      })
+    ).body
+    await c.post(`/api/facturas/recurrentes/${plantilla.id}/emitir?profileId=${perfil.id}`, {
+      periodo: '2026-06',
+    })
+
+    const antes = {
+      facturas: (await c.get(`/api/facturas?profileId=${perfil.id}`)).body,
+      contrapartes: (await c.get(`/api/contrapartes?profileId=${perfil.id}`)).body,
+      pendientes: (await c.get(`/api/facturas/recurrentes/pendientes?profileId=${perfil.id}&hoy=2026-07-31`)).body,
+    }
+    const respaldo = (await c.get('/api/respaldo')).body
+
+    await c.del(`/api/profiles/${perfil.id}`)
+    const res = await c.post('/api/respaldo/restaurar', respaldo)
+    assert.equal(res.status, 200)
+
+    assert.deepEqual((await c.get(`/api/facturas?profileId=${perfil.id}`)).body, antes.facturas)
+    assert.deepEqual((await c.get(`/api/contrapartes?profileId=${perfil.id}`)).body, antes.contrapartes)
+    // Y el periodo ya emitido sigue resuelto: la bitácora también viajó.
+    assert.deepEqual(
+      (await c.get(`/api/facturas/recurrentes/pendientes?profileId=${perfil.id}&hoy=2026-07-31`)).body,
+      antes.pendientes,
+    )
+  })
+
   test('informa dónde vive la base', async () => {
     const res = await c.get('/api/respaldo/info')
     assert.equal(res.status, 200)

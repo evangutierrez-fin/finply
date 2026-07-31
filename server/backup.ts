@@ -59,6 +59,11 @@ export const TABLES = [
   'counterparties',
   'cost_centers',
   'invoices',
+  // La nota de crédito cuelga de la factura y la plantilla apunta a la
+  // contraparte y al centro; las tres van después de ellos y antes de los
+  // movimientos, como todo lo demás.
+  'invoice_credit_notes',
+  'invoice_recurrences',
   'transactions',
   'transaction_tags',
   // Todo lo que cuelga del movimiento va después de él: el reparto por
@@ -69,6 +74,8 @@ export const TABLES = [
   'account_statements',
   // Los periodos resueltos van hasta el final: apuntan al movimiento asentado.
   'recurrence_runs',
+  // Y los de facturas apuntan a la factura que salió de ellos.
+  'invoice_recurrence_runs',
 ] as const
 
 export interface Snapshot {

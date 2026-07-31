@@ -9,6 +9,7 @@
 
 import { db, modulosDe } from './db.ts'
 import type { ModuloId } from '../shared/modulos.ts'
+import { SALDO_FACTURA } from './facturas.ts'
 import { estadoTarjetas } from './tarjetas.ts'
 import { reglaDe } from './recurrencias.ts'
 import { tablaAmortizacion } from '../shared/credito.ts'
@@ -221,12 +222,14 @@ function deMSI(profileId: number, desde: string, hasta: string): EventoCalendari
  * cobros en JS (R11).
  */
 function deFacturas(profileId: number, desde: string, hasta: string): EventoCalendario[] {
+  // Lo que va a caer es lo **cobrable**, no el total del documento: lo
+  // retenido no lo va a pagar el cliente y lo cancelado con una nota de
+  // crédito ya no se debe. Proyectarlo entero inflaría el flujo con dinero que
+  // nadie va a mandar.
   const filas: any[] = db
     .prepare(
       `SELECT f.id, f.direction, f.folio, f.concept, f.due_date,
-        f.subtotal_cents + f.tax_cents
-          - COALESCE((SELECT SUM(t.amount_cents) FROM transactions t WHERE t.invoice_id = f.id), 0)
-          AS saldo,
+        ${SALDO_FACTURA} AS saldo,
         c.name AS contraparte
        FROM invoices f
        JOIN counterparties c ON c.id = f.counterparty_id

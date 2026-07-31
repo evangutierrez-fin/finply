@@ -198,6 +198,10 @@ export function mapAccount(row: any) {
     minBalanceCents: row.min_balance_cents ?? null,
     institution: row.institution ?? '',
     sortOrder: row.sort_order ?? 0,
+    /** Lo que cuesta la tarjeta, copiado del contrato del usuario (Fase 14). */
+    annualRateBp: row.annual_rate_bp ?? null,
+    minPaymentBp: row.min_payment_bp ?? null,
+    minPaymentFloorCents: row.min_payment_floor_cents ?? null,
   }
 }
 

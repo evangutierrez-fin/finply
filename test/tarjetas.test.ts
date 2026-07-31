@@ -14,7 +14,16 @@ after(() => c.cerrar())
 /** Perfil con cuenta de banco y una tarjeta ya configurada. */
 async function libroConTarjeta(
   nombre: string,
-  tarjeta: { creditLimitCents?: number; cutDay?: number; dueDay?: number; openingCents?: number } = {},
+  tarjeta: {
+    creditLimitCents?: number
+    cutDay?: number
+    dueDay?: number
+    openingCents?: number
+    /** Lo que cuesta la tarjeta (Fase 14). Ausente = el usuario no lo escribió. */
+    annualRateBp?: number | null
+    minPaymentBp?: number | null
+    minPaymentFloorCents?: number | null
+  } = {},
 ) {
   const { perfil, cuenta, categorias } = await libroBase(c, nombre)
   const res = await c.post('/api/accounts', {
@@ -25,6 +34,9 @@ async function libroConTarjeta(
     creditLimitCents: tarjeta.creditLimitCents ?? 5_000_00,
     cutDay: tarjeta.cutDay ?? 5,
     dueDay: tarjeta.dueDay ?? 25,
+    annualRateBp: tarjeta.annualRateBp ?? null,
+    minPaymentBp: tarjeta.minPaymentBp ?? null,
+    minPaymentFloorCents: tarjeta.minPaymentFloorCents ?? null,
   })
   assert.equal(res.status, 201, JSON.stringify(res.body))
   return { perfil, banco: cuenta, tarjeta: res.body, categorias }
@@ -451,5 +463,122 @@ describe('deuda con tasa y plazo', () => {
     )
     const despues = (await c.get(`/api/debts?profileId=${perfil.id}`)).body[0]
     assert.equal(despues.paidCents, 500000, 'y los abonos reales van por su lado')
+  })
+})
+
+// ── Lo que de verdad cuesta la tarjeta (Fase 14) ──────────────────────────
+//
+// Era la única deuda de Finply sin interés modelado. Lo que se agrega no
+// adivina nada: la tasa, el porcentaje del mínimo y el piso los escribe el
+// usuario copiando su contrato, y sin ellos Finply calla (R15, R9).
+
+describe('el pago mínimo', () => {
+  test('sin tasa ni mínimo, la tarjeta se ve exactamente como antes', async () => {
+    const { perfil, tarjeta } = await libroConTarjeta('Sin contrato')
+    await gasto(perfil.id, tarjeta.id, 300_000, '2026-07-02')
+    const [t] = await estado(perfil.id, '2026-07-20')
+    assert.equal(t.annualRateBp, null)
+    assert.equal(t.pagoMinimoCents, null, 'sin porcentaje ni piso no hay mínimo que calcular')
+    assert.equal(t.siPagasElMinimo, null)
+  })
+
+  test('con mínimo pero sin tasa se dice el mínimo y nada más', async () => {
+    // La cifra del mínimo es del estado de cuenta y no necesita la tasa; lo que
+    // sí la necesita es decir cuánto tardas en liquidar, y eso se calla.
+    const { perfil, tarjeta } = await libroConTarjeta('Mínimo sin tasa', {
+      minPaymentBp: 500,
+      minPaymentFloorCents: 30_000,
+    })
+    await gasto(perfil.id, tarjeta.id, 1_000_000, '2026-07-02')
+    const [t] = await estado(perfil.id, '2026-07-20')
+    assert.equal(t.saldoAlCorteCents, 1_000_000, 'el gasto ya pasó por el corte del 5')
+    assert.equal(t.pagoMinimoCents, 50_000, '5 % del saldo del corte')
+    assert.equal(t.siPagasElMinimo, null, 'sin tasa no hay nada honesto que decir')
+  })
+
+  test('con el contrato completo dice en cuánto se liquida y qué cuesta', async () => {
+    const { perfil, tarjeta } = await libroConTarjeta('Contrato', {
+      creditLimitCents: 5_000_000,
+      annualRateBp: 4590,
+      minPaymentBp: 500,
+      minPaymentFloorCents: 30_000,
+    })
+    await gasto(perfil.id, tarjeta.id, 3_000_000, '2026-07-02')
+
+    const [t] = await estado(perfil.id, '2026-07-20')
+    assert.equal(t.deudaCents, 3_000_000)
+    assert.equal(t.annualRateBp, 4590)
+    assert.ok(t.siPagasElMinimo !== null)
+    assert.equal(t.siPagasElMinimo.nuncaTermina, false)
+    assert.ok(t.siPagasElMinimo.meses > 36, `tardó ${t.siPagasElMinimo.meses} meses`)
+    assert.equal(
+      t.siPagasElMinimo.totalPagadoCents,
+      3_000_000 + t.siPagasElMinimo.totalInteresCents,
+    )
+  })
+
+  test('el piso manda cuando el porcentaje se queda corto', async () => {
+    const { perfil, tarjeta } = await libroConTarjeta('Piso', {
+      minPaymentBp: 500,
+      minPaymentFloorCents: 30_000,
+      annualRateBp: 4590,
+    })
+    await gasto(perfil.id, tarjeta.id, 200_000, '2026-07-02')
+    const [t] = await estado(perfil.id, '2026-07-20')
+    assert.equal(t.pagoMinimoCents, 30_000, '5 % de $2,000 son $100: manda el piso de $300')
+  })
+
+  test('la compra a meses no entra a la simulación de intereses', async () => {
+    // Un MSI no genera intereses: ese es todo el trato. Meter sus
+    // parcialidades por facturar cobraría un interés que nadie va a pagar.
+    const { perfil, tarjeta } = await libroConTarjeta('MSI sin interés', {
+      creditLimitCents: 5_000_000,
+      annualRateBp: 4590,
+      minPaymentBp: 500,
+      minPaymentFloorCents: 30_000,
+    })
+    await c.post('/api/tarjetas/msi', {
+      profileId: perfil.id,
+      accountId: tarjeta.id,
+      concept: 'Refri',
+      totalCents: 1_200_000,
+      months: 12,
+      purchaseDate: '2026-07-02',
+    })
+
+    const [t] = await estado(perfil.id, '2026-07-20')
+    assert.equal(t.deudaCents, 1_200_000, 'el banco te descontó la línea completa')
+    assert.ok(t.msiPorFacturarCents > 0)
+    // Lo que se simula es la deuda **menos** lo que aún no se factura a meses.
+    const revolvente = t.deudaCents - t.msiPorFacturarCents
+    assert.ok(revolvente < t.deudaCents)
+    assert.ok(
+      t.siPagasElMinimo === null || t.siPagasElMinimo.totalPagadoCents <= t.deudaCents * 2,
+      'no se simula interés sobre lo que no lo genera',
+    )
+  })
+
+  test('sin deuda no hay mínimo ni plan', async () => {
+    const { perfil } = await libroConTarjeta('Al corriente', {
+      annualRateBp: 4590,
+      minPaymentBp: 500,
+      minPaymentFloorCents: 30_000,
+    })
+    const [t] = await estado(perfil.id, '2026-07-20')
+    assert.equal(t.pagoMinimoCents, 0)
+    assert.equal(t.siPagasElMinimo, null, 'sin saldo no hay nada que simular')
+  })
+
+  test('una cuenta que no es tarjeta no admite tasa ni mínimo', async () => {
+    const { perfil } = await libroBase(c, 'Ahorro con tasa')
+    const r = await c.post('/api/accounts', {
+      profileId: perfil.id,
+      name: 'Ahorro',
+      type: 'ahorro',
+      openingCents: 0,
+      annualRateBp: 4590,
+    })
+    assert.equal(r.status, 400)
+    assert.match(r.body.error, /tarjeta/)
   })
 })

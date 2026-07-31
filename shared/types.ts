@@ -13,6 +13,11 @@ export type { ModuloId } from './modulos.ts'
 export type { Tendencia } from './estadistica.ts'
 import type { Tendencia } from './estadistica.ts'
 
+// Lo mismo con el plan de pago mínimo: su aritmética vive en `shared/credito.ts`
+// junto a la amortización, que es de donde salió.
+export type { PlanPagoMinimo } from './credito.ts'
+import type { PlanPagoMinimo } from './credito.ts'
+
 export interface Profile {
   id: number
   name: string
@@ -65,6 +70,13 @@ export interface Account {
   institution: string
   /** Orden en el que se listan; a igualdad, manda la antigüedad. */
   sortOrder: number
+  /**
+   * Lo que cuesta la tarjeta, copiado del contrato del usuario. Solo tarjetas
+   * y solo si lo escribió: Finply no supone la tasa ni el mínimo de nadie.
+   */
+  annualRateBp: number | null
+  minPaymentBp: number | null
+  minPaymentFloorCents: number | null
 }
 
 export type TxType = 'ingreso' | 'gasto' | 'transferencia'
@@ -289,6 +301,18 @@ export interface EstadoTarjeta {
   msiPorFacturarCents: number
   /** Lo que sumarán las parcialidades en el próximo corte. */
   msiProximoCorteCents: number
+  /** Tasa anual en puntos base, como la escribió el usuario. `null` si no. */
+  annualRateBp: number | null
+  /** Porcentaje del saldo que exige el pago mínimo, en puntos base. */
+  minPaymentBp: number | null
+  minPaymentFloorCents: number | null
+  /** El mínimo de este corte. `null` mientras falte cómo calcularlo. */
+  pagoMinimoCents: number | null
+  /**
+   * Qué pasa si solo pagas el mínimo hasta liquidar. `null` sin tasa: sin
+   * saber cuánto cobra la tarjeta no hay nada honesto que decir.
+   */
+  siPagasElMinimo: PlanPagoMinimo | null
 }
 
 export interface Summary {
@@ -921,6 +945,15 @@ export interface Contraparte {
   /** Identificador fiscal, si el usuario lo usa. RFC, CUIT, VAT… o vacío. */
   taxId: string
   note: string
+  /** Correo, teléfono o a quién buscar. Campo libre: no se valida ni se usa. */
+  contact: string
+  /**
+   * Días entre emitir y vencer, propuestos al facturarle. `null` es "no lo
+   * uso": la fecha se sigue tecleando a mano, como antes de la Fase 14.
+   */
+  creditDays: number | null
+  /** Cuánto le fías. `null` sin límite. Avisa, nunca impide. */
+  creditLimitCents: number | null
   archived: boolean
   /** Movimientos y facturas que la usan; sirve para avisar antes de borrarla. */
   txCount: number
@@ -928,6 +961,10 @@ export interface Contraparte {
   /** Lo que falta por cobrarle y por pagarle, de sus facturas abiertas. */
   porCobrarCents: number
   porPagarCents: number
+  /** Lo cobrado sin factura que todavía se le puede aplicar a una. */
+  anticiposCents: number
+  /** Derivado: `porCobrar` pasó del límite. `false` si no hay límite. */
+  sobreLimite: boolean
 }
 
 export interface CentroCosto {
@@ -939,6 +976,21 @@ export interface CentroCosto {
 }
 
 export type DireccionFactura = 'emitida' | 'recibida'
+
+/**
+ * Una nota de crédito: el documento con el que se cancela parte de una factura
+ * ya emitida. **No es dinero** —no se movió un peso— y por eso no tiene
+ * movimiento ligado ni aparece en ningún reporte de flujo. Lo único que hace
+ * es bajar lo que queda por cobrar.
+ */
+export interface NotaCredito {
+  id: number
+  invoiceId: number
+  date: string
+  folio: string
+  concept: string
+  amountCents: number
+}
 
 export interface Factura {
   id: number
@@ -952,18 +1004,74 @@ export interface Factura {
   dueDate: string | null
   subtotalCents: number
   taxCents: number
-  /** Subtotal más impuesto. Se calcula, no se guarda. */
+  /** Impuesto retenido por quien te paga. Monto, no tasa (R15). */
+  withheldTaxCents: number
+  /** Retención sobre la renta o el ingreso, con el mismo criterio. */
+  withheldIncomeCents: number
+  /** Los dos anteriores. Nunca se cobra: lo entera el otro. */
+  retenidoCents: number
+  /** Subtotal más impuesto: el total del documento. Se calcula, no se guarda. */
   totalCents: number
+  /** Lo que se le canceló con notas de crédito. */
+  notasCreditoCents: number
+  /**
+   * Lo que de verdad se puede cobrar: total − retenido − notas de crédito.
+   * **Es contra esto que se mide el saldo**, y no contra el total: prometer el
+   * total es prometer un dinero que nunca va a llegar.
+   */
+  cobrableCents: number
   /** Suma de los movimientos ligados. */
   pagadoCents: number
-  /** Total menos pagado, con piso en cero. */
+  /** Cobrable menos pagado, con piso en cero. */
   saldoCents: number
   status: 'abierta' | 'cancelada'
   /** Derivado del saldo, no guardado: no puede quedarse viejo. */
   cobrada: boolean
   costCenterId: number | null
   costCenterName: string | null
+  notasCredito: NotaCredito[]
   createdAt: string
+}
+
+/**
+ * Un anticipo: dinero que ya entró y todavía no tiene factura. En un libro de
+ * flujo de efectivo **ya es ingreso del día que se cobró** (D14) — lo que
+ * falta es poder decir después a qué factura correspondía, sin volver a
+ * registrar el mismo peso.
+ */
+export interface Anticipo {
+  txId: number
+  date: string
+  amountCents: number
+  note: string
+  accountName: string
+}
+
+/** Un renglón de la lista de cobranza: qué toca cobrar y desde cuándo. */
+export interface RenglonCobranza {
+  facturaId: number
+  counterpartyId: number
+  counterpartyName: string
+  contact: string
+  folio: string
+  concept: string
+  issueDate: string
+  dueDate: string | null
+  saldoCents: number
+  /** Días vencida. Cero o negativo mientras no llegue su fecha. */
+  diasVencida: number
+  tramo: string
+  tramoLabel: string
+}
+
+export interface Cobranza {
+  hoy: string
+  /** De lo más vencido a lo más nuevo: se cobra empezando por lo de antes. */
+  renglones: RenglonCobranza[]
+  totalCents: number
+  vencidoCents: number
+  /** Lo que vence dentro de los próximos siete días. */
+  porVencerCents: number
 }
 
 export interface TramoAging {
@@ -983,10 +1091,100 @@ export interface Aging {
   vencidoPorContraparte: { id: number; name: string; montoCents: number; direction: DireccionFactura }[]
 }
 
+/**
+ * La plantilla de una factura que se repite: la renta del local, la iguala del
+ * mes, la suscripción que le cobras a un cliente.
+ *
+ * Vive aparte de `Recurrencia` (D28) porque no asienta dinero: emite un
+ * documento. No tiene cuenta ni tipo, y su periodo se resuelve emitiendo la
+ * factura, no registrando el movimiento — el ingreso sigue naciendo al
+ * cobrarla, como manda D14.
+ */
+export interface FacturaRecurrente {
+  id: number
+  profileId: number
+  counterpartyId: number
+  counterpartyName: string
+  direction: DireccionFactura
+  concept: string
+  subtotalCents: number
+  taxCents: number
+  withheldTaxCents: number
+  withheldIncomeCents: number
+  totalCents: number
+  costCenterId: number | null
+  costCenterName: string | null
+  /** Días entre emisión y vencimiento de cada factura que salga de aquí. */
+  creditDays: number | null
+  frequency: 'mensual' | 'quincenal' | 'semanal' | 'anual'
+  dayOfMonth: number | null
+  dayOfMonth2: number | null
+  monthOfYear: number | null
+  weekday: number | null
+  startDate: string
+  endDate: string | null
+  archived: boolean
+  /** En palabras: "cada mes el día 1". */
+  descripcion: string
+  /** Periodos vencidos sin emitir ni descartar. */
+  pendientes: number
+  proximaFecha: string | null
+}
+
+/** Un periodo vencido de una plantilla, todavía sin emitir. Derivado (D7). */
+export interface PropuestaFactura {
+  recurrenceId: number
+  periodo: string
+  fecha: string
+  counterpartyId: number
+  counterpartyName: string
+  direction: DireccionFactura
+  concept: string
+  subtotalCents: number
+  taxCents: number
+  totalCents: number
+  /** La fecha de vencimiento que tendría, si la plantilla trae días. */
+  dueDate: string | null
+  descripcion: string
+  atraso: number
+}
+
+export interface BandejaFacturas {
+  items: PropuestaFactura[]
+  total: number
+  truncado: boolean
+}
+
 export interface RenglonResultados {
   categoryId: number | null
   name: string
   montoCents: number
+}
+
+/**
+ * Cuánto deja cada cliente y cada centro. El costo que aparece aquí es
+ * **solo el que el usuario atribuyó**: un gasto sin contraparte no se reparte
+ * a ojo entre los clientes, por la misma razón que un gasto sin papel no se
+ * supone fijo. Por eso la vista dice cuánto quedó sin atribuir.
+ */
+export interface RenglonRentabilidad {
+  id: number | null
+  name: string
+  ingresosCents: number
+  gastoCents: number
+  /** Ingresos menos gasto atribuido. */
+  margenCents: number
+  /** Margen entre ingresos. `null` sin ingresos: no se puede decir. */
+  margenPct: number | null
+}
+
+/** El mismo periodo, corrido hacia atrás su propia longitud. */
+export interface PeriodoPrevio {
+  desde: string
+  hasta: string
+  ingresosCents: number
+  gastoTotalCents: number
+  utilidadCents: number
 }
 
 export interface EstadoResultados {
@@ -1007,7 +1205,13 @@ export interface EstadoResultados {
   impuestoAcreditableCents: number
   deducibleCents: number
   detalle: { costoVenta: RenglonResultados[]; fijo: RenglonResultados[]; variable: RenglonResultados[]; sinClasificar: RenglonResultados[] }
-  porCentro: { id: number | null; name: string; ingresosCents: number; gastoCents: number }[]
+  porCentro: RenglonRentabilidad[]
+  /** Qué deja cada cliente, de mayor margen a menor. */
+  porCliente: RenglonRentabilidad[]
+  /** Gasto que nadie atribuyó a una contraparte: el que no se reparte a ojo. */
+  gastoSinContraparteCents: number
+  /** El mismo periodo anterior, para poder restar. */
+  previo: PeriodoPrevio
   /** Cuánto hay que vender para no perder ni ganar. `null` si no se puede decir. */
   puntoEquilibrioCents: number | null
   margenContribucion: number | null

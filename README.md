@@ -107,6 +107,12 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   el **saldo al corte** (lo de después del corte no cuenta) y el **pago para no
   generar intereses**, descontando lo que ya abonaste y con la fecha límite a
   la vista. Un corte 31 cae el 28 en febrero, como en el banco.
+- **Lo que de verdad cuesta la tarjeta** — escribe su tasa anual, el porcentaje
+  del pago mínimo y el mínimo fijo, tal como vienen en tu contrato, y Finply te
+  dice en cuántos meses la liquidas pagando **solo el mínimo** y cuánto pagas de
+  intereses en el camino. Si el mínimo no alcanza ni para el interés del mes, lo
+  dice con esas palabras: esa deuda no se acaba nunca. Sin la tasa no supone
+  ninguna — no conoce la de tu banco.
 - **Meses sin intereses** — una compra a N meses asienta un cargo por el total
   —tu línea de crédito se usa completa desde el primer día, que es lo que de
   verdad pasa— y genera las N parcialidades, cada una en su corte. El saldo al
@@ -150,6 +156,25 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   en monto y la dimensión libre —proyecto, obra, sucursal— la nombras tú.
   Viene encendido en los libros de negocio y apagado en los personales, pero es
   una casilla: enciéndela si facturas por tu cuenta.
+- **Lo que vas a cobrar no siempre es el total** — si te retienen impuesto o
+  retención sobre el ingreso, se escriben en la factura (en monto, no en tasa) y
+  Finply mide el saldo contra lo **cobrable**, no contra el papel: la factura se
+  salda cuando llega lo que iba a llegar. Igual con las **notas de crédito**,
+  que cancelan parte de una factura sin borrarla y sin mover un peso, porque
+  ningún peso se movió. Y si cobraste **antes** de facturar, ese anticipo ya
+  está en tu libro desde el día que entró: cuando llegue la factura se le aplica
+  desde ahí, sin registrar dos veces el mismo dinero.
+- **La cobranza de hoy y las facturas que se repiten** — una lista ordenada por
+  antigüedad de a quién le hablas primero, con su contacto al lado, porque un
+  saldo de hace noventa días no vale lo mismo que uno de ayer. La iguala del mes
+  se guarda como plantilla y cada periodo vencido te espera **por emitir**: como
+  las recurrencias, propone y tú decides. Emitirla tampoco mueve el libro.
+- **Qué deja cada cliente y cada proyecto** — ingresos, costo atribuido, margen
+  y su porcentaje, con el periodo comparado contra el anterior. Lo que no le
+  atribuiste a nadie no se reparte a ojo: se dice cuánto quedó fuera.
+- **La contraparte que ya sabe cómo te paga** — contacto, días de crédito que
+  proponen el vencimiento al facturarle, y un límite de crédito que **avisa,
+  nunca impide**: a quién le fías y cuánto es tu decisión.
 - **Simulador de patrimonio** — qué pasa si apartas X al mes durante N años, y
   si conviene más invertirlo o pagar primero la deuda cara. Sale de tus cifras
   de hoy, la tasa la pones tú y los cinco supuestos van escritos junto al
@@ -305,13 +330,15 @@ server/          Express + node:sqlite
   analisis.ts    colchón, origen del gasto y concentración (solo lectura)
   precios.ts     import CSV de precios: analiza, y solo asienta lo marcado
   simulacion.ts  punto de partida del simulador (solo lectura)
-  facturas.ts    facturas con saldo derivado y antigüedad de saldos
-  negocio.ts     estado de resultados y punto de equilibrio (solo lectura)
+  facturas.ts    facturas con lo cobrable derivado, aging y cobranza
+  facturas-recurrentes.ts plantillas de factura sobre el motor de recurrencias
+  negocio.ts     estado de resultados, rentabilidad y punto de equilibrio
   flujo.ts       la caja proyectada día a día, auditable (solo lectura)
   routes/        profiles · accounts · categories · tags · transactions · debts
                  · tarjetas · investments · budgets · goals · notes · summary
                  · reportes · alertas · analisis · precios · simulador
-                 · contrapartes · centros · facturas · negocio
+                 · contrapartes · centros · facturas · facturas-recurrentes
+                 · negocio
                  · recurrencias · calendario · flujo · backup · importaciones
   seed.ts        datos demo deterministas
 shared/
@@ -395,10 +422,15 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 | `GET /api/simulador?profileId&meses&ahorroMensualCents&rendimientoAnualBp` | Las dos rutas —invertir o pagar la deuda— proyectadas sobre las mismas cifras |
 | `GET/POST /api/contrapartes` · `PATCH/DELETE /:id` | Clientes y proveedores, con lo que te deben y lo que les debes |
 | `GET/POST /api/centros` · `PATCH/DELETE /:id` | La dimensión libre del perfil (proyecto, obra, sucursal) |
-| `GET/POST /api/facturas` · `PATCH/DELETE /:id` | Facturas emitidas y recibidas. Registrarlas **no mueve el libro** |
+| `GET/POST /api/facturas` · `PATCH/DELETE /:id` | Facturas emitidas y recibidas, con retenciones. Registrarlas **no mueve el libro** |
 | `POST /api/facturas/:id/cobros` | El cobro (o el pago): aquí nace el asiento, con su parte del impuesto |
+| `POST /api/facturas/:id/notas` · `DELETE /notas/:notaId` | Notas de crédito: cancelan parte de la factura sin mover un peso |
+| `GET/POST /api/facturas/:id/anticipos` | Lo cobrado sin factura, y aplicarlo ligando el movimiento que ya existe |
 | `GET /api/facturas/aging?profileId` | Antigüedad de saldos: corriente, 1-30, 31-60, 61-90 y más de 90 |
-| `GET /api/negocio/resultados?profileId&desde&hasta` | Estado de resultados, impuestos del periodo y punto de equilibrio |
+| `GET /api/facturas/cobranza?profileId` | A quién le hablas hoy, de lo más vencido a lo más nuevo |
+| `GET/POST /api/facturas/recurrentes` · `PATCH/DELETE /:id` | Plantillas de factura que se repite |
+| `GET /api/facturas/recurrentes/pendientes` · `POST /:id/emitir` · `/descartar` · `/reabrir` | La bandeja derivada y su resolución (R4, R5) |
+| `GET /api/negocio/resultados?profileId&desde&hasta` | Estado de resultados, rentabilidad por cliente y por centro, impuestos, equilibrio y el periodo anterior |
 | `GET /api/flujo?profileId&dias&hoy` | La caja proyectada día a día: puntos, eventos que la mueven y primer día en rojo |
 | `GET /api/respaldo` · `GET /info` · `POST /restaurar` | Respaldo completo en JSON |
 
@@ -458,8 +490,6 @@ donde aparece, que en el tema oscuro es la hoja, no el fondo.
 
 **Negocio**
 
-- Retenciones, notas de crédito, anticipos, facturas recurrentes y
-  rentabilidad por cliente
 - Cotizaciones que se vuelven factura, corte de caja, compras y órdenes
 - Módulos de giro opcionales: inmuebles en renta, horas facturables e
   inventario simple

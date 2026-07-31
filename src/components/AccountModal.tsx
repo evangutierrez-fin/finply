@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { Account, AccountType } from '../../shared/types.ts'
 import { api } from '../api.ts'
-import { parseAmount } from '../format.ts'
+import { fmtTasa, parseAmount, parseTasa } from '../format.ts'
 import { useApp } from '../context.ts'
 import { Modal } from './Modal.tsx'
 
@@ -40,6 +40,13 @@ export function AccountModal({
     account?.minBalanceCents != null ? (account.minBalanceCents / 100).toFixed(2) : '',
   )
   const [institution, setInstitution] = useState(account?.institution ?? '')
+  const [tasa, setTasa] = useState(account?.annualRateBp != null ? fmtTasa(account.annualRateBp) : '')
+  const [minPct, setMinPct] = useState(
+    account?.minPaymentBp != null ? fmtTasa(account.minPaymentBp) : '',
+  )
+  const [minPiso, setMinPiso] = useState(
+    account?.minPaymentFloorCents != null ? (account.minPaymentFloorCents / 100).toFixed(2) : '',
+  )
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
@@ -76,10 +83,27 @@ export function AccountModal({
     if (limite.trim() !== '' && creditLimitCents === null) {
       return setError('El límite de crédito no es un monto válido')
     }
+    // Lo que cuesta la tarjeta. Vacío es "no lo sé", y con eso Finply calla en
+    // vez de suponer una tasa (R15).
+    const annualRateBp = tasa.trim() === '' ? null : parseTasa(tasa)
+    if (tasa.trim() !== '' && annualRateBp === null) {
+      return setError('Esa tasa no se entiende. Escríbela como 45 o 45.9')
+    }
+    const minPaymentBp = minPct.trim() === '' ? null : parseTasa(minPct)
+    if (minPct.trim() !== '' && minPaymentBp === null) {
+      return setError('Ese porcentaje de pago mínimo no se entiende')
+    }
+    const minPaymentFloorCents = minPiso.trim() === '' ? null : parseAmount(minPiso)
+    if (minPiso.trim() !== '' && minPaymentFloorCents === null) {
+      return setError('Ese mínimo fijo no es un monto válido')
+    }
+
     // Los datos de crédito solo viajan si la cuenta es tarjeta; el servidor
     // rechaza lo contrario, y aquí ni siquiera se muestran.
     const credito =
-      type === 'tarjeta' ? { creditLimitCents, cutDay, dueDay } : {}
+      type === 'tarjeta'
+        ? { creditLimitCents, cutDay, dueDay, annualRateBp, minPaymentBp, minPaymentFloorCents }
+        : {}
 
     // Vacío = sin aviso, que es distinto de un mínimo de cero. Y admite
     // negativo: el mínimo de una tarjeta es cuánto puedes deber.
@@ -227,6 +251,52 @@ export function AccountModal({
                   value={pago}
                   onChange={(e) => setPago(e.target.value)}
                 />
+              </label>
+            </div>
+            <p className="forma-nota">
+              Lo de abajo lo copias de tu contrato. Es lo que convierte a la tarjeta en la deuda
+              más cara que tienes: sin la tasa, Finply solo puede decirte cuánto debes, no cuánto
+              te va a costar. No supone la tasa ni el mínimo de ningún banco.
+            </p>
+            <div className="campos-3">
+              <label className="campo">
+                <span className="campo-label">Tasa anual</span>
+                <div className="monto-wrap">
+                  <input
+                    className="campo-input"
+                    inputMode="decimal"
+                    placeholder="Ej. 45.9"
+                    value={tasa}
+                    onChange={(e) => setTasa(e.target.value)}
+                  />
+                  <span className="monto-signo" aria-hidden="true">%</span>
+                </div>
+              </label>
+              <label className="campo">
+                <span className="campo-label">Pago mínimo</span>
+                <div className="monto-wrap">
+                  <input
+                    className="campo-input"
+                    inputMode="decimal"
+                    placeholder="Ej. 5"
+                    value={minPct}
+                    onChange={(e) => setMinPct(e.target.value)}
+                  />
+                  <span className="monto-signo" aria-hidden="true">%</span>
+                </div>
+              </label>
+              <label className="campo">
+                <span className="campo-label">Mínimo fijo</span>
+                <div className="monto-wrap">
+                  <span className="monto-signo" aria-hidden="true">$</span>
+                  <input
+                    className="campo-input"
+                    inputMode="decimal"
+                    placeholder="Ej. 200"
+                    value={minPiso}
+                    onChange={(e) => setMinPiso(e.target.value)}
+                  />
+                </div>
               </label>
             </div>
           </fieldset>

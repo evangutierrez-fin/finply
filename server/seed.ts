@@ -30,6 +30,12 @@ function wipe(): void {
     DELETE FROM goal_entries;
     DELETE FROM goals;
     DELETE FROM notes;
+    DELETE FROM invoice_credit_notes;
+    DELETE FROM invoice_recurrence_runs;
+    DELETE FROM invoice_recurrences;
+    DELETE FROM invoices;
+    DELETE FROM counterparties;
+    DELETE FROM cost_centers;
     DELETE FROM categories;
     DELETE FROM accounts;
     DELETE FROM profiles;
@@ -50,10 +56,35 @@ function createAccount(
   name: string,
   type: string,
   openingPesos: number,
+  tarjeta?: {
+    limitePesos: number
+    corte: number
+    pago: number
+    /** Tasa anual y pago mínimo en puntos base, como los escribiría el usuario. */
+    tasaBp: number
+    minimoBp: number
+    pisoPesos: number
+  },
 ): number {
   const result = db
-    .prepare('INSERT INTO accounts (profile_id, name, type, opening_cents) VALUES (?, ?, ?, ?)')
-    .run(profileId, name, type, Math.round(openingPesos * 100))
+    .prepare(
+      `INSERT INTO accounts
+        (profile_id, name, type, opening_cents, credit_limit_cents, cut_day, due_day,
+         annual_rate_bp, min_payment_bp, min_payment_floor_cents)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      profileId,
+      name,
+      type,
+      Math.round(openingPesos * 100),
+      tarjeta ? Math.round(tarjeta.limitePesos * 100) : null,
+      tarjeta?.corte ?? null,
+      tarjeta?.pago ?? null,
+      tarjeta?.tasaBp ?? null,
+      tarjeta?.minimoBp ?? null,
+      tarjeta ? Math.round(tarjeta.pisoPesos * 100) : null,
+    )
   return Number(result.lastInsertRowid)
 }
 
@@ -102,6 +133,16 @@ inTransaction(() => {
   const efectivo = createAccount(personal, 'Efectivo', 'efectivo', 1800)
   const banco = createAccount(personal, 'BBVA Nómina', 'banco', 24500)
   const ahorro = createAccount(personal, 'Ahorro', 'ahorro', 52000)
+  // La tarjeta trae su contrato completo desde la Fase 14: sin tasa ni mínimo,
+  // Finply solo podía decir cuánto debes, no cuánto te cuesta deberlo.
+  const tarjeta = createAccount(personal, 'Tarjeta Nu', 'tarjeta', 0, {
+    limitePesos: 45000,
+    corte: 5,
+    pago: 25,
+    tasaBp: 4590,
+    minimoBp: 500,
+    pisoPesos: 300,
+  })
 
   const cSuper = categoryId(personal, 'Súper', 'gasto')
   const cComida = categoryId(personal, 'Comida', 'gasto')
@@ -178,6 +219,17 @@ inTransaction(() => {
     for (let i = 0; i < 2; i++) {
       const d = 1 + Math.floor(rnd() * limit)
       tx(personal, banco, 'gasto', between(150, 600), day(m, d), cOcio, pick(['Cine', 'Streaming', 'Salida', 'Libros']))
+    }
+    // La tarjeta se usa y se abona, pero nunca completa: así es como se junta
+    // un saldo revolvente, que es de lo que trata el pago mínimo.
+    if (m >= '2026-02') {
+      for (let i = 0; i < 3; i++) {
+        const d = 1 + Math.floor(rnd() * limit)
+        tx(personal, tarjeta, 'gasto', sube(between(380, 1900)), day(m, d), pick([cSuper, cOcio, cComida]), pick(['Compra con tarjeta', 'Farmacia', 'Restaurante', 'Ropa']))
+      }
+      if (limit >= 25) {
+        tx(personal, banco, 'transferencia', between(1500, 2600), day(m, 25), null, 'Pago tarjeta', tarjeta)
+      }
     }
     // Diciembre cuesta más. Es el caso que la estacionalidad viene a mostrar y
     // el que un "mes contra el anterior" nunca puede explicar.
@@ -274,6 +326,119 @@ inTransaction(() => {
       .lastInsertRowid,
   )
   ligar(recRentaNeg, 'renta', asentadoNeg)
+
+  // ── Contrapartes y facturas ───────────────────────────────────────────
+  // Cada una está para enseñar una cosa distinta de la Fase 14:
+  //
+  //   · Oficinas Mérida factura con **retención**: el documento dice $46,400 y
+  //     lo que va a llegar son $41,266.67. Sin esa resta, la antigüedad de
+  //     saldos prometía cobrar un dinero que nunca iba a llegar.
+  //   · Café del Puerto tiene una **nota de crédito**: se canceló media
+  //     factura sin borrar el documento y sin mover un peso.
+  //   · Escuela Pitágoras pagó un **anticipo**: el dinero ya entró y todavía
+  //     no hay factura que lo reclame.
+  //   · La iguala de Oficinas Mérida es una **plantilla**: propone y espera.
+  const insertContraparte = db.prepare(
+    `INSERT INTO counterparties (profile_id, name, role, tax_id, note, contact, credit_days, credit_limit_cents)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  )
+  const contraparte = (
+    name: string,
+    role: string,
+    taxId: string,
+    contact: string,
+    creditDays: number | null,
+    limitePesos: number | null,
+  ) =>
+    Number(
+      insertContraparte.run(
+        negocio,
+        name,
+        role,
+        taxId,
+        '',
+        contact,
+        creditDays,
+        limitePesos === null ? null : Math.round(limitePesos * 100),
+      ).lastInsertRowid,
+    )
+
+  const merida = contraparte('Oficinas Mérida', 'cliente', 'OME260101AB1', 'compras@oficinasmerida.mx', 30, 60000)
+  const puerto = contraparte('Café del Puerto', 'cliente', '', 'Sra. Rangel · 999 123 4567', 15, 20000)
+  const pitagoras = contraparte('Escuela Pitágoras', 'cliente', '', 'direccion@pitagoras.edu.mx', 30, null)
+  const espiga = contraparte('Proveedor La Espiga', 'proveedor', 'ESP240315QW9', 'ventas@laespiga.mx', 15, null)
+
+  const insertCentro = db.prepare('INSERT INTO cost_centers (profile_id, name) VALUES (?, ?)')
+  const mostrador = Number(insertCentro.run(negocio, 'Mostrador').lastInsertRowid)
+  const eventos = Number(insertCentro.run(negocio, 'Eventos').lastInsertRowid)
+
+  const insertFactura = db.prepare(
+    `INSERT INTO invoices
+      (profile_id, counterparty_id, direction, folio, concept, issue_date, due_date,
+       subtotal_cents, tax_cents, withheld_tax_cents, withheld_income_cents, cost_center_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  )
+  const factura = (
+    cp: number,
+    direction: 'emitida' | 'recibida',
+    folio: string,
+    concept: string,
+    issue: string,
+    due: string | null,
+    subtotal: number,
+    impuesto: number,
+    retImpuesto = 0,
+    retRenta = 0,
+    centro: number | null = null,
+  ) =>
+    Number(
+      insertFactura.run(
+        negocio, cp, direction, folio, concept, issue, due,
+        subtotal, impuesto, retImpuesto, retRenta, centro,
+      ).lastInsertRowid,
+    )
+
+  // Con retención: $40,000 + $6,400 de impuesto, de los que retienen
+  // $4,266.67 de impuesto y $866.66 de renta. Cobrables: $41,266.67.
+  const fMerida = factura(merida, 'emitida', 'A-118', 'Pedido corporativo julio', '2026-07-10', '2026-08-09', 4000000, 640000, 426667, 86666, eventos)
+  // Cobrada a medias, para que se vea el saldo y el impuesto proporcional.
+  db.prepare(
+    `INSERT INTO transactions
+      (profile_id, account_id, type, amount_cents, date, category_id, note, invoice_id,
+       counterparty_id, cost_center_id, tax_cents)
+     VALUES (?, ?, 'ingreso', ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(negocio, bancoNeg, 2000000, '2026-07-22', nVentas, 'Folio A-118 · abono', fMerida, merida, eventos, 310160)
+
+  // Con nota de crédito: se facturaron $12,000 + IVA y se canceló la mitad.
+  const fPuerto = factura(puerto, 'emitida', 'A-121', 'Pan para evento', '2026-07-18', '2026-08-02', 1200000, 192000, 0, 0, eventos)
+  db.prepare(
+    `INSERT INTO invoice_credit_notes (invoice_id, date, folio, concept, amount_cents)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).run(fPuerto, '2026-07-24', 'NC-7', 'Se canceló la mitad del pedido', 696000)
+
+  factura(pitagoras, 'emitida', 'A-124', 'Desayunos escolares agosto', '2026-07-28', '2026-08-27', 1800000, 288000, 0, 0, mostrador)
+  // Una vencida de hace rato: es la que la lista de cobranza pone hasta arriba,
+  // y sin ninguna así la sección no enseñaría para qué sirve.
+  factura(puerto, 'emitida', 'A-102', 'Pan de mayo', '2026-05-08', '2026-05-23', 300000, 48000, 0, 0, mostrador)
+  factura(espiga, 'recibida', 'E-9012', 'Harina y empaques', '2026-07-12', '2026-07-27', 450000, 72000)
+
+  // El anticipo: Escuela Pitágoras adelantó dinero antes de que hubiera
+  // factura. Ya es ingreso de julio (D14) y no lo reclama ningún documento.
+  db.prepare(
+    `INSERT INTO transactions
+      (profile_id, account_id, type, amount_cents, date, category_id, note, counterparty_id)
+     VALUES (?, ?, 'ingreso', ?, ?, ?, ?, ?)`,
+  ).run(negocio, bancoNeg, 500000, '2026-07-20', nVentas, 'Anticipo para el pedido de agosto', pitagoras)
+
+  // La plantilla: una iguala mensual que propone y espera. Nace en junio y
+  // nadie ha emitido nada, así que deja dos periodos en la bandeja.
+  db.prepare(
+    `INSERT INTO invoice_recurrences
+      (profile_id, counterparty_id, direction, concept, subtotal_cents, tax_cents,
+       withheld_tax_cents, withheld_income_cents, cost_center_id, credit_days,
+       frequency, day_of_month, start_date)
+     VALUES (?, ?, 'emitida', ?, ?, ?, ?, ?, ?, ?, 'mensual', 1, '2026-06-01')`,
+  ).run(negocio, merida, 'Iguala mensual de pan', 800000, 128000, 85333, 17333, eventos, 30)
 
   // ── Deudas y retornos ─────────────────────────────────────────────────
   const insertDebt = db.prepare(
@@ -435,7 +600,8 @@ inTransaction(() => {
   )
 
   console.log(
-    '[finply] Libro demo listo: 2 perfiles, 5 cuentas, quince meses de movimientos, ' +
-      'deudas, inversiones, presupuestos, metas y notas.',
+    '[finply] Libro demo listo: 2 perfiles, 6 cuentas (una tarjeta con su tasa), ' +
+      'quince meses de movimientos, deudas, inversiones, presupuestos, metas, notas, ' +
+      'y facturas con retención, nota de crédito, anticipo y plantilla.',
   )
 })

@@ -2734,3 +2734,53 @@ select.campo-input { cursor: pointer; }
 .muestra-parte.parte-3 { opacity: 0.26; }
 .muestra-parte.parte-debes { background: var(--rojo); }
 .deudas-mini-lista dt { display: flex; align-items: center; }
+
+/* ── Fase 14 · Negocio II ────────────────────────────────────────────────
+   Retenciones, notas de crédito, anticipos, cobranza y lo que cuesta pagar
+   solo el mínimo de la tarjeta. Nada de esto pinta con color a secas: lo
+   vencido lleva además su cifra escrita al lado, y el aviso de límite dice con
+   todas sus letras que es un aviso. */
+
+.cobranza-vencida td:first-child > strong { color: var(--rojo-osc); }
+.cobranza-vencida { background: var(--rojo-tinte); }
+
+.contraparte-sobre-limite { color: var(--rojo-osc); }
+
+/* La lista de anticipos: el monto y el botón de aplicar, juntos a la derecha. */
+.anticipos li { align-items: flex-start; padding: 8px 0; }
+.anticipo-accion {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  white-space: nowrap;
+}
+
+/* El cambio contra el periodo anterior va bajo su cifra, no a un lado: en el
+   estado de resultados la columna de la derecha ya es la cifra. */
+.negocio-delta {
+  display: block;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--tinta-2);
+  margin-top: 2px;
+}
+.negocio-delta.stat-in { color: var(--verde); }
+.negocio-delta-label { color: var(--tinta-2); }
+
+.tarjeta-minimo {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--regla);
+}
+.tarjeta-nunca { color: var(--rojo-osc); }
+
+/* Cuatro acciones por factura no caben en la columna angosta de siempre, y
+   pegadas se leen como una sola palabra ("CobrarAnticipo"). Aquí envuelven con
+   su separación, alineadas a la derecha como el resto de la columna. */
+.facturas-acciones {
+  width: 150px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px 12px;
+}

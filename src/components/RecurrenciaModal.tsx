@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { Account, Category, Frecuencia, Recurrencia, Tag, TxType } from '../../shared/types.ts'
 import { api } from '../api.ts'
-import { fmtDateAnio, fmtMoney, MESES, parseAmount, todayISO } from '../format.ts'
+import { fmtDateAnio, fmtMoney, parseAmount, todayISO } from '../format.ts'
 import { ocurrencias } from '../../shared/recurrencias.ts'
 import { useApp } from '../context.ts'
+import { Cadencia, reglaDesde, type ValoresCadencia } from './Cadencia.tsx'
 import { Modal } from './Modal.tsx'
 
 const TYPES: { id: TxType; label: string }[] = [
@@ -11,29 +12,6 @@ const TYPES: { id: TxType; label: string }[] = [
   { id: 'ingreso', label: 'Ingreso' },
   { id: 'transferencia', label: 'Transferencia' },
 ]
-
-const FRECUENCIAS: { id: Frecuencia; label: string }[] = [
-  { id: 'mensual', label: 'Cada mes' },
-  { id: 'quincenal', label: 'Cada quincena' },
-  { id: 'semanal', label: 'Cada semana' },
-  { id: 'anual', label: 'Cada año' },
-]
-
-const DIAS_SEMANA = [
-  { id: 1, label: 'lunes' },
-  { id: 2, label: 'martes' },
-  { id: 3, label: 'miércoles' },
-  { id: 4, label: 'jueves' },
-  { id: 5, label: 'viernes' },
-  { id: 6, label: 'sábado' },
-  { id: 7, label: 'domingo' },
-]
-
-/** 1–31, con el 31 marcado como "el último" porque en febrero cae el 28. */
-const DIAS_MES = Array.from({ length: 31 }, (_, i) => ({
-  id: i + 1,
-  label: i + 1 === 31 ? 'el último día' : String(i + 1),
-}))
 
 export function RecurrenciaModal({
   recurrencia,
@@ -92,14 +70,14 @@ export function RecurrenciaModal({
     [accounts, recurrencia],
   )
 
-  const regla = {
-    frequency,
-    dayOfMonth: frequency === 'semanal' ? null : dayOfMonth,
-    dayOfMonth2: frequency === 'quincenal' ? dayOfMonth2 : null,
-    monthOfYear: frequency === 'anual' ? monthOfYear : null,
-    weekday: frequency === 'semanal' ? weekday : null,
-    startDate,
-    endDate: endDate || null,
+  const cadencia: ValoresCadencia = { frequency, dayOfMonth, dayOfMonth2, monthOfYear, weekday }
+  const regla = reglaDesde(cadencia, startDate, endDate)
+  const cambiarCadencia = (c: Partial<ValoresCadencia>) => {
+    if (c.frequency !== undefined) setFrequency(c.frequency)
+    if (c.dayOfMonth !== undefined) setDayOfMonth(c.dayOfMonth)
+    if (c.dayOfMonth2 !== undefined) setDayOfMonth2(c.dayOfMonth2)
+    if (c.monthOfYear !== undefined) setMonthOfYear(c.monthOfYear)
+    if (c.weekday !== undefined) setWeekday(c.weekday)
   }
 
   /**
@@ -245,90 +223,7 @@ export function RecurrenciaModal({
           />
         </label>
 
-        <fieldset className="campo campo-fieldset rec-cadencia">
-          <legend className="campo-label">Cada cuándo</legend>
-          <div className="seg seg-4" role="radiogroup" aria-label="Periodicidad">
-            {FRECUENCIAS.map((f) => (
-              <button
-                key={f.id}
-                type="button"
-                role="radio"
-                aria-checked={frequency === f.id}
-                className={`seg-item${frequency === f.id ? ' activa' : ''}`}
-                onClick={() => setFrequency(f.id)}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="campos-2 rec-dias">
-            {frequency === 'semanal' && (
-              <label className="campo">
-                <span className="campo-label">Día de la semana</span>
-                <select
-                  className="campo-input"
-                  value={weekday}
-                  onChange={(e) => setWeekday(Number(e.target.value))}
-                >
-                  {DIAS_SEMANA.map((d) => (
-                    <option key={d.id} value={d.id}>{d.label}</option>
-                  ))}
-                </select>
-              </label>
-            )}
-
-            {frequency === 'anual' && (
-              <label className="campo">
-                <span className="campo-label">Mes</span>
-                <select
-                  className="campo-input"
-                  value={monthOfYear}
-                  onChange={(e) => setMonthOfYear(Number(e.target.value))}
-                >
-                  {MESES.map((m, i) => (
-                    <option key={m} value={i + 1}>{m}</option>
-                  ))}
-                </select>
-              </label>
-            )}
-
-            {frequency !== 'semanal' && (
-              <label className="campo">
-                <span className="campo-label">
-                  {frequency === 'quincenal' ? 'Primera quincena' : 'Día del mes'}
-                </span>
-                <select
-                  className="campo-input"
-                  value={dayOfMonth}
-                  onChange={(e) => setDayOfMonth(Number(e.target.value))}
-                >
-                  {DIAS_MES.map((d) => (
-                    <option key={d.id} value={d.id}>{d.label}</option>
-                  ))}
-                </select>
-              </label>
-            )}
-
-            {frequency === 'quincenal' && (
-              <label className="campo">
-                <span className="campo-label">Segunda quincena</span>
-                <select
-                  className="campo-input"
-                  value={dayOfMonth2}
-                  onChange={(e) => setDayOfMonth2(Number(e.target.value))}
-                >
-                  {DIAS_MES.map((d) => (
-                    <option key={d.id} value={d.id}>{d.label}</option>
-                  ))}
-                </select>
-              </label>
-            )}
-          </div>
-          <p className="forma-nota rec-nota-dia">
-            El día 31 cae el último de cada mes: en febrero, el 28.
-          </p>
-        </fieldset>
+        <Cadencia valores={cadencia} onChange={cambiarCadencia} />
 
         <div className="campos-2">
           <label className="campo">

@@ -80,6 +80,14 @@ export const accountInput = z.object({
   minBalanceCents: z.number().int().nullish(),
   institution: z.string().trim().max(60).default(''),
   sortOrder: z.number().int().min(-999).max(999).default(0),
+  // Lo que de verdad cuesta la tarjeta (Fase 14). Los tres los copia el
+  // usuario de su contrato: Finply no supone la tasa ni el mínimo de ningún
+  // banco (R15). El tope de 200 % anual deja pasar cualquier tarjeta real y
+  // ataja un dedazo de un cero.
+  annualRateBp: z.number().int().min(0).max(2_000_000, 'Esa tasa no es de una tarjeta').nullish(),
+  /** Porcentaje del saldo que exige el pago mínimo, en puntos base. */
+  minPaymentBp: z.number().int().min(0).max(10_000, 'El mínimo no puede pasar del 100 %').nullish(),
+  minPaymentFloorCents: z.number().int().nonnegative().nullish(),
 })
 
 export const accountPatch = accountInput.omit({ profileId: true }).partial().extend({
@@ -616,6 +624,11 @@ export const contraparteInput = z.object({
   // Europa, o vacío. Finply no valida el formato de ningún país.
   taxId: z.string().trim().max(40).default(''),
   note: z.string().trim().max(200).default(''),
+  /** Correo, teléfono o a quién buscar. Libre por lo mismo que `taxId`. */
+  contact: z.string().trim().max(120).default(''),
+  /** Días de crédito por omisión. `null` explícito los quita. */
+  creditDays: z.number().int().min(0).max(365, 'Eso ya no es crédito comercial').nullish(),
+  creditLimitCents: z.number().int().nonnegative('El límite no puede ser negativo').nullish(),
 })
 
 export const contrapartePatch = contraparteInput
@@ -643,6 +656,11 @@ export const facturaInput = z.object({
   dueDate: isoDate.nullish(),
   subtotalCents: z.number().int().positive('El subtotal debe ser mayor a cero'),
   taxCents: z.number().int().min(0).default(0),
+  // Retenciones (D21): **monto y no tasa**, igual que el impuesto, para no
+  // amarrar el modelo a ninguna jurisdicción. Son dos porque así vienen
+  // desglosadas en la factura que el usuario tiene enfrente.
+  withheldTaxCents: z.number().int().min(0).default(0),
+  withheldIncomeCents: z.number().int().min(0).default(0),
   costCenterId: z.number().int().positive().nullish(),
 })
 
@@ -650,6 +668,64 @@ export const facturaPatch = facturaInput
   .omit({ profileId: true, direction: true })
   .partial()
   .extend({ status: z.enum(['abierta', 'cancelada']).optional() })
+
+/**
+ * Una nota de crédito: cancela parte de una factura ya emitida. **No mueve
+ * dinero** —por eso no lleva cuenta— y por eso tampoco lleva impuesto: lo que
+ * baja es lo cobrable completo, con su parte de IVA adentro.
+ */
+export const notaCreditoInput = z.object({
+  date: isoDate,
+  folio: z.string().trim().max(40).default(''),
+  concept: z.string().trim().max(200).default(''),
+  amountCents: z.number().int().positive('La nota de crédito debe ser mayor a cero'),
+})
+
+/** Aplicar un anticipo: liga un movimiento que ya existe a esta factura. */
+export const anticipoInput = z.object({
+  txId: z.number().int().positive(),
+})
+
+export const facturaRecurrenteInput = z
+  .object({
+    profileId: z.number().int().positive(),
+    counterpartyId: z.number().int().positive(),
+    direction: z.enum(['emitida', 'recibida']),
+    concept: z.string().trim().max(200).default(''),
+    subtotalCents: z.number().int().positive('El subtotal debe ser mayor a cero'),
+    taxCents: z.number().int().min(0).default(0),
+    withheldTaxCents: z.number().int().min(0).default(0),
+    withheldIncomeCents: z.number().int().min(0).default(0),
+    costCenterId: z.number().int().positive().nullish(),
+    creditDays: z.number().int().min(0).max(365).nullish(),
+    frequency: z.enum(['mensual', 'quincenal', 'semanal', 'anual']),
+    dayOfMonth: diaDelMes.nullish(),
+    dayOfMonth2: diaDelMes.nullish(),
+    monthOfYear: z.number().int().min(1, 'Mes inválido').max(12, 'Mes inválido').nullish(),
+    weekday: z.number().int().min(1, 'Día de la semana inválido').max(7, 'Día de la semana inválido').nullish(),
+    startDate: isoDate,
+    endDate: isoDate.nullish(),
+    archived: z.boolean().default(false),
+  })
+  .superRefine((r, ctx) => {
+    if (r.endDate && r.endDate < r.startDate) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'La fecha de fin es anterior a la de inicio' })
+    }
+    if (r.frequency === 'quincenal' && r.dayOfMonth && r.dayOfMonth2 === r.dayOfMonth) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Las dos quincenas no pueden caer el mismo día' })
+    }
+  })
+
+/** Ajustes de **esta** factura, que no tocan la plantilla. */
+export const emitirFacturaInput = z.object({
+  periodo,
+  issueDate: isoDate.optional(),
+  dueDate: isoDate.nullish(),
+  folio: z.string().trim().max(40).optional(),
+  concept: z.string().trim().max(200).optional(),
+  subtotalCents: z.number().int().positive('El subtotal debe ser mayor a cero').optional(),
+  taxCents: z.number().int().min(0).optional(),
+})
 
 export const facturaQuery = z.object({
   profileId: z.coerce.number().int().positive(),

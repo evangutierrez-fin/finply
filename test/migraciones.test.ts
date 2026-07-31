@@ -530,6 +530,65 @@ describe('migraciones', () => {
     db.close()
   })
 
+  test('un libro con facturas llega a la 17 sin que cambie una sola cifra', () => {
+    const db = baseEnVersion(16)
+    // Lo que ese libro ya tenía: un cliente, una factura y su cobro parcial.
+    db.exec(`
+      INSERT INTO counterparties (id, profile_id, name) VALUES (1, 1, 'Oficinas Mérida');
+      INSERT INTO invoices (id, profile_id, counterparty_id, direction, folio, issue_date,
+        subtotal_cents, tax_cents)
+        VALUES (1, 1, 1, 'emitida', 'A-1', '2026-07-01', 100000, 16000);
+      INSERT INTO transactions (id, profile_id, account_id, type, amount_cents, date, invoice_id)
+        VALUES (5, 1, 1, 'ingreso', 40000, '2026-07-15', 1);
+    `)
+
+    migrate(db)
+
+    assert.equal((db.prepare('PRAGMA user_version').get() as any).user_version, SCHEMA_VERSION)
+
+    // Las retenciones nacen en cero, así que lo cobrable sigue siendo el total
+    // y esa factura debe exactamente lo mismo que ayer: $760.00 de $1,160.00.
+    const factura = db.prepare('SELECT * FROM invoices WHERE id = 1').get() as any
+    assert.equal(factura.withheld_tax_cents, 0)
+    assert.equal(factura.withheld_income_cents, 0)
+    assert.equal(
+      factura.subtotal_cents + factura.tax_cents - factura.withheld_tax_cents - factura.withheld_income_cents - 40000,
+      76000,
+    )
+
+    // Nadie hereda notas de crédito ni plantillas que no pidió.
+    for (const tabla of ['invoice_credit_notes', 'invoice_recurrences', 'invoice_recurrence_runs']) {
+      assert.equal((db.prepare(`SELECT COUNT(*) AS n FROM ${tabla}`).get() as any).n, 0, tabla)
+    }
+    // Y la tarjeta sigue sin tasa: sin ella Finply calla en vez de suponerla.
+    const cuenta = db.prepare('SELECT * FROM accounts WHERE id = 1').get() as any
+    assert.equal(cuenta.annual_rate_bp, null)
+    assert.equal(cuenta.min_payment_bp, null)
+    assert.equal(cuenta.min_payment_floor_cents, null)
+    assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0)
+    db.close()
+  })
+
+  test('una nota de crédito no puede existir sin su factura', () => {
+    const db = baseEnVersion(16)
+    migrate(db)
+    db.exec(`
+      INSERT INTO counterparties (id, profile_id, name) VALUES (1, 1, 'Cliente');
+      INSERT INTO invoices (id, profile_id, counterparty_id, direction, issue_date, subtotal_cents)
+        VALUES (1, 1, 1, 'emitida', '2026-07-01', 100000);
+      INSERT INTO invoice_credit_notes (invoice_id, date, amount_cents) VALUES (1, '2026-07-05', 20000);
+    `)
+    // Cancelar en negativo sería subir la factura por la puerta de atrás.
+    assert.throws(
+      () => db.exec("INSERT INTO invoice_credit_notes (invoice_id, date, amount_cents) VALUES (1, '2026-07-06', -1)"),
+      /CHECK/,
+    )
+    // Y la nota se va con su factura: no es un documento independiente.
+    db.exec('DELETE FROM invoices WHERE id = 1')
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM invoice_credit_notes').get() as any).n, 0)
+    db.close()
+  })
+
   test('una base de una versión más nueva no se toca', () => {
     const db = baseVieja()
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`)

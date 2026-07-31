@@ -18,8 +18,14 @@ import {
   MONTO_OPERATIVO,
   TIPO_OPERATIVO,
 } from './reportes.ts'
+import { diasEntre, finDeMes, sumarDias } from '../shared/fechas.ts'
 import { margenContribucion, puntoDeEquilibrio } from '../shared/negocio.ts'
-import type { EstadoResultados, RenglonResultados } from '../shared/types.ts'
+import type {
+  EstadoResultados,
+  PeriodoPrevio,
+  RenglonRentabilidad,
+  RenglonResultados,
+} from '../shared/types.ts'
 
 /** Gasto del periodo por categoría, con el papel que el usuario le asignó. */
 function gastoPorRol(profileId: number, desde: string, hasta: string) {
@@ -40,6 +46,95 @@ function gastoPorRol(profileId: number, desde: string, hasta: string) {
     role: string | null
     monto: number
   }[]
+}
+
+/**
+ * Ingresos y gastos de un periodo, en una sola consulta. Sirve para el periodo
+ * anterior, donde no hace falta el desglose: lo único que se quiere saber es
+ * si este mes fue mejor o peor que el pasado.
+ */
+function totalesDe(profileId: number, desde: string, hasta: string) {
+  const fila: any = db
+    .prepare(
+      `SELECT
+        COALESCE(SUM(CASE WHEN ${TIPO_OPERATIVO} = 'ingreso' THEN ${MONTO_OPERATIVO} END), 0) AS ingresos,
+        COALESCE(SUM(CASE WHEN ${TIPO_OPERATIVO} = 'gasto' THEN ${MONTO_OPERATIVO} END), 0) AS gastos
+       ${DESDE_MOVIMIENTOS}
+       WHERE t.profile_id = ? AND t.type IN ('ingreso', 'gasto') AND t.date BETWEEN ? AND ?`,
+    )
+    .get(profileId, desde, hasta)
+  return { ingresos: fila.ingresos as number, gastos: fila.gastos as number }
+}
+
+/**
+ * El periodo anterior, con dos reglas y en este orden:
+ *
+ *   · si el periodo es **un mes completo**, se compara contra el mes anterior
+ *     completo, aunque uno tenga treinta y uno y el otro treinta;
+ *   · si no, contra los mismos días de antes: una quincena contra la quincena
+ *     anterior, siete días contra los siete previos.
+ *
+ * La primera regla es el caso normal —la vista siempre pide un mes— y el
+ * atajo aritmético daría ahí una ventana absurda: los "31 días antes del 1 de
+ * julio" empiezan el 31 de mayo, y nadie compara julio contra "31 may – 30
+ * jun". La segunda existe porque el periodo lo escoge el usuario y puede no
+ * ser un mes.
+ *
+ * En los dos casos la vista **escribe las fechas que usó**: comparar contra un
+ * periodo que el lector no puede nombrar sería una cifra sin respaldo.
+ */
+function periodoPrevio(profileId: number, desde: string, hasta: string): PeriodoPrevio {
+  // El anterior siempre termina la víspera; lo que cambia es dónde empieza.
+  const previoHasta = sumarDias(desde, -1)
+  const mesCompleto = desde.endsWith('-01') && hasta === finDeMes(desde)
+  const previoDesde = mesCompleto
+    ? `${previoHasta.slice(0, 7)}-01`
+    : sumarDias(desde, -(diasEntre(desde, hasta) + 1))
+  const { ingresos, gastos } = totalesDe(profileId, previoDesde, previoHasta)
+  return {
+    desde: previoDesde,
+    hasta: previoHasta,
+    ingresosCents: ingresos,
+    gastoTotalCents: gastos,
+    utilidadCents: ingresos - gastos,
+  }
+}
+
+/** Ingresos, gasto atribuido y margen. La aritmética es la misma para las dos. */
+function rentabilidad(id: number | null, name: string, ingresos: number, gastos: number): RenglonRentabilidad {
+  return {
+    id,
+    name,
+    ingresosCents: ingresos,
+    gastoCents: gastos,
+    margenCents: ingresos - gastos,
+    // Sin ingresos no hay porcentaje que expresar: es la misma regla que el
+    // margen bruto. Un cliente que solo trajo gastos no tiene "−100 %", tiene
+    // una pregunta mal planteada.
+    margenPct: ingresos > 0 ? (ingresos - gastos) / ingresos : null,
+  }
+}
+
+/**
+ * Qué deja cada cliente. Ojo con lo que esto **no** puede saber: el costo de
+ * un gasto solo se le atribuye a alguien si el usuario le puso contraparte, y
+ * la contraparte de un gasto suele ser el proveedor, no el cliente. Lo que
+ * quede sin atribuir **no se reparte a ojo** entre los clientes — es la misma
+ * regla que ya rige a las categorías sin papel, y por la misma razón: repartir
+ * a ojo movería una cifra sin que nadie lo haya dicho.
+ */
+function porCliente(profileId: number, desde: string, hasta: string) {
+  return db
+    .prepare(
+      `SELECT cp.id AS id, cp.name AS name,
+        COALESCE(SUM(CASE WHEN ${TIPO_OPERATIVO} = 'ingreso' THEN ${MONTO_OPERATIVO} END), 0) AS ingresos,
+        COALESCE(SUM(CASE WHEN ${TIPO_OPERATIVO} = 'gasto' THEN ${MONTO_OPERATIVO} END), 0) AS gastos
+       ${DESDE_MOVIMIENTOS}
+       LEFT JOIN counterparties cp ON cp.id = t.counterparty_id
+       WHERE t.profile_id = ? AND t.type IN ('ingreso', 'gasto') AND t.date BETWEEN ? AND ?
+       GROUP BY cp.id`,
+    )
+    .all(profileId, desde, hasta) as { id: number | null; name: string | null; ingresos: number; gastos: number }[]
 }
 
 /**
@@ -117,6 +212,9 @@ export function estadoDeResultados(
     )
     .all(profileId, desde, hasta) as any[]
 
+  const clientes = porCliente(profileId, desde, hasta)
+  const sinContraparte = clientes.find((c) => c.id === null)
+
   return {
     desde,
     hasta,
@@ -135,12 +233,18 @@ export function estadoDeResultados(
     impuestoAcreditableCents: impuestos.acreditable as number,
     deducibleCents: gastos.deducible as number,
     detalle,
-    porCentro: porCentro.map((c) => ({
-      id: c.id ?? null,
-      name: c.name ?? 'Sin asignar',
-      ingresosCents: c.ingresos,
-      gastoCents: c.gastos,
-    })),
+    porCentro: porCentro.map((c) =>
+      rentabilidad(c.id ?? null, c.name ?? 'Sin asignar', c.ingresos, c.gastos),
+    ),
+    // El renglón sin contraparte sale de la lista: no es un cliente, es lo que
+    // nadie atribuyó. Va aparte, con su nombre, para que la vista pueda decir
+    // cuánto del periodo no cabe en esta tabla.
+    porCliente: clientes
+      .filter((c) => c.id !== null)
+      .map((c) => rentabilidad(c.id, c.name ?? '', c.ingresos, c.gastos))
+      .sort((a, b) => b.margenCents - a.margenCents || a.name.localeCompare(b.name)),
+    gastoSinContraparteCents: sinContraparte?.gastos ?? 0,
+    previo: periodoPrevio(profileId, desde, hasta),
     puntoEquilibrioCents: puntoDeEquilibrio(
       ingresosCents,
       costoVentaCents,

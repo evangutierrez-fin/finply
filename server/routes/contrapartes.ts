@@ -1,30 +1,38 @@
 import { Router } from 'express'
 import { db, inTransaction } from '../db.ts'
+import { SALDO_FACTURA } from '../facturas.ts'
 import { contraparteInput, contrapartePatch } from '../validators.ts'
+import type { Contraparte } from '../../shared/types.ts'
 
 const router = Router()
 
-// Los saldos salen del mismo SQL que las facturas: total menos lo cobrado,
-// contado contra los movimientos ligados. Una columna `saldo` guardada aquí
-// envejecería en cuanto alguien anule un cobro.
+// Los saldos salen del mismo SQL que las facturas —`SALDO_FACTURA`, importado
+// y no copiado— contra los movimientos ligados. Una columna `saldo` guardada
+// aquí envejecería en cuanto alguien anule un cobro, y una copia del SQL
+// envejecería en cuanto lo cobrable cambie de definición, que es justo lo que
+// pasó con las retenciones.
 const SELECT = `
   SELECT c.*,
     (SELECT COUNT(*) FROM transactions t WHERE t.counterparty_id = c.id) AS tx_count,
     (SELECT COUNT(*) FROM invoices f WHERE f.counterparty_id = c.id) AS invoice_count,
-    COALESCE((SELECT SUM(MAX(0, f.subtotal_cents + f.tax_cents
-      - COALESCE((SELECT SUM(t.amount_cents) FROM transactions t WHERE t.invoice_id = f.id), 0)))
+    COALESCE((SELECT SUM(${SALDO_FACTURA})
       FROM invoices f
       WHERE f.counterparty_id = c.id AND f.status = 'abierta' AND f.direction = 'emitida'), 0)
       AS por_cobrar,
-    COALESCE((SELECT SUM(MAX(0, f.subtotal_cents + f.tax_cents
-      - COALESCE((SELECT SUM(t.amount_cents) FROM transactions t WHERE t.invoice_id = f.id), 0)))
+    COALESCE((SELECT SUM(${SALDO_FACTURA})
       FROM invoices f
       WHERE f.counterparty_id = c.id AND f.status = 'abierta' AND f.direction = 'recibida'), 0)
-      AS por_pagar
+      AS por_pagar,
+    COALESCE((SELECT SUM(t.amount_cents) FROM transactions t
+      WHERE t.counterparty_id = c.id AND t.type = 'ingreso' AND t.invoice_id IS NULL
+        AND t.debt_id IS NULL AND t.investment_entry_id IS NULL AND t.goal_entry_id IS NULL), 0)
+      AS anticipos
   FROM counterparties c
 `
 
-function mapContraparte(row: any) {
+function mapContraparte(row: any): Contraparte {
+  const porCobrarCents = row.por_cobrar ?? 0
+  const creditLimitCents = row.credit_limit_cents ?? null
   return {
     id: row.id,
     profileId: row.profile_id,
@@ -32,11 +40,18 @@ function mapContraparte(row: any) {
     role: row.role,
     taxId: row.tax_id,
     note: row.note,
+    contact: row.contact ?? '',
+    creditDays: row.credit_days ?? null,
+    creditLimitCents,
     archived: row.archived === 1,
     txCount: row.tx_count ?? 0,
     invoiceCount: row.invoice_count ?? 0,
-    porCobrarCents: row.por_cobrar ?? 0,
+    porCobrarCents,
     porPagarCents: row.por_pagar ?? 0,
+    anticiposCents: row.anticipos ?? 0,
+    // Derivado, como todo lo demás de aquí: subir el límite deja de avisar sin
+    // que nadie tenga que recalcular una bandera.
+    sobreLimite: creditLimitCents !== null && porCobrarCents > creditLimitCents,
   }
 }
 
@@ -59,9 +74,20 @@ router.post('/', (req, res) => {
   if (existe) return res.status(409).json({ error: 'Ya hay una contraparte con ese nombre' })
   const result = db
     .prepare(
-      'INSERT INTO counterparties (profile_id, name, role, tax_id, note) VALUES (?, ?, ?, ?, ?)',
+      `INSERT INTO counterparties
+        (profile_id, name, role, tax_id, note, contact, credit_days, credit_limit_cents)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run(input.profileId, input.name, input.role, input.taxId, input.note)
+    .run(
+      input.profileId,
+      input.name,
+      input.role,
+      input.taxId,
+      input.note,
+      input.contact,
+      input.creditDays ?? null,
+      input.creditLimitCents ?? null,
+    )
   res.status(201).json(mapContraparte(db.prepare(`${SELECT} WHERE c.id = ?`).get(result.lastInsertRowid)))
 })
 
@@ -76,13 +102,20 @@ router.patch('/:id', (req, res) => {
       .get(existing.profile_id, input.name, id)
     if (choque) return res.status(409).json({ error: 'Ya hay una contraparte con ese nombre' })
   }
+  // `null` explícito borra el dato; ausente lo deja como estaba. Es el mismo
+  // trato que reciben el corte y el límite de una tarjeta.
   db.prepare(
-    'UPDATE counterparties SET name = ?, role = ?, tax_id = ?, note = ?, archived = ? WHERE id = ?',
+    `UPDATE counterparties SET name = ?, role = ?, tax_id = ?, note = ?, contact = ?,
+       credit_days = ?, credit_limit_cents = ?, archived = ?
+     WHERE id = ?`,
   ).run(
     input.name ?? existing.name,
     input.role ?? existing.role,
     input.taxId ?? existing.tax_id,
     input.note ?? existing.note,
+    input.contact ?? existing.contact,
+    input.creditDays === undefined ? existing.credit_days : input.creditDays,
+    input.creditLimitCents === undefined ? existing.credit_limit_cents : input.creditLimitCents,
     input.archived === undefined ? existing.archived : input.archived ? 1 : 0,
     id,
   )

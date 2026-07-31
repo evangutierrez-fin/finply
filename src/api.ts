@@ -5,6 +5,7 @@ import type {
   InvestmentEntryType, LoteImport, MapeoImport, ModuloId, Note, Profile, Recurrencia, ReporteAnual,
   ResultadoImport, RolCategoria, Simulacion, Summary, Tag, Tx, TxAttachment, TxType,
   Bien, BienKind, CorteConciliacion, SerieCuenta, PresupuestoMes, TopeTotal,
+  Anticipo, BandejaFacturas, Cobranza, FacturaRecurrente,
 } from '../shared/types.ts'
 
 /** Error de la API que conserva el código y el cuerpo, para poder reaccionar. */
@@ -440,10 +441,29 @@ export const api = {
   },
   contrapartes: {
     list: (profileId: number) => req<Contraparte[]>(`/api/contrapartes?profileId=${profileId}`),
-    create: (data: { profileId: number; name: string; role?: string; taxId?: string; note?: string }) =>
-      req<Contraparte>('/api/contrapartes', { method: 'POST', body: JSON.stringify(data) }),
-    update: (id: number, data: Partial<{ name: string; role: string; taxId: string; note: string; archived: boolean }>) =>
-      req<Contraparte>(`/api/contrapartes/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    create: (data: {
+      profileId: number
+      name: string
+      role?: string
+      taxId?: string
+      note?: string
+      contact?: string
+      creditDays?: number | null
+      creditLimitCents?: number | null
+    }) => req<Contraparte>('/api/contrapartes', { method: 'POST', body: JSON.stringify(data) }),
+    update: (
+      id: number,
+      data: Partial<{
+        name: string
+        role: string
+        taxId: string
+        note: string
+        contact: string
+        creditDays: number | null
+        creditLimitCents: number | null
+        archived: boolean
+      }>,
+    ) => req<Contraparte>(`/api/contrapartes/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     remove: (id: number) => req<{ ok: true }>(`/api/contrapartes/${id}`, { method: 'DELETE' }),
   },
   centros: {
@@ -462,6 +482,7 @@ export const api = {
       return req<Factura[]>(`/api/facturas?${q}`)
     },
     aging: (profileId: number) => req<Aging>(`/api/facturas/aging?profileId=${profileId}`),
+    cobranza: (profileId: number) => req<Cobranza>(`/api/facturas/cobranza?profileId=${profileId}`),
     create: (data: {
       profileId: number
       counterpartyId: number
@@ -472,6 +493,8 @@ export const api = {
       dueDate?: string | null
       subtotalCents: number
       taxCents?: number
+      withheldTaxCents?: number
+      withheldIncomeCents?: number
       costCenterId?: number | null
     }) => req<Factura>('/api/facturas', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: number, data: Record<string, unknown>) =>
@@ -481,6 +504,40 @@ export const api = {
       id: number,
       data: { accountId: number; amountCents: number; date: string; note?: string; categoryId?: number | null },
     ) => req<Factura>(`/api/facturas/${id}/cobros`, { method: 'POST', body: JSON.stringify(data) }),
+    /** Cancelar parte de una factura. No mueve dinero: baja lo cobrable. */
+    nota: (id: number, data: { date: string; folio?: string; concept?: string; amountCents: number }) =>
+      req<Factura>(`/api/facturas/${id}/notas`, { method: 'POST', body: JSON.stringify(data) }),
+    quitarNota: (id: number, notaId: number) =>
+      req<Factura>(`/api/facturas/${id}/notas/${notaId}`, { method: 'DELETE' }),
+    anticipos: (id: number) => req<Anticipo[]>(`/api/facturas/${id}/anticipos`),
+    /** Liga un cobro que ya existía. No crea un movimiento nuevo. */
+    aplicarAnticipo: (id: number, txId: number) =>
+      req<Factura>(`/api/facturas/${id}/anticipos`, { method: 'POST', body: JSON.stringify({ txId }) }),
+    recurrentes: {
+      list: (profileId: number) =>
+        req<FacturaRecurrente[]>(`/api/facturas/recurrentes?profileId=${profileId}`),
+      pendientes: (profileId: number) =>
+        req<BandejaFacturas>(`/api/facturas/recurrentes/pendientes?profileId=${profileId}`),
+      create: (data: Record<string, unknown>) =>
+        req<FacturaRecurrente>('/api/facturas/recurrentes', { method: 'POST', body: JSON.stringify(data) }),
+      update: (id: number, data: Record<string, unknown>) =>
+        req<FacturaRecurrente>(`/api/facturas/recurrentes/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+      remove: (profileId: number, id: number) =>
+        req<{ ok: true; emitidas: number }>(
+          `/api/facturas/recurrentes/${id}?profileId=${profileId}`,
+          { method: 'DELETE' },
+        ),
+      emitir: (profileId: number, id: number, data: { periodo: string } & Record<string, unknown>) =>
+        req<Factura>(`/api/facturas/recurrentes/${id}/emitir?profileId=${profileId}`, {
+          method: 'POST',
+          body: JSON.stringify(data),
+        }),
+      descartar: (profileId: number, id: number, periodo: string) =>
+        req<{ ok: true }>(`/api/facturas/recurrentes/${id}/descartar?profileId=${profileId}`, {
+          method: 'POST',
+          body: JSON.stringify({ periodo }),
+        }),
+    },
   },
   negocio: {
     resultados: (profileId: number, desde: string, hasta: string) =>

@@ -8,14 +8,26 @@ const router = Router()
 /** Límite y días de corte/pago solo tienen sentido en una tarjeta. */
 function ensureSoloTarjeta(
   type: string,
-  input: { creditLimitCents?: number | null; cutDay?: number | null; dueDay?: number | null },
+  input: {
+    creditLimitCents?: number | null
+    cutDay?: number | null
+    dueDay?: number | null
+    annualRateBp?: number | null
+    minPaymentBp?: number | null
+    minPaymentFloorCents?: number | null
+  },
 ): void {
   if (type === 'tarjeta') return
-  const trae = [input.creditLimitCents, input.cutDay, input.dueDay].some(
-    (v) => v !== undefined && v !== null,
-  )
+  const trae = [
+    input.creditLimitCents,
+    input.cutDay,
+    input.dueDay,
+    input.annualRateBp,
+    input.minPaymentBp,
+    input.minPaymentFloorCents,
+  ].some((v) => v !== undefined && v !== null)
   if (trae) {
-    throw httpError(400, 'El límite y los días de corte y pago son solo de una tarjeta')
+    throw httpError(400, 'El límite, los días de corte y pago y el costo del crédito son solo de una tarjeta')
   }
 }
 
@@ -34,8 +46,9 @@ router.post('/', (req, res) => {
     .prepare(
       `INSERT INTO accounts
         (profile_id, name, type, currency, opening_cents, credit_limit_cents, cut_day, due_day,
-         min_balance_cents, institution, sort_order)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         min_balance_cents, institution, sort_order,
+         annual_rate_bp, min_payment_bp, min_payment_floor_cents)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       input.profileId,
@@ -49,6 +62,9 @@ router.post('/', (req, res) => {
       input.minBalanceCents ?? null,
       input.institution,
       input.sortOrder,
+      input.annualRateBp ?? null,
+      input.minPaymentBp ?? null,
+      input.minPaymentFloorCents ?? null,
     )
   const rows = accountsWithBalance(input.profileId).map(mapAccount)
   const created = rows.find((a) => a.id === Number(result.lastInsertRowid))
@@ -75,13 +91,22 @@ router.patch('/:id', (req, res) => {
               : input.creditLimitCents,
           corte: input.cutDay === undefined ? existing.cut_day : input.cutDay,
           pago: input.dueDay === undefined ? existing.due_day : input.dueDay,
+          // Lo que cuesta la tarjeta se va con el tipo por lo mismo: una tasa
+          // de interés en una cuenta de ahorro no significa nada aquí.
+          tasa: input.annualRateBp === undefined ? existing.annual_rate_bp : input.annualRateBp,
+          minimo: input.minPaymentBp === undefined ? existing.min_payment_bp : input.minPaymentBp,
+          piso:
+            input.minPaymentFloorCents === undefined
+              ? existing.min_payment_floor_cents
+              : input.minPaymentFloorCents,
         }
-      : { limite: null, corte: null, pago: null }
+      : { limite: null, corte: null, pago: null, tasa: null, minimo: null, piso: null }
 
   db.prepare(
     `UPDATE accounts SET name = ?, type = ?, currency = ?, opening_cents = ?, archived = ?,
       credit_limit_cents = ?, cut_day = ?, due_day = ?,
-      min_balance_cents = ?, institution = ?, sort_order = ? WHERE id = ?`,
+      min_balance_cents = ?, institution = ?, sort_order = ?,
+      annual_rate_bp = ?, min_payment_bp = ?, min_payment_floor_cents = ? WHERE id = ?`,
   ).run(
     input.name ?? existing.name,
     type,
@@ -94,6 +119,9 @@ router.patch('/:id', (req, res) => {
     input.minBalanceCents === undefined ? existing.min_balance_cents : input.minBalanceCents,
     input.institution ?? existing.institution,
     input.sortOrder ?? existing.sort_order,
+    credito.tasa,
+    credito.minimo,
+    credito.piso,
     id,
   )
   const rows = accountsWithBalance(existing.profile_id).map(mapAccount)
