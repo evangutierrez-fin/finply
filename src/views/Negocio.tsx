@@ -4,13 +4,8 @@ import { useApp } from '../context.ts'
 import { useFetch } from '../hooks.ts'
 import { fmtDate, fmtMoney, currentMonth, shiftMonth, monthLabel } from '../format.ts'
 import { Money } from '../components/Money.tsx'
+import type { View } from '../components/Sidebar.tsx'
 import type { EstadoResultados, RenglonResultados } from '../../shared/types.ts'
-
-const VENTANAS = [
-  { dias: 30, label: '30 días' },
-  { dias: 60, label: '60 días' },
-  { dias: 90, label: '90 días' },
-]
 
 /** Primer y último día de un mes 'AAAA-MM'. */
 function limites(month: string): { desde: string; hasta: string } {
@@ -79,19 +74,14 @@ function Resultados({ datos }: { datos: EstadoResultados }) {
   )
 }
 
-export function Negocio() {
+export function Negocio({ onNav }: { onNav: (view: View) => void }) {
   const { profile, refreshKey } = useApp()
   const [mes, setMes] = useState(currentMonth())
-  const [dias, setDias] = useState(30)
   const { desde, hasta } = limites(mes)
 
   const { data: r, error } = useFetch(
     () => api.negocio.resultados(profile.id, desde, hasta),
     [profile.id, desde, hasta, refreshKey],
-  )
-  const { data: flujo } = useFetch(
-    () => api.negocio.flujo(profile.id, dias),
-    [profile.id, dias, refreshKey],
   )
 
   return (
@@ -210,80 +200,24 @@ export function Negocio() {
         </>
       )}
 
-      {flujo && (
-        <section className="hoja">
-          <header className="ruta-head">
-            <h2 className="hoja-titulo">Flujo de caja proyectado</h2>
-            <div className="seg seg-chico" role="radiogroup" aria-label="Horizonte">
-              {VENTANAS.map((v) => (
-                <button
-                  key={v.dias}
-                  type="button"
-                  role="radio"
-                  aria-checked={dias === v.dias}
-                  className={`seg-item${dias === v.dias ? ' activa' : ''}`}
-                  onClick={() => setDias(v.dias)}
-                >
-                  {v.label}
-                </button>
-              ))}
-            </div>
-          </header>
-          <dl className="hero-stats">
-            <div className="stat">
-              <dt>Caja hoy</dt>
-              <dd><Money cents={flujo.saldoInicialCents} /></dd>
-            </div>
-            <div className="stat">
-              <dt>Va a entrar</dt>
-              <dd><span className="stat-in"><Money cents={flujo.entradasCents} /></span></dd>
-            </div>
-            <div className="stat">
-              <dt>Va a salir</dt>
-              <dd><Money cents={flujo.salidasCents} /></dd>
-            </div>
-            <div className="stat stat-neto">
-              <dt>Caja en {dias} días</dt>
-              <dd>
-                <span className={flujo.saldoFinalCents >= 0 ? '' : 'stat-rojo'}>
-                  <Money cents={flujo.saldoFinalCents} />
-                </span>
-              </dd>
-            </div>
-          </dl>
-
-          {flujo.primerDiaEnRojo && (
-            <p className="aviso" role="alert">
-              Con lo que ya está comprometido, la caja se quedaría en números rojos el{' '}
-              <strong>{fmtDate(flujo.primerDiaEnRojo)}</strong>.
-            </p>
-          )}
-
-          {flujo.eventos.length === 0 ? (
-            <p className="grafica-vacia">No hay nada comprometido en esta ventana.</p>
-          ) : (
-            <ul className="lista-simple">
-              {flujo.eventos.map((e, i) => (
-                <li key={`${e.tipo}-${e.refId}-${i}`}>
-                  <span>
-                    <span className="abono-fecha">{fmtDate(e.fecha)}</span> {e.titulo}
-                  </span>
-                  <span className={e.direccion === 'entra' ? 'stat-in cifra-chica' : 'cifra-chica'}>
-                    {e.direccion === 'entra' ? '+' : '−'}
-                    {fmtMoney(e.montoCents ?? 0)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-          <p className="reportes-supuesto">
-            Solo lo que Finply ya sabe que vence: facturas con fecha de pago, recurrencias por
-            confirmar, el pago para no generar intereses de tus tarjetas, la mensualidad de tus
-            deudas con plazo y las parcialidades a meses. No proyecta ventas que no has facturado
-            ni gastos que no has apuntado, así que la caja del final es un piso, no un pronóstico.
+      {/*
+        El flujo de caja proyectado vivía aquí y desde la Fase 16 tiene su
+        propia sección, igual para un libro personal que para uno de negocio:
+        "¿llego a fin de mes?" no es una pregunta de contabilidad. Queda la
+        liga, no una segunda copia de la misma cifra.
+      */}
+      <section className="hoja negocio-liga">
+        <div>
+          <h2 className="hoja-titulo">Flujo de caja proyectado</h2>
+          <p className="reportes-nota">
+            La caja de hoy movida día a día por lo que ya vence: facturas con fecha de pago,
+            recurrencias, tarjetas y deudas. Ahora vive en su propia sección.
           </p>
-        </section>
-      )}
+        </div>
+        <button type="button" className="btn btn-fantasma" onClick={() => onNav('flujo')}>
+          Ver el flujo →
+        </button>
+      </section>
     </div>
   )
 }

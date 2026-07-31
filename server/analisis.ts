@@ -18,7 +18,7 @@
 //      gasto operativo promedio del periodo. Una tarjeta no es colchón: es
 //      crédito de alguien más.
 
-import { accountsWithBalance, db } from './db.ts'
+import { db, saldoAFecha } from './db.ts'
 import {
   CATEGORIA_OPERATIVA,
   DESDE_MOVIMIENTOS,
@@ -35,8 +35,14 @@ import { hoyISO } from '../shared/fechas.ts'
 import { mediana, tendencia } from '../shared/estadistica.ts'
 import type { Analisis } from '../shared/types.ts'
 
-/** Cuentas cuyo saldo se puede gastar mañana. La tarjeta no es una de ellas. */
-const TIPOS_LIQUIDOS = new Set(['efectivo', 'banco', 'ahorro'])
+/**
+ * Cuentas cuyo saldo se puede gastar mañana. La tarjeta no es una de ellas.
+ *
+ * Se exporta porque el flujo proyectado necesita el mismo juego: dos listas de
+ * "qué es líquido" son dos cajas distintas el día que alguien agregue un tipo
+ * de cuenta.
+ */
+export const TIPOS_LIQUIDOS = new Set(['efectivo', 'banco', 'ahorro'])
 
 /**
  * Por debajo de esto una compra es "hormiga". $200 no es una verdad
@@ -81,13 +87,31 @@ function gastoPorOrigen(profileId: number, desde: string, hasta: string) {
 }
 
 /**
- * Saldo que se puede gastar mañana. Se exporta porque el simulador parte de
- * la misma cifra: dos definiciones de "líquido" son dos patrimonios de hoy.
+ * Saldo que se puede gastar mañana. Se exporta porque el simulador y el flujo
+ * proyectado parten de la misma cifra: dos definiciones de "líquido" son dos
+ * patrimonios de hoy.
+ *
+ * Va **a fecha**, y por omisión a hoy. El saldo de una cuenta suma todos sus
+ * movimientos sin mirar la fecha —así se ve en Cuentas, y ahí está bien: es lo
+ * que el banco va a decir—, pero lo que tienes hoy no incluye el cheque que
+ * firmaste para el viernes. Sin este corte, el flujo arrancaría con dinero ya
+ * comprometido y nunca enseñaría el día en que se va. En un libro sin partidas
+ * futuras las dos cifras son idénticas.
  */
-export function liquidoDe(profileId: number): number {
-  return (accountsWithBalance(profileId) as any[])
-    .filter((a) => a.archived === 0 && TIPOS_LIQUIDOS.has(a.type))
-    .reduce((s, a) => s + a.balance_cents, 0)
+export function liquidoDe(profileId: number, hasta = hoyISO()): number {
+  // El fragmento `saldoAFecha` mete la fecha **dos veces** (una por cada
+  // subconsulta), así que van dos veces antes del perfil. Es la misma
+  // aritmética que la vista de Cuentas: si se separaran, el flujo arrancaría
+  // de un saldo que el usuario no ve en ningún lado.
+  const fila: any = db
+    .prepare(
+      `SELECT COALESCE(SUM(${saldoAFecha('a', '?')}), 0) AS total
+       FROM accounts a
+       WHERE a.profile_id = ? AND a.archived = 0
+         AND a.type IN (${[...TIPOS_LIQUIDOS].map(() => '?').join(', ')})`,
+    )
+    .get(hasta, hasta, profileId, ...TIPOS_LIQUIDOS)
+  return fila.total as number
 }
 
 /** El mes del primer movimiento del libro. `null` si el libro está en blanco. */

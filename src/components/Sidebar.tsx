@@ -42,6 +42,7 @@ export type View =
   | 'importar'
   | 'recurrencias'
   | 'calendario'
+  | 'flujo'
   | 'ajustes'
 
 export type ThemePref = 'claro' | 'oscuro' | 'auto'
@@ -79,6 +80,7 @@ const NAV_GROUPS: { label: string | null; items: { id: View; label: string }[] }
     items: [
       { id: 'recurrencias', label: 'Recurrencias' },
       { id: 'calendario', label: 'Calendario' },
+      { id: 'flujo', label: 'Flujo' },
       { id: 'presupuestos', label: 'Presupuestos' },
       { id: 'metas', label: 'Metas' },
       { id: 'notas', label: 'Notas' },

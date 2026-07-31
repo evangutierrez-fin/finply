@@ -256,6 +256,9 @@ const ORDEN: Record<EventoCalendario['tipo'], number> = {
   recurrencia: 3,
   msi: 4,
   corte: 5,
+  // El calendario nunca genera uno: lo que ya está asentado no está por
+  // confirmar. Lo agrega el flujo proyectado, que sí tiene que contarlo.
+  movimiento: 6,
 }
 
 /**

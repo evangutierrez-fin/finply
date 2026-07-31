@@ -64,6 +64,7 @@ function categoryId(profileId: number, name: string, kind: 'ingreso' | 'gasto'):
   return row.id
 }
 
+/** Asienta la partida y devuelve su id, para poder ligarla a una plantilla. */
 function tx(
   profileId: number,
   accountId: number,
@@ -73,11 +74,14 @@ function tx(
   catId: number | null,
   note: string,
   transferAccountId: number | null = null,
-): void {
-  db.prepare(
-    `INSERT INTO transactions (profile_id, account_id, type, amount_cents, date, category_id, note, transfer_account_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(profileId, accountId, type, cents, date, catId, note, transferAccountId)
+): number {
+  const r = db
+    .prepare(
+      `INSERT INTO transactions (profile_id, account_id, type, amount_cents, date, category_id, note, transfer_account_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(profileId, accountId, type, cents, date, catId, note, transferAccountId)
+  return Number(r.lastInsertRowid)
 }
 
 function day(month: string, d: number): string {
@@ -131,6 +135,12 @@ inTransaction(() => {
   // justo el caso que la recta existe para detectar.
   const deriva = (i: number) => 1 + i * 0.012
 
+  // Lo que se repite todos los meses se guarda con su periodo para poder
+  // ligarlo después a su plantilla: un libro demo en el que la renta lleva
+  // quince meses registrada **a mano** haría creer que nadie usa recurrencias,
+  // y dejaría el gasto recurrente del análisis en cero (D11).
+  const asentado: { plantilla: string; periodo: string; txId: number }[] = []
+
   months.forEach((m, i) => {
     const limit = lastDay[m]!
     const sube = (pesos: number) => Math.round(pesos * deriva(i))
@@ -138,10 +148,16 @@ inTransaction(() => {
     // enero, no repartido en doce.
     const sueldo = m >= '2026-01' ? 890000 : 850000
 
-    tx(personal, banco, 'gasto', m >= '2026-01' ? 470000 : 450000, day(m, 1), cRenta, 'Renta depto')
-    tx(personal, banco, 'ingreso', sueldo, day(m, 15), cSueldo, 'Quincena')
-    if (limit >= 28) tx(personal, banco, 'ingreso', sueldo, day(m, limit === 31 ? 30 : 28), cSueldo, 'Quincena')
-    tx(personal, banco, 'gasto', 49900, day(m, 8), cServicios, 'Internet')
+    const renta = tx(personal, banco, 'gasto', m >= '2026-01' ? 470000 : 450000, day(m, 1), cRenta, 'Renta depto')
+    asentado.push({ plantilla: 'renta', periodo: m, txId: renta })
+    const q1 = tx(personal, banco, 'ingreso', sueldo, day(m, 15), cSueldo, 'Quincena')
+    asentado.push({ plantilla: 'quincena', periodo: `${m}-Q1`, txId: q1 })
+    if (limit >= 28) {
+      const q2 = tx(personal, banco, 'ingreso', sueldo, day(m, limit === 31 ? 30 : 28), cSueldo, 'Quincena')
+      asentado.push({ plantilla: 'quincena', periodo: `${m}-Q2`, txId: q2 })
+    }
+    const internet = tx(personal, banco, 'gasto', 49900, day(m, 8), cServicios, 'Internet')
+    asentado.push({ plantilla: 'internet', periodo: m, txId: internet })
     if (m !== '2026-06') tx(personal, banco, 'gasto', sube(between(320, 460)), day(m, 5), cServicios, 'Luz CFE')
     if (limit >= 16) tx(personal, banco, 'transferencia', 150000, day(m, 16), null, 'Apartado mensual', ahorro)
     // retiros de cajero: el efectivo sale del banco, nunca de la nada
@@ -187,9 +203,11 @@ inTransaction(() => {
   const nRenta = categoryId(negocio, 'Renta', 'gasto')
   const nServicios = categoryId(negocio, 'Servicios', 'gasto')
 
+  const asentadoNeg: { plantilla: string; periodo: string; txId: number }[] = []
   for (const m of ['2026-06', '2026-07']) {
     const limit = lastDay[m]!
-    tx(negocio, bancoNeg, 'gasto', 350000, day(m, 1), nRenta, 'Renta local')
+    const rentaLocal = tx(negocio, bancoNeg, 'gasto', 350000, day(m, 1), nRenta, 'Renta local')
+    asentadoNeg.push({ plantilla: 'renta', periodo: m, txId: rentaLocal })
     tx(negocio, bancoNeg, 'gasto', between(280, 520), day(m, 6), nServicios, 'Luz y agua')
     tx(negocio, bancoNeg, 'gasto', 380000, day(m, 15), nNomina, 'Nómina quincena')
     if (limit >= 30) tx(negocio, bancoNeg, 'gasto', 380000, day(m, 30), nNomina, 'Nómina quincena')
@@ -205,6 +223,57 @@ inTransaction(() => {
       tx(negocio, caja, 'transferencia', 300000, day(m, d), null, 'Depósito de caja', bancoNeg)
     }
   }
+
+  // ── Recurrencias ──────────────────────────────────────────────────────
+  // La renta, el sueldo y el internet llevan meses cayendo igual: son
+  // plantillas, y lo ya registrado se liga a su periodo (`recurrence_runs`)
+  // para que la bandeja no proponga quince meses que el libro ya tiene. La
+  // suscripción es la excepción a propósito: nace este mes y sin historial,
+  // así que deja una propuesta esperando confirmación —que es lo que la Fase 5
+  // viene a enseñar— y su próxima ocurrencia alimenta el flujo proyectado.
+  const insertRec = db.prepare(
+    `INSERT INTO recurrences
+      (profile_id, account_id, type, amount_cents, category_id, note, frequency,
+       day_of_month, day_of_month_2, start_date)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  )
+  const insertRun = db.prepare(
+    `INSERT INTO recurrence_runs (recurrence_id, period, status, tx_id)
+     VALUES (?, ?, 'asentado', ?)`,
+  )
+  const ligar = (
+    recId: number,
+    plantilla: string,
+    filas: { plantilla: string; periodo: string; txId: number }[],
+  ) => {
+    for (const f of filas) if (f.plantilla === plantilla) insertRun.run(recId, f.periodo, f.txId)
+  }
+
+  const recRenta = Number(
+    insertRec.run(personal, banco, 'gasto', 470000, cRenta, 'Renta depto', 'mensual', 1, null, `${months[0]}-01`)
+      .lastInsertRowid,
+  )
+  ligar(recRenta, 'renta', asentado)
+
+  const recQuincena = Number(
+    insertRec.run(personal, banco, 'ingreso', 890000, cSueldo, 'Quincena', 'quincenal', 15, 30, `${months[0]}-01`)
+      .lastInsertRowid,
+  )
+  ligar(recQuincena, 'quincena', asentado)
+
+  const recInternet = Number(
+    insertRec.run(personal, banco, 'gasto', 49900, cServicios, 'Internet', 'mensual', 8, null, `${months[0]}-01`)
+      .lastInsertRowid,
+  )
+  ligar(recInternet, 'internet', asentado)
+
+  insertRec.run(personal, banco, 'gasto', 29900, cOcio, 'Suscripción de música', 'mensual', 20, null, '2026-07-01')
+
+  const recRentaNeg = Number(
+    insertRec.run(negocio, bancoNeg, 'gasto', 350000, nRenta, 'Renta local', 'mensual', 1, null, '2026-06-01')
+      .lastInsertRowid,
+  )
+  ligar(recRentaNeg, 'renta', asentadoNeg)
 
   // ── Deudas y retornos ─────────────────────────────────────────────────
   const insertDebt = db.prepare(

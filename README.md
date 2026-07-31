@@ -117,6 +117,15 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   libro: recurrencias por confirmar, cortes de tarjeta con su fecha límite de
   pago, la mensualidad que sigue de cada deuda con plazo y las parcialidades de
   tus compras a meses. Es un recordatorio, no un cargo.
+- **¿Llego a fin de mes?** — la caja líquida de hoy movida **día a día** por
+  todo lo que ya vence, a 30, 60 o 90 días: el primer día en rojo con su fecha
+  y su cifra, o la confirmación de que no lo hay, y el punto más bajo del
+  camino. Debajo va la cuenta completa —cada renglón con su día, su monto y su
+  liga a la sección de donde salió—, porque una proyección que no se puede
+  auditar renglón por renglón no merece que se le crea. Cuenta también lo que
+  ya asentaste con fecha futura, así que el cheque que firmaste para el viernes
+  se ve salir el viernes y no antes. La cifra aparece también en el Resumen.
+  No adivina el gasto de todos los días: es un piso, no un pronóstico.
 - **Inversiones por unidades** — CETES, fondos, acciones, cripto o lo que sea:
   registra aportes y retiros (ligables a una cuenta) con sus unidades y su
   precio, y valúa escribiendo el precio por unidad en vez del total. Finply
@@ -131,8 +140,7 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   tu libro**: es el compromiso. El ingreso entra cuando la cobras, con su parte
   del impuesto. De ahí salen el estado de resultados —ingresos, costo de
   ventas, margen bruto, gastos fijos y variables, utilidad—, el punto de
-  equilibrio y el flujo de caja proyectado a 30, 60 o 90 días. Nada es de un
-  giro ni de un país: el identificador fiscal es libre, el impuesto se escribe
+  equilibrio. Nada es de un giro ni de un país: el identificador fiscal es libre, el impuesto se escribe
   en monto y la dimensión libre —proyecto, obra, sucursal— la nombras tú.
   Viene encendido en los libros de negocio y apagado en los personales, pero es
   una casilla: enciéndela si facturas por tu cuenta.
@@ -292,12 +300,13 @@ server/          Express + node:sqlite
   precios.ts     import CSV de precios: analiza, y solo asienta lo marcado
   simulacion.ts  punto de partida del simulador (solo lectura)
   facturas.ts    facturas con saldo derivado y antigüedad de saldos
-  negocio.ts     estado de resultados, equilibrio y flujo proyectado
+  negocio.ts     estado de resultados y punto de equilibrio (solo lectura)
+  flujo.ts       la caja proyectada día a día, auditable (solo lectura)
   routes/        profiles · accounts · categories · tags · transactions · debts
                  · tarjetas · investments · budgets · goals · notes · summary
                  · reportes · alertas · analisis · precios · simulador
                  · contrapartes · centros · facturas · negocio
-                 · recurrencias · calendario · backup · importaciones
+                 · recurrencias · calendario · flujo · backup · importaciones
   seed.ts        datos demo deterministas
 shared/
   types.ts       tipos compartidos cliente/servidor
@@ -315,7 +324,7 @@ src/
   views/         Resumen · Movimientos · Cuentas · Categorías · Reportes
                  · Análisis · Tarjetas · Deudas · Inversiones · Simulador
                  · Contrapartes · Facturas · Negocio · Recurrencias
-                 · Calendario · Presupuestos · Metas · Notas · Ajustes
+                 · Calendario · Flujo · Presupuestos · Metas · Notas · Ajustes
   components/    formularios, gráficas, sello, barra lateral
   styles/        tokens.css (temas claro/oscuro) + app.css
 test/            pruebas de integridad contra una base temporal
@@ -384,7 +393,7 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 | `POST /api/facturas/:id/cobros` | El cobro (o el pago): aquí nace el asiento, con su parte del impuesto |
 | `GET /api/facturas/aging?profileId` | Antigüedad de saldos: corriente, 1-30, 31-60, 61-90 y más de 90 |
 | `GET /api/negocio/resultados?profileId&desde&hasta` | Estado de resultados, impuestos del periodo y punto de equilibrio |
-| `GET /api/negocio/flujo?profileId&dias` | Flujo de caja proyectado sobre lo que ya vence |
+| `GET /api/flujo?profileId&dias&hoy` | La caja proyectada día a día: puntos, eventos que la mueven y primer día en rojo |
 | `GET /api/respaldo` · `GET /info` · `POST /restaurar` | Respaldo completo en JSON |
 
 Reglas de integridad que cuida el backend, todas cubiertas por `npm test`:
@@ -438,8 +447,6 @@ donde aparece, que en el tema oscuro es la hoja, no el fondo.
 
 **El libro, más completo**
 
-- **¿Llego a fin de mes?** — saldo proyectado día a día con lo que ya sabe tu
-  calendario, y el primer día en rojo si lo hay
 - Resumen con el cambio contra el mes pasado y la composición de tu patrimonio
 - Simulador: la gráfica del **rendimiento solo**, sin el patrimonio, que es lo
   que de verdad distingue una ruta de la otra

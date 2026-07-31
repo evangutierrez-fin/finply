@@ -483,6 +483,129 @@ export function PatrimonioLinea({ patrimonio }: { patrimonio: PuntoPatrimonio[] 
   )
 }
 
+/**
+ * La caja proyectada, día a día.
+ *
+ * A diferencia del patrimonio —doce puntos, uno por mes—, aquí los puntos son
+ * hasta noventa y ninguno se puede rotular: el eje X va con marcas cada siete
+ * días y la fecha exacta la dice el pie al recorrer. La línea del cero se
+ * dibuja siempre que la serie la cruce, porque **el cruce es la respuesta**: el
+ * tramo bajo cero se pinta aparte para que el día en rojo se vea sin leer una
+ * sola cifra, y aun así la cifra va escrita en el pie y en la tabla (R19).
+ */
+export function FlujoLinea({
+  puntos,
+  primerDiaEnRojo,
+}: {
+  puntos: { fecha: string; saldoCents: number; entradasCents: number; salidasCents: number }[]
+  primerDiaEnRojo: string | null
+}) {
+  const [activo, setActivo] = useState<number | null>(null)
+  const nav = useNavegable(puntos.length, setActivo)
+  if (puntos.length < 2) return null
+
+  const valores = puntos.map((p) => p.saldoCents)
+  const max = Math.max(...valores, 0)
+  const min = Math.min(...valores, 0)
+  const rango = max - min || 1
+
+  const chartH = 150
+  const ancho = 620
+  const width = MARGEN_EJE + ancho
+  const margen = 12
+  const paso = (ancho - margen * 2) / (puntos.length - 1)
+  const y = (cents: number) => chartH - ((cents - min) / rango) * chartH * 0.86 - chartH * 0.07
+  const x = (i: number) => MARGEN_EJE + margen + i * paso
+  const base = y(0)
+
+  const coords = puntos.map((p, i) => ({ x: x(i), y: y(p.saldoCents), p }))
+  const linea = coords.map((q) => `${q.x.toFixed(1)},${q.y.toFixed(1)}`).join(' ')
+  const area = `${coords[0]!.x},${base} ${linea} ${coords.at(-1)!.x},${base}`
+  const destacado = activo === null ? null : puntos[activo]
+  const iRojo = primerDiaEnRojo === null ? -1 : puntos.findIndex((p) => p.fecha === primerDiaEnRojo)
+
+  return (
+    <div className="grafica">
+      <svg
+        viewBox={`0 0 ${width} ${chartH + 20}`}
+        className="grafica-svg"
+        role="img"
+        aria-label={`Saldo proyectado día a día, del ${fmtDate(puntos[0]!.fecha)} al ${fmtDate(
+          puntos.at(-1)!.fecha,
+        )}. Usa las flechas para recorrer los días.`}
+        {...nav}
+      >
+        <EjeY marcas={ticksBonitos(min, max, 4)} y={y} x0={MARGEN_EJE} x1={width} />
+        <polygon points={area} className="serie-area" />
+        <polyline points={linea} className="serie-linea" />
+        {min < 0 && (
+          <>
+            {/* Lo que cae bajo cero, con su propia tinta: el rojo del libro. */}
+            <clipPath id="bajo-cero">
+              <rect x={MARGEN_EJE} y={base} width={width - MARGEN_EJE} height={chartH - base} />
+            </clipPath>
+            <polyline points={linea} className="serie-linea serie-rojo" clipPath="url(#bajo-cero)" />
+            <line x1={MARGEN_EJE} y1={base} x2={width} y2={base} className="grafica-base" />
+          </>
+        )}
+        {iRojo > 0 && (
+          <line
+            x1={x(iRojo)}
+            y1="0"
+            x2={x(iRojo)}
+            y2={chartH}
+            className="grafica-marca-rojo"
+          />
+        )}
+        {coords.map((q, i) => (
+          <g key={q.p.fecha} onMouseEnter={() => setActivo(i)}>
+            <rect x={q.x - paso / 2} y="0" width={paso} height={chartH} fill="transparent" />
+            {(activo === i || i === 0 || i === coords.length - 1 || i === iRojo) && (
+              <circle cx={q.x} cy={q.y} r={activo === i ? 4 : 2.5} className="serie-punto" />
+            )}
+            {i % 7 === 0 && i > 0 && (
+              <text x={q.x} y={chartH + 14} className="grafica-tick" textAnchor="middle">
+                {q.p.fecha.slice(8)}
+              </text>
+            )}
+          </g>
+        ))}
+      </svg>
+      <div className="grafica-pie" aria-live="polite">
+        {destacado ? (
+          <span className="grafica-dato">
+            <strong>{fmtDate(destacado.fecha)}</strong>
+            {' · caja '}
+            <span className="cifra-chica">{fmtMoney(destacado.saldoCents)}</span>
+            {destacado.entradasCents > 0 && (
+              <> · entra <span className="cifra-chica">{fmtMoney(destacado.entradasCents)}</span></>
+            )}
+            {destacado.salidasCents > 0 && (
+              <> · sale <span className="cifra-chica">{fmtMoney(destacado.salidasCents)}</span></>
+            )}
+            {destacado.entradasCents === 0 && destacado.salidasCents === 0 && ' · sin movimiento'}
+          </span>
+        ) : (
+          <span className="grafica-leyenda">
+            Caja al cierre de cada día · {fmtDate(puntos[0]!.fecha)} —{' '}
+            {fmtDate(puntos.at(-1)!.fecha)}
+          </span>
+        )}
+      </div>
+      <TablaDatos
+        titulo="Saldo proyectado al cierre de cada día"
+        columnas={['Día', 'Caja', 'Entra', 'Sale']}
+        filas={puntos.map((p) => [
+          fmtDate(p.fecha),
+          fmtMoney(p.saldoCents),
+          fmtMoney(p.entradasCents),
+          fmtMoney(p.salidasCents),
+        ])}
+      />
+    </div>
+  )
+}
+
 /** Barras horizontales: en qué se fue el gasto del mes (una sola serie, tono de acento). */
 export function CategoryBars({ byCategory }: { byCategory: Summary['byCategory'] }) {
   if (byCategory.length === 0) {

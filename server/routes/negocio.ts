@@ -1,10 +1,10 @@
 import { Router } from 'express'
-import { estadoDeResultados, flujoProyectado } from '../negocio.ts'
-import { flujoQuery, periodoQuery } from '../validators.ts'
+import { estadoDeResultados } from '../negocio.ts'
+import { periodoQuery } from '../validators.ts'
 
 const router = Router()
 
-// Las dos son de solo lectura y ninguna escribe una fila.
+// De solo lectura: no escribe una fila.
 router.get('/resultados', (req, res) => {
   const q = periodoQuery.parse(req.query)
   if (q.desde > q.hasta) {
@@ -13,9 +13,8 @@ router.get('/resultados', (req, res) => {
   res.json(estadoDeResultados(q.profileId, q.desde, q.hasta))
 })
 
-router.get('/flujo', (req, res) => {
-  const q = flujoQuery.parse(req.query)
-  res.json(flujoProyectado(q.profileId, q.hoy, q.dias))
-})
+// El flujo proyectado se mudó a `/api/flujo` en la Fase 16: dejó de ser una
+// función de negocio para volverse la pregunta de cualquiera. Un segundo
+// endpoint que devolviera lo mismo sería la segunda versión de la misma cifra.
 
 export default router

@@ -1,11 +1,12 @@
 import { api } from '../api.ts'
 import { useApp } from '../context.ts'
 import { useFetch } from '../hooks.ts'
-import { currentMonth, fmtDate, fmtMoney, monthLabel } from '../format.ts'
+import { currentMonth, fmtDate, fmtMoney, monthLabel, todayISO } from '../format.ts'
 import { CountUpMoney, Money } from '../components/Money.tsx'
 import { CategoryBars, MonthBars } from '../components/Charts.tsx'
 import type { View } from '../components/Sidebar.tsx'
-import type { Alerta, Tx } from '../../shared/types.ts'
+import { diasEntre, finDeMes } from '../../shared/fechas.ts'
+import type { Alerta, FlujoProyectado, Tx } from '../../shared/types.ts'
 
 function txSignedCents(tx: Tx): number {
   return tx.type === 'gasto' ? -tx.amountCents : tx.amountCents
@@ -40,6 +41,55 @@ function Alertas({ alertas, onNav }: { alertas: Alerta[]; onNav: (view: View) =>
   )
 }
 
+/**
+ * La pregunta de la Fase 16, contestada donde primero se mira.
+ *
+ * La cifra es la **caja** —líquido: efectivo, banco y ahorro—, que no es el
+ * total de arriba: la tarjeta no es dinero tuyo. Por eso lleva su rótulo y su
+ * liga a la vista, donde la proyección se puede auditar renglón por renglón.
+ */
+function FinDeMes({ flujo, onNav }: { flujo: FlujoProyectado; onNav: (view: View) => void }) {
+  const rojo = flujo.primerDiaEnRojo
+  return (
+    <section className={`hoja fin-de-mes${rojo ? ' en-rojo' : ''}`}>
+      <div className="fin-de-mes-cifra">
+        <span className="rotulo">
+          {rojo ? 'Te quedas corto' : `Caja al ${fmtDate(flujo.hasta)}`}
+        </span>
+        {rojo ? (
+          <span className="hero-cifra-media stat-rojo">{fmtDate(rojo)}</span>
+        ) : (
+          <Money cents={flujo.saldoFinalCents} className="hero-cifra-media" />
+        )}
+      </div>
+      <p className="fin-de-mes-nota">
+        {rojo ? (
+          <>
+            Con lo que ya está comprometido, la caja baja a{' '}
+            <Money cents={flujo.minimo.saldoCents} className="cifra-chica" /> el{' '}
+            {fmtDate(flujo.minimo.fecha)}. Nada está asentado todavía.
+          </>
+        ) : flujo.eventos.length === 0 ? (
+          <>
+            No hay nada comprometido de aquí al {fmtDate(flujo.hasta)}: lo líquido se queda como
+            está.
+          </>
+        ) : (
+          <>
+            Lo líquido de hoy, más{' '}
+            <Money cents={flujo.entradasCents} className="cifra-chica" /> que entran y{' '}
+            <Money cents={flujo.salidasCents} className="cifra-chica" /> que salen en{' '}
+            {flujo.eventos.length} {flujo.eventos.length === 1 ? 'renglón' : 'renglones'}.
+          </>
+        )}
+      </p>
+      <button type="button" className="btn-liga" onClick={() => onNav('flujo')}>
+        Ver el flujo día a día →
+      </button>
+    </section>
+  )
+}
+
 export function Resumen({ onNav }: { onNav: (view: View) => void }) {
   const { profile, refreshKey, openTx } = useApp()
   const month = currentMonth()
@@ -50,6 +100,13 @@ export function Resumen({ onNav }: { onNav: (view: View) => void }) {
   // En su propia petición: si el cálculo de una alerta falla, el Resumen sigue
   // siendo el Resumen.
   const { data: alertas } = useFetch(() => api.alertas(profile.id), [profile.id, refreshKey])
+  // Y el flujo en la suya, por lo mismo. La ventana es exactamente lo que queda
+  // del mes —cero días el día 31, que es una pregunta legítima—, no treinta
+  // días redondos: "a fin de mes" es una fecha, no un plazo.
+  const { data: flujo } = useFetch(
+    () => api.flujo(profile.id, Math.max(0, diasEntre(todayISO(), finDeMes(todayISO())))),
+    [profile.id, refreshKey],
+  )
 
   if (error) return <p className="aviso" role="alert">{error}</p>
   if (!data) return <div className="cargando" aria-label="Cargando" />
@@ -104,6 +161,8 @@ export function Resumen({ onNav }: { onNav: (view: View) => void }) {
           </div>
         </dl>
       </section>
+
+      {flujo && <FinDeMes flujo={flujo} onNav={onNav} />}
 
       <section className="cuentas-tira" aria-label="Cuentas">
         {active.map((a, i) => (

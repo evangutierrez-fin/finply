@@ -28,6 +28,7 @@ import analisis from './routes/analisis.ts'
 import recurrencias from './routes/recurrencias.ts'
 import bienes from './routes/bienes.ts'
 import calendario from './routes/calendario.ts'
+import flujo from './routes/flujo.ts'
 import conciliacion from './routes/conciliacion.ts'
 import backup from './routes/backup.ts'
 
@@ -67,6 +68,7 @@ export function createApp(): express.Express {
   app.use('/api/recurrencias', recurrencias)
   app.use('/api/bienes', bienes)
   app.use('/api/calendario', calendario)
+  app.use('/api/flujo', flujo)
   app.use('/api/conciliacion', conciliacion)
   app.use('/api/respaldo', backup)
 

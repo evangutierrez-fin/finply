@@ -18,11 +18,8 @@ import {
   MONTO_OPERATIVO,
   TIPO_OPERATIVO,
 } from './reportes.ts'
-import { liquidoDe } from './analisis.ts'
-import { calendario } from './calendario.ts'
-import { hoyISO, sumarDias } from '../shared/fechas.ts'
 import { margenContribucion, puntoDeEquilibrio } from '../shared/negocio.ts'
-import type { EstadoResultados, FlujoProyectado, RenglonResultados } from '../shared/types.ts'
+import type { EstadoResultados, RenglonResultados } from '../shared/types.ts'
 
 /** Gasto del periodo por categoría, con el papel que el usuario le asignó. */
 function gastoPorRol(profileId: number, desde: string, hasta: string) {
@@ -154,66 +151,7 @@ export function estadoDeResultados(
   }
 }
 
-/**
- * Flujo de caja proyectado: el saldo líquido de hoy, movido día a día por todo
- * lo que ya se sabe que vence.
- *
- * No inventa una sola fecha: los eventos son los del **calendario**, que ya
- * junta recurrencias, tarjetas, deudas, parcialidades y ahora facturas. Cada
- * evento trae su dirección puesta por quien lo generó, así que aquí no se
- * vuelve a deducir si algo entra o sale — deducirlo otra vez sería la segunda
- * versión de lo que vence, y las dos versiones acaban discrepando.
- *
- * Los cortes de tarjeta se saltan: un corte no mueve dinero, solo cierra el
- * periodo, y su fecha límite de pago ya viene como evento aparte. Lo que no
- * tiene monto todavía tampoco entra: se dice cuántos son, no se supone cuánto.
- */
-export function flujoProyectado(
-  profileId: number,
-  hoy = hoyISO(),
-  dias = 30,
-): FlujoProyectado {
-  const { eventos } = calendario(profileId, hoy, dias)
-  const utiles = eventos.filter((e) => e.tipo !== 'corte' && e.montoCents !== null)
-
-  const saldoInicialCents = liquidoDe(profileId)
-  const porDia = new Map<string, { entradas: number; salidas: number }>()
-  for (const e of utiles) {
-    const dia = porDia.get(e.fecha) ?? { entradas: 0, salidas: 0 }
-    if (e.direccion === 'entra') dia.entradas += e.montoCents!
-    else dia.salidas += e.montoCents!
-    porDia.set(e.fecha, dia)
-  }
-
-  let saldo = saldoInicialCents
-  let entradasCents = 0
-  let salidasCents = 0
-  let primerDiaEnRojo: string | null = saldo < 0 ? hoy : null
-  const puntos = [{ fecha: hoy, saldoCents: saldo, entradasCents: 0, salidasCents: 0 }]
-
-  for (const fecha of [...porDia.keys()].sort()) {
-    const dia = porDia.get(fecha)!
-    saldo += dia.entradas - dia.salidas
-    entradasCents += dia.entradas
-    salidasCents += dia.salidas
-    if (primerDiaEnRojo === null && saldo < 0) primerDiaEnRojo = fecha
-    puntos.push({
-      fecha,
-      saldoCents: saldo,
-      entradasCents: dia.entradas,
-      salidasCents: dia.salidas,
-    })
-  }
-
-  return {
-    desde: hoy,
-    hasta: sumarDias(hoy, dias),
-    saldoInicialCents,
-    saldoFinalCents: saldo,
-    entradasCents,
-    salidasCents,
-    primerDiaEnRojo,
-    puntos,
-    eventos: utiles,
-  }
-}
+// El **flujo de caja proyectado** vivía aquí y desde la Fase 16 vive en
+// `server/flujo.ts`: dejó de ser una función del perfil de negocio para
+// volverse la pregunta de cualquiera —"¿llego a fin de mes?"—, con su propia
+// vista y su cifra en el Resumen.

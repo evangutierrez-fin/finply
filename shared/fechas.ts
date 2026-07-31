@@ -30,6 +30,16 @@ export function fechaConDia(anio: number, mes: number, dia: number): string {
   return `${String(anio).padStart(4, '0')}-${String(mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`
 }
 
+/**
+ * El último día del mes de una fecha. Es el horizonte de la pregunta "¿llego a
+ * fin de mes?", y va aquí y no en la vista porque el servidor y el cliente
+ * tienen que estar mirando el mismo día.
+ */
+export function finDeMes(iso: string): string {
+  const { anio, mes } = partesFecha(iso)
+  return fechaConDia(anio, mes, diasDelMes(anio, mes))
+}
+
 /** Mueve (anio, mes) N meses, con el mes de 1 a 12. */
 export function correrMes(anio: number, mes: number, meses: number): { anio: number; mes: number } {
   const total = anio * 12 + (mes - 1) + meses

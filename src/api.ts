@@ -485,8 +485,6 @@ export const api = {
   negocio: {
     resultados: (profileId: number, desde: string, hasta: string) =>
       req<EstadoResultados>(`/api/negocio/resultados?profileId=${profileId}&desde=${desde}&hasta=${hasta}`),
-    flujo: (profileId: number, dias: number) =>
-      req<FlujoProyectado>(`/api/negocio/flujo?profileId=${profileId}&dias=${dias}`),
   },
   precios: {
     analizar: (data: { profileId: number; texto: string; fecha?: string | null }) =>
@@ -624,6 +622,12 @@ export const api = {
   },
   calendario: (profileId: number, dias = 30) =>
     req<Calendario>(`/api/calendario?profileId=${profileId}&dias=${dias}`),
+  /**
+   * La caja proyectada día a día. Derivada del calendario y de lo que ya está
+   * asentado con fecha futura: pedirla no escribe una fila.
+   */
+  flujo: (profileId: number, dias = 30) =>
+    req<FlujoProyectado>(`/api/flujo?profileId=${profileId}&dias=${dias}`),
   /**
    * Las alertas de hoy. **Derivadas**: no se guardan, no se descartan y
    * pedirlas no escribe nada. Se apagan solas cuando el hecho deja de ser

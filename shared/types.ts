@@ -444,7 +444,19 @@ export interface Bandeja {
   truncado: boolean
 }
 
-export type TipoEvento = 'recurrencia' | 'corte' | 'pago_tarjeta' | 'deuda' | 'msi' | 'factura'
+export type TipoEvento =
+  | 'recurrencia'
+  | 'corte'
+  | 'pago_tarjeta'
+  | 'deuda'
+  | 'msi'
+  | 'factura'
+  /**
+   * Una partida **ya asentada** con fecha futura. No la genera el calendario
+   * —ahí solo va lo que está por confirmar—, sino el flujo proyectado, que
+   * tiene que contarla: ya está en el libro y va a mover la caja.
+   */
+  | 'movimiento'
 
 /** Algo que vence. Todo derivado y de solo lectura (D9). */
 export interface EventoCalendario {
@@ -983,16 +995,36 @@ export interface EstadoResultados {
   margenContribucion: number | null
 }
 
+/**
+ * La respuesta a "¿llego a fin de mes?", con la cuenta hecha a la vista.
+ *
+ * `saldoInicialCents + entradasCents − salidasCents = saldoFinalCents`, y los
+ * `eventos` son exactamente esos sumandos: la proyección se puede auditar
+ * renglón por renglón, que es lo único que la vuelve creíble.
+ */
 export interface FlujoProyectado {
   desde: string
   hasta: string
-  /** Saldo líquido de hoy: efectivo, banco y ahorro. La tarjeta no es caja. */
+  /**
+   * Saldo líquido **de este momento**: efectivo, banco y ahorro. La tarjeta no
+   * es caja, y lo que ya asentaste con fecha futura tampoco: eso entra como
+   * evento el día que le toca. Lo que vence hoy y todavía no has asentado
+   * tampoco está aquí — cae en el primer punto de la serie.
+   */
   saldoInicialCents: number
   saldoFinalCents: number
   entradasCents: number
   salidasCents: number
   /** El día en que el saldo proyectado se vuelve negativo, si ocurre. */
   primerDiaEnRojo: string | null
+  /** El punto más bajo de la ventana. Es el que dice si el mes se aprieta. */
+  minimo: { fecha: string; saldoCents: number }
+  /** Vencimientos sin monto todavía. No entran en la cuenta; se dicen (R9). */
+  sinMonto: number
+  /**
+   * Un punto **por día**, incluidos los días en que no pasa nada. Cada uno es
+   * el cierre de su día, así que el primero ya trae lo que vence hoy.
+   */
   puntos: { fecha: string; saldoCents: number; entradasCents: number; salidasCents: number }[]
   eventos: EventoCalendario[]
 }

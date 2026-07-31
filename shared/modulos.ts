@@ -128,6 +128,11 @@ export const VISTAS_NUCLEO: readonly string[] = [
   'reportes',
   'analisis',
   'importar',
+  // "¿Llego a fin de mes?" no es de un módulo: se contesta con las cuentas, que
+  // son núcleo. Los módulos la **alimentan** —recurrencias, tarjetas, deudas,
+  // facturas— y cuando el que más aporta está apagado, la vista lo dice en vez
+  // de proyectar sobre nada.
+  'flujo',
   'ajustes',
 ]
 

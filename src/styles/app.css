@@ -2509,3 +2509,134 @@ select.campo-input { cursor: pointer; }
 @media (max-width: 720px) {
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* ── flujo proyectado ─────────────────────────────────────────────────────
+   La vista contesta una pregunta, así que el veredicto manda: cifra grande,
+   fecha con nombre y la cuenta debajo. El rojo aparece **solo** cuando de
+   verdad hay un día en rojo; si no, esta hoja se ve como cualquier otra. */
+/* Mismo reparto que el hero del Resumen: la respuesta a la izquierda, la
+   cuenta que la sostiene a la derecha. */
+.flujo-veredicto {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 30px;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+}
+.flujo-veredicto-texto {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 280px;
+}
+.flujo-veredicto.en-rojo {
+  border-left: 3px solid var(--rojo);
+  background: var(--rojo-tinte);
+}
+.flujo-titular {
+  font-family: var(--f-display);
+  font-size: clamp(24px, 3.2vw, 32px);
+  line-height: 1.15;
+  color: var(--rojo-osc);
+}
+.flujo-titular strong { font-weight: 650; }
+.flujo-sub { font-size: 13.5px; color: var(--tinta-2); max-width: 66ch; line-height: 1.55; }
+.flujo-stats { min-width: 240px; }
+.flujo-cuenta { font-size: 12.5px; color: var(--tinta-3); font-family: var(--f-mono); }
+
+.flujo-dias { display: flex; flex-direction: column; gap: 14px; margin-top: 6px; }
+.flujo-dia-cabeza {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--regla);
+}
+.flujo-dia-fecha { font-family: var(--f-mono); font-size: 13.5px; font-weight: 600; }
+.flujo-dia-cuando { font-size: 12px; color: var(--tinta-3); }
+/* El saldo del día al final del renglón: es la columna que hace auditable la
+   curva —cada día dice con cuánto se queda la caja, no solo qué se movió. */
+.flujo-dia-saldo { margin-left: auto; font-size: 12.5px; color: var(--tinta-2); }
+.flujo-eventos { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+.flujo-evento {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 10px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.flujo-evento:hover { background: var(--hoja-hover); }
+.flujo-evento-textos { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.flujo-evento-titulo { font-weight: 600; font-size: 14px; }
+.flujo-evento-detalle { font-size: 12.5px; color: var(--tinta-2); }
+.flujo-evento-monto { font-size: 14px; white-space: nowrap; }
+.cal-chip-movimiento { color: var(--tinta-2); border-color: var(--regla-fuerte); }
+.cal-chip-factura { color: var(--acento); border-color: var(--acento); }
+
+/* Lo que el módulo apagado se lleva: se dice, no se calla (R17). */
+.flujo-falta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 13.5px;
+  color: var(--tinta-2);
+  margin-top: 18px;
+}
+.flujo-falta strong { color: var(--tinta); }
+
+/* El tramo bajo cero y la marca del día del cruce. El color no va solo: el
+   veredicto de arriba dice la misma fecha con palabras (R19). */
+.serie-rojo { stroke: var(--rojo); }
+.grafica-marca-rojo {
+  stroke: var(--rojo);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+
+/* La cifra del Resumen: la caja proyectada no es el total de arriba —la
+   tarjeta no es dinero tuyo—, y por eso lleva su propio rótulo. */
+.fin-de-mes {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+}
+.fin-de-mes.en-rojo { border-left: 3px solid var(--rojo); background: var(--rojo-tinte); }
+.fin-de-mes-cifra { display: flex; flex-direction: column; gap: 2px; }
+.fin-de-mes-nota {
+  flex: 1;
+  min-width: 260px;
+  font-size: 13px;
+  color: var(--tinta-2);
+  line-height: 1.55;
+  max-width: 62ch;
+}
+
+.negocio-liga {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.negocio-liga .hoja-titulo { margin-bottom: 4px; }
+.negocio-liga .reportes-nota { margin-top: 0; max-width: 60ch; }
+
+@media (max-width: 720px) {
+  .flujo-evento { grid-template-columns: auto 1fr; }
+  .flujo-evento-monto { grid-column: 2; text-align: left; }
+  .flujo-dia-saldo { margin-left: 0; width: 100%; }
+}

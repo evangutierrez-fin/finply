@@ -679,9 +679,14 @@ export const agingQuery = z.object({
   hoy: isoDate.optional(),
 })
 
+/**
+ * La ventana del flujo proyectado. Admite **cero días**: el 31 del mes, "¿llego
+ * a fin de mes?" pregunta por lo que queda de hoy, y rechazarlo dejaría al
+ * Resumen sin cifra justo el día que más se mira.
+ */
 export const flujoQuery = z.object({
   profileId: z.coerce.number().int().positive(),
-  dias: z.coerce.number().int().min(1).max(365).default(30),
+  dias: z.coerce.number().int().min(0).max(365).default(30),
   hoy: isoDate.optional(),
 })
 
