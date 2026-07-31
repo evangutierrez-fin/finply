@@ -288,15 +288,45 @@ export function Presupuestos() {
           cuenta hecha: un techo que cambió solo y no se explica es peor que no
           tener arrastre. Rueda en los dos sentidos a propósito — uno que solo
           ayudara sería un techo que sube solo, y entonces no es un techo.
+
+          ⚠ La cifra es de **toda la cadena**, no del mes anterior. Nombrar al
+          anterior con una cifra de tres meses le echa la culpa de lo que no
+          hizo, y eso es una frase falsa aunque el número esté bien.
         */}
         {b.arrastreCents !== 0 && (
           <p className="presup-arrastre">
-            {monthLabel(shiftMonth(b.period, -1))} {b.arrastreCents > 0 ? 'te dejó' : 'se pasó por'}{' '}
-            <strong className={b.arrastreCents < 0 ? 'presup-rojo' : undefined}>
-              {fmtMoney(Math.abs(b.arrastreCents))}
-            </strong>
+            {b.arrastreMeses > 1 ? (
+              <>
+                Vienes arrastrando {b.arrastreMeses} meses:{' '}
+                <strong className={b.arrastreCents < 0 ? 'presup-rojo' : undefined}>
+                  {b.arrastreCents > 0 ? 'sobraron' : 'faltaron'}{' '}
+                  {fmtMoney(Math.abs(b.arrastreCents))}
+                </strong>
+              </>
+            ) : (
+              <>
+                {monthLabel(shiftMonth(b.period, -1))}{' '}
+                {b.arrastreCents > 0 ? 'te dejó' : 'se pasó por'}{' '}
+                <strong className={b.arrastreCents < 0 ? 'presup-rojo' : undefined}>
+                  {fmtMoney(Math.abs(b.arrastreCents))}
+                </strong>
+              </>
+            )}
             : {fmtMoney(b.amountCents)} {b.arrastreCents > 0 ? '+' : '−'}{' '}
             {fmtMoney(Math.abs(b.arrastreCents))} = {fmtMoney(b.topeCents)}
+          </p>
+        )}
+        {/*
+          Un techo bajo cero no es un techo: es una deuda con el mes que viene, y
+          leído como cifra suelta ("llevas $645.29 de −$16,383.12") no dice nada.
+          Se explica qué significa y dónde está la salida, que es el botón de
+          aquí abajo — apagar el arrastre de este mes reinicia la cadena (D27).
+        */}
+        {b.topeCents < 0 && (
+          <p className="presup-arrastre presup-sin-techo">
+            Con eso, este mes <strong>no tienes techo</strong>: cualquier gasto se pasa hasta
+            cubrir el faltante. Si prefieres empezar de nuevo, quita el arrastre de este mes —
+            los meses anteriores se quedan como están.
           </p>
         )}
         <footer className="presup-acciones">

@@ -381,6 +381,67 @@ describe('el sobrante que rueda', () => {
     assert.equal((await mes(perfil.id, '2026-06')).mensuales[0].arrastreCents, 120000)
   })
 
+  test('la cifra dice de cuántos meses viene, para no culpar al anterior', async () => {
+    // Salió mirando el libro demo: la vista decía "junio 2026 se pasó por
+    // $16,383.12" cuando junio se había pasado por $14,624.16 y el resto venía
+    // de más atrás. La cifra estaba bien y la frase era falsa, que es la peor
+    // combinación: no hay forma de descubrirla mirando el número.
+    const { perfil, cuenta, categorias } = await libroBase(c, 'Cuántos meses')
+    const gasto = categorias.find((k: any) => k.kind === 'gasto')
+    await planta(perfil.id, cuenta.id, gasto.id, [
+      { mes: '2026-04', tope: 100000, gasto: 90000 },
+      { mes: '2026-05', tope: 100000, gasto: 50000, rueda: true },
+      { mes: '2026-06', tope: 100000, gasto: 0, rueda: true },
+    ])
+    const junio = (await mes(perfil.id, '2026-06')).mensuales[0]
+    assert.equal(junio.arrastreCents, 60000, 'abril dejó $100 y mayo $500')
+    assert.equal(junio.arrastreMeses, 2, 'y son dos meses, no solo mayo')
+
+    const mayo = (await mes(perfil.id, '2026-05')).mensuales[0]
+    assert.equal(mayo.arrastreMeses, 1, 'a mayo sí se le puede nombrar el mes')
+    assert.equal((await mes(perfil.id, '2026-04')).mensuales[0].arrastreMeses, 0)
+  })
+
+  test('un arrastre que se comió el tope se anuncia como lo que es', async () => {
+    // Un techo bajo cero no es un techo: "llevas $645.29 de −$16,383.12" es una
+    // resta correcta que no dice nada. La noticia es el arrastre, y la salida
+    // —apagar la casilla de este mes— tiene que estar escrita.
+    const { perfil, cuenta, categorias } = await libroBase(c, 'Sin techo')
+    const gasto = categorias.find((k: any) => k.kind === 'gasto')
+    await planta(perfil.id, cuenta.id, gasto.id, [
+      { mes: '2026-04', tope: 100000, gasto: 400000 },
+      { mes: '2026-05', tope: 100000, gasto: 300000, rueda: true },
+      { mes: '2026-06', tope: 100000, gasto: 5000, rueda: true },
+    ])
+    const junio = (await mes(perfil.id, '2026-06')).mensuales[0]
+    assert.equal(junio.arrastreCents, -500000)
+    assert.equal(junio.arrastreMeses, 2)
+    assert.equal(junio.topeCents, -400000, 'el techo quedó bajo cero')
+
+    const alerta = (await alertasDe(perfil.id, '2026-06-15')).find(
+      (a) => a.tipo === 'presupuesto',
+    )!
+    assert.match(alerta.titulo, /el arrastre se comió el tope/)
+    assert.match(alerta.detalle, /2 meses/)
+    assert.ok(
+      !alerta.detalle.includes('-$4,000.00'),
+      'no se anuncia un techo negativo como si fuera un techo',
+    )
+
+    // Y la salida existe sin código nuevo (D27): el mes que no arrastra nace
+    // limpio, con su tope escrito y sin heredar el faltante.
+    await c.post('/api/budgets', {
+      profileId: perfil.id,
+      categoryId: gasto.id,
+      period: '2026-06',
+      amountCents: 100000,
+      rollover: false,
+    })
+    const limpio = (await mes(perfil.id, '2026-06')).mensuales[0]
+    assert.equal(limpio.arrastreCents, 0)
+    assert.equal(limpio.topeCents, 100000)
+  })
+
   test('se corta en el primer hueco y en el primer mes que no arrastra', async () => {
     const { perfil, cuenta, categorias } = await libroBase(c, 'Corte')
     const gasto = categorias.find((k: any) => k.kind === 'gasto')

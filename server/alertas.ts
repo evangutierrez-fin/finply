@@ -91,10 +91,19 @@ function dePresupuestos(profileId: number, mes: string, hoy: string): Alerta[] {
     .map((b) => ({
       tipo: 'presupuesto' as const,
       severidad: 'media' as const,
-      titulo: `${b.categoryName}: te pasaste del tope`,
+      // Un techo bajo cero no se puede anunciar como techo: "llevas $645.29 de
+      // −$16,383.12" es una resta correcta y una frase que no dice nada. Cuando
+      // el arrastre se comió el tope, la noticia es el arrastre.
+      titulo:
+        b.topeCents < 0
+          ? `${b.categoryName}: el arrastre se comió el tope`
+          : `${b.categoryName}: te pasaste del tope`,
       detalle:
-        `Llevas ${pesos(b.spentCents)} de ${pesos(b.topeCents)} ` +
-        (b.periodKind === 'anio' ? 'este año' : 'este mes'),
+        b.topeCents < 0
+          ? `Vienes arrastrando ${pesos(-b.arrastreCents)} de ${b.arrastreMeses} ` +
+            `${b.arrastreMeses === 1 ? 'mes' : 'meses'}: hasta cubrirlo no hay techo`
+          : `Llevas ${pesos(b.spentCents)} de ${pesos(b.topeCents)} ` +
+            (b.periodKind === 'anio' ? 'este año' : 'este mes'),
       montoCents: b.spentCents - b.topeCents,
       refId: b.id,
       vista: 'presupuestos' as const,

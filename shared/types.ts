@@ -708,8 +708,14 @@ export interface Budget {
   spentCents: number
   /** Si este renglón recibe el saldo del mes anterior. Solo los mensuales. */
   rollover: boolean
-  /** Lo que trajo del mes pasado. Negativo si aquel mes se pasó del tope. */
+  /** Lo que trajo la cadena de atrás. Negativo si aquellos meses se pasaron. */
   arrastreCents: number
+  /**
+   * De cuántos meses viene ese arrastre. Uno solo se puede nombrar ("junio te
+   * dejó $500"); tres no —la cifra es de los tres— y decir el nombre del
+   * anterior sería atribuirle algo que no hizo.
+   */
+  arrastreMeses: number
   /** El techo de verdad contra el que se mide: `amountCents + arrastreCents`. */
   topeCents: number
   /** Lo que llevarías gastado yendo parejo: `topeCents` por lo que va del periodo. */

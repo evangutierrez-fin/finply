@@ -1250,6 +1250,9 @@ select.campo-input { cursor: pointer; }
 }
 .presup-arrastre strong { color: var(--tinta); font-weight: 600; }
 .presup-arrastre .presup-rojo { color: var(--rojo); }
+/* Un techo bajo cero se explica con palabras, no con la resta sola: va en la
+   fuente de la interfaz porque es una frase, no una cifra. */
+.presup-sin-techo { font-family: var(--f-ui); max-width: 62ch; line-height: 1.5; }
 /* El ritmo en palabras: lo mismo que dice la marca, para quien no la ve. */
 .presup-ritmo { font-size: 13px; color: var(--tinta-2); }
 .presup-lista > .rotulo { margin-top: 4px; }

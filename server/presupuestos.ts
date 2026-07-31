@@ -31,8 +31,16 @@ function esperado(topeCents: number, avance: number): number {
   return Math.round(Math.max(topeCents, 0) * avance)
 }
 
-function mapBudget(row: any, arrastreCents: number, avance: number): Budget {
-  const topeCents = row.amount_cents + arrastreCents
+/** Lo que trajo la cadena y de cuántos meses viene. Sin cadena, cero y cero. */
+export interface Arrastre {
+  cents: number
+  meses: number
+}
+
+const SIN_ARRASTRE: Arrastre = { cents: 0, meses: 0 }
+
+function mapBudget(row: any, arrastre: Arrastre, avance: number): Budget {
+  const topeCents = row.amount_cents + arrastre.cents
   return {
     id: row.id,
     profileId: row.profile_id,
@@ -43,7 +51,12 @@ function mapBudget(row: any, arrastreCents: number, avance: number): Budget {
     amountCents: row.amount_cents,
     spentCents: row.spent_cents,
     rollover: row.rollover === 1,
-    arrastreCents,
+    arrastreCents: arrastre.cents,
+    // Cuántos meses hay detrás de esa cifra. Sin esto, la vista le echaba la
+    // culpa entera al mes anterior —"junio se pasó por $16,383.12" cuando junio
+    // se pasó por $14,624.16 y el resto venía de más atrás—, que es decir una
+    // cifra correcta con una frase falsa.
+    arrastreMeses: arrastre.meses,
     topeCents,
     esperadoCents: esperado(topeCents, avance),
   }
@@ -66,8 +79,8 @@ function mapBudget(row: any, arrastreCents: number, avance: number): Budget {
  *
  * Todo en una consulta para todas las categorías que arrastran (R11).
  */
-function arrastresDe(profileId: number, mes: string, categorias: number[]): Map<number, number> {
-  const arrastres = new Map<number, number>()
+function arrastresDe(profileId: number, mes: string, categorias: number[]): Map<number, Arrastre> {
+  const arrastres = new Map<number, Arrastre>()
   if (categorias.length === 0) return arrastres
 
   const marcas = categorias.map(() => '?').join(', ')
@@ -99,9 +112,9 @@ function arrastresDe(profileId: number, mes: string, categorias: number[]): Map<
     // Cada mes de la cadena aporta lo que le quedó, o lo que le faltó. Sumar
     // la cadena entera es lo mismo que ir pasando el saldo de mes en mes, y no
     // depende del orden.
-    let arrastre = 0
-    for (const fila of cadena) arrastre += fila.amount_cents - fila.spent_cents
-    arrastres.set(categoria, arrastre)
+    let cents = 0
+    for (const fila of cadena) cents += fila.amount_cents - fila.spent_cents
+    arrastres.set(categoria, { cents, meses: cadena.length })
   }
   return arrastres
 }
@@ -144,8 +157,10 @@ export function presupuestosDelMes(profileId: number, mes: string, hoy: string):
   return {
     avance,
     avanceAnual,
-    mensuales: mensuales.map((f) => mapBudget(f, arrastres.get(f.category_id) ?? 0, avance)),
-    anuales: anuales.map((f) => mapBudget(f, 0, avanceAnual)),
+    mensuales: mensuales.map((f) =>
+      mapBudget(f, arrastres.get(f.category_id) ?? SIN_ARRASTRE, avance),
+    ),
+    anuales: anuales.map((f) => mapBudget(f, SIN_ARRASTRE, avanceAnual)),
     total: total ? mapTotal(total, avance) : null,
   }
 }
