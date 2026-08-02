@@ -203,7 +203,9 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   si conviene más invertirlo o pagar primero la deuda cara. Sale de tus cifras
   de hoy, las tasas las pones tú y los siete supuestos van escritos junto al
   número. Además del patrimonio —que arrastra tu punto de partida y hace que dos
-  rutas muy distintas se vean casi iguales— enseña **lo que puso la tasa**, solo:
+  rutas muy distintas se vean casi iguales— enseña **lo invertido solo**, sin el
+  efectivo quieto ni la deuda restada, que es la bolsa sobre la que de verdad
+  actúa la tasa; y **lo que puso la tasa**, también solo:
   en pesos, en porcentaje y como una tasa anual equivalente que sí se puede
   comparar contra la que supusiste. Casi nunca coincide, y esa distancia es el
   dato: el dinero parado no rinde y las deudas devengan. También el interés que

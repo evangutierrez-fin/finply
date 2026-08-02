@@ -272,6 +272,71 @@ function Rendimiento({ data }: { data: Simulacion }) {
   )
 }
 
+/**
+ * El saldo invertido, solo.
+ *
+ * La gráfica del patrimonio mezcla tres cosas —lo líquido, que está quieto; lo
+ * invertido, que crece; y la deuda, que se resta— y la que manda a la vista es
+ * la más grande. Con $398,000 parados en la cuenta y $39,000 invertidos, la
+ * curva que se ve es la del efectivo y la bolsa que de verdad rinde no se
+ * distingue. Esta es esa bolsa sola: es sobre la que actúa la tasa que
+ * escribiste, y con la ruta de la deuda se ve arrancar plana —todo se va a
+ * abonar— y despegar el mes en que la deuda muere.
+ */
+function Invertido({ data }: { data: Simulacion }) {
+  const hayRetiro = data.supuestos.retiroMensualCents > 0
+  const finInvertir = data.invertir.puntos.at(-1)!.inversionesCents
+  const finDeuda = data.deuda.puntos.at(-1)!.inversionesCents
+  // Lo que separa a las dos líneas es la deuda llevándose lo que apartas, así
+  // que lo que hay que mirar es si hay deuda y cuándo muere — **no** si la
+  // línea toca el cero. Empezar con algo ya invertido la mantiene despegada
+  // desde el primer mes aunque cada peso nuevo se vaya a abonar.
+  const hayDeuda = data.inicio.deudaCents > 0
+  const muere = data.deuda.mesSinDeuda
+
+  return (
+    <section className="hoja">
+      <h2 className="hoja-titulo">Lo invertido, solo</h2>
+      <ProyeccionLineas
+        series={[
+          { nombre: 'Todo a invertir', puntos: data.invertir.puntos.map((q) => q.inversionesCents) },
+          {
+            nombre: 'Primero la deuda',
+            puntos: data.deuda.puntos.map((q) => q.inversionesCents),
+            punteada: true,
+          },
+        ]}
+        titulo="Saldo invertido con cada estrategia"
+        etiqueta="Saldo invertido con cada estrategia, mes a mes, sin el efectivo ni la deuda."
+        marca={hayRetiro ? { mes: data.supuestos.mesesAporte, texto: 'empiezas a retirar' } : null}
+      />
+      <p className="reportes-supuesto">
+        Sin el saldo líquido encima y sin restarle la deuda: esta es la bolsa sobre la que actúa el{' '}
+        {fmtTasa(data.supuestos.rendimientoAnualBp)} que supusiste. Al final del plazo tendrías{' '}
+        <strong className="cifra-chica">{fmtMoney(finInvertir)}</strong> invirtiéndolo todo y{' '}
+        <strong className="cifra-chica">{fmtMoney(finDeuda)}</strong> pagando primero la deuda.{' '}
+        {!hayDeuda ? (
+          <>Las dos líneas son la misma: no hay deuda que se lleve lo que apartas.</>
+        ) : muere === null ? (
+          <>
+            La línea punteada no recibe un peso nuevo en todo el plazo: la deuda no se acaba dentro
+            del horizonte, así que cada peso que apartas sigue yendo a abonar. Lo poco que sube es
+            solo lo que ya tenías invertido, rindiendo.
+          </>
+        ) : (
+          <>
+            La línea punteada se queda atrás mientras la deuda vive —cada peso que apartas va a
+            abonar— y a partir de {plazo(muere)} las dos suben igual, porque desde ahí las dos rutas
+            hacen lo mismo. Ojo: lo que la punteada no tiene invertido lo tiene en deuda que ya no
+            debe, y esa comparación se hace abajo, con el patrimonio.
+          </>
+        )}
+        {hayRetiro && ' Y baja hasta el cero cuando empiezas a retirar: de aquí sale el retiro, antes que de tu efectivo.'}
+      </p>
+    </section>
+  )
+}
+
 /** El interés que te ahorras liquidando antes, creciendo mes a mes. */
 function Interes({ data }: { data: Simulacion }) {
   const ahorro = data.invertir.interesPagadoCents - data.deuda.interesPagadoCents
@@ -495,6 +560,12 @@ export function Simulador() {
               marca={conRetiro ? { mes: meses, texto: 'empiezas a retirar' } : null}
             />
           </section>
+
+          {/* Va aquí y no más abajo: primero el todo, luego la parte que crece
+              —que es la que la tasa toca— y después lo que la tasa puso. Sin
+              nada invertido y sin apartar nada no hay bolsa que enseñar, y una
+              raya en el cero no es una gráfica. */}
+          {(data.inicio.inversionesCents > 0 || ahorroCents > 0) && <Invertido data={data} />}
 
           <Rendimiento data={data} />
 
