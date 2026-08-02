@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { api } from '../api.ts'
 import { useApp } from '../context.ts'
 import { useFetch } from '../hooks.ts'
-import { fmtMoney, parseAmount } from '../format.ts'
+import { fmtDate, fmtMoney, fmtTasa, parseAmount } from '../format.ts'
 import { Money } from '../components/Money.tsx'
 import { Modal } from '../components/Modal.tsx'
 import type { Contraparte, RolContraparte } from '../../shared/types.ts'
@@ -164,10 +164,103 @@ function ContraparteModal({
   )
 }
 
+/**
+ * Todo de una contraparte en una hoja (Fase 19).
+ *
+ * Va **dentro de su renglón**, desplegable, y no en una vista aparte: la
+ * pregunta que contesta —"¿le sigo fiando a este?"— se hace mirando la lista,
+ * y mandar al usuario a otra pantalla lo separaría de la comparación. Nada de
+ * esto se guarda: son las mismas cifras de Facturas, Movimientos y la
+ * antigüedad de saldos, juntadas por fin por contraparte.
+ */
+function Tablero({ contraparte }: { contraparte: Contraparte }) {
+  const { profile, refreshKey } = useApp()
+  const { data, error } = useFetch(
+    () => api.contrapartes.tablero(contraparte.id, profile.id),
+    [contraparte.id, profile.id, refreshKey],
+  )
+  if (error) return <p className="aviso" role="alert">{error}</p>
+  if (!data) return <p className="cargando">Cargando…</p>
+
+  const dias = data.diasDePagoPromedio
+  return (
+    <div className="tablero">
+      <dl className="stats stats-auto">
+        <div className="stat">
+          <dt>Facturado</dt>
+          <dd><Money cents={data.facturadoCents} /></dd>
+          <span className="stat-pie">{data.facturas} facturas abiertas</span>
+        </div>
+        <div className="stat">
+          <dt>Cobrado</dt>
+          <dd><Money cents={data.cobradoCents} /></dd>
+          <span className="stat-pie">lo que de verdad entró</span>
+        </div>
+        <div className="stat">
+          <dt>Te debe</dt>
+          <dd><Money cents={data.saldoCents} /></dd>
+          <span className="stat-pie">
+            {data.vencidoCents > 0
+              ? `${fmtMoney(data.vencidoCents)} ya vencidos, en ${data.facturasVencidas}`
+              : 'nada vencido'}
+          </span>
+        </div>
+        <div className="stat">
+          <dt>Tarda en pagar</dt>
+          <dd className="cifra">
+            {dias === null ? 'Sin saldar aún' : `${dias} ${dias === 1 ? 'día' : 'días'}`}
+          </dd>
+          <span className="stat-pie">
+            {dias === null
+              ? 'ninguna factura suya se ha saldado'
+              : data.creditDays === null
+                ? 'sin crédito pactado con qué medirlo'
+                : dias <= data.creditDays
+                  ? `dentro de los ${data.creditDays} que pactaron`
+                  : `${dias - data.creditDays} más de los ${data.creditDays} pactados`}
+          </span>
+        </div>
+        {data.cotizacionesEsperando > 0 && (
+          <div className="stat">
+            <dt>Cotizado sin respuesta</dt>
+            <dd><Money cents={data.esperandoCents} /></dd>
+            <span className="stat-pie">{data.cotizacionesEsperando} en la calle</span>
+          </div>
+        )}
+        {data.tasaExitoBp !== null && (
+          <div className="stat">
+            <dt>De lo que le cotizas, ganas</dt>
+            <dd className="cifra">{fmtTasa(data.tasaExitoBp)}</dd>
+            <span className="stat-pie">de lo que ha contestado</span>
+          </div>
+        )}
+        {data.pagadoCents > 0 && (
+          <div className="stat">
+            <dt>Le pagaste</dt>
+            <dd><Money cents={data.pagadoCents} /></dd>
+            <span className="stat-pie">salió hacia esta contraparte</span>
+          </div>
+        )}
+      </dl>
+      {data.primeraFactura && (
+        <p className="reportes-supuesto">
+          Le facturas desde el {fmtDate(data.primeraFactura)}
+          {data.ultimaFactura && data.ultimaFactura !== data.primeraFactura && (
+            <> y la última fue el {fmtDate(data.ultimaFactura)}</>
+          )}
+          . El plazo de pago se mide sobre sus facturas ya saldadas y hasta el <strong>último</strong>{' '}
+          cobro: pagar el 10 % a tiempo y el resto tres meses después no es pagar a tiempo.
+        </p>
+      )}
+    </div>
+  )
+}
+
 export function Contrapartes() {
   const { profile, refreshKey, bump, stamp } = useApp()
   const [creando, setCreando] = useState(false)
   const [editando, setEditando] = useState<Contraparte | null>(null)
+  const [abierta, setAbierta] = useState<number | null>(null)
   const [verArchivadas, setVerArchivadas] = useState(false)
   const { data, error } = useFetch(
     () => api.contrapartes.list(profile.id),
@@ -231,7 +324,10 @@ export function Contrapartes() {
             </thead>
             <tbody>
               {lista.map((c) => (
-                <tr key={c.id} className={c.archived ? 'fila-archivada' : ''}>
+                // Fragmento y no `<tr>` suelto: el tablero desplegado es una
+                // fila hermana, no un hijo de la fila que lo abre.
+                <Fragment key={c.id}>
+                <tr className={c.archived ? 'fila-archivada' : ''}>
                   <td>
                     <strong>{c.name}</strong>
                     {c.taxId && <span className="cifra-chica"> · {c.taxId}</span>}
@@ -273,6 +369,14 @@ export function Contrapartes() {
                   </td>
                   <td className="col-num cifra-chica">{c.invoiceCount}</td>
                   <td className="col-acciones">
+                    <button
+                      type="button"
+                      className="btn-liga"
+                      aria-expanded={abierta === c.id}
+                      onClick={() => setAbierta(abierta === c.id ? null : c.id)}
+                    >
+                      {abierta === c.id ? 'Cerrar' : 'Ver todo'}
+                    </button>
                     <button type="button" className="btn-liga" onClick={() => setEditando(c)}>Editar</button>
                     <button type="button" className="btn-liga" onClick={() => archivar(c)}>
                       {c.archived ? 'Recuperar' : 'Archivar'}
@@ -284,6 +388,14 @@ export function Contrapartes() {
                     )}
                   </td>
                 </tr>
+                {abierta === c.id && (
+                  <tr className="fila-tablero">
+                    <td colSpan={7}>
+                      <Tablero contraparte={c} />
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               ))}
             </tbody>
           </table>

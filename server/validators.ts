@@ -705,6 +705,61 @@ export const facturaPatch = facturaInput
   .extend({ status: z.enum(['abierta', 'cancelada']).optional() })
 
 /**
+ * Una cotización (`emitida`) o una orden de compra (`recibida`). Mismos campos
+ * que una factura menos las retenciones: a lo que todavía no se cobra no le
+ * retienen nada, y ponerlo aquí sería prometer un desglose que el documento
+ * no trae.
+ */
+export const cotizacionInput = z
+  .object({
+    profileId: z.number().int().positive(),
+    counterpartyId: z.number().int().positive(),
+    direction: z.enum(['emitida', 'recibida']),
+    folio: z.string().trim().max(40).default(''),
+    concept: z.string().trim().max(200).default(''),
+    issueDate: isoDate,
+    validUntil: isoDate.nullish(),
+    subtotalCents: z.number().int().positive('El subtotal debe ser mayor a cero'),
+    taxCents: z.number().int().min(0).default(0),
+    costCenterId: z.number().int().positive().nullish(),
+  })
+  .refine((q) => !q.validUntil || q.validUntil >= q.issueDate, {
+    message: 'La vigencia no puede terminar antes de que empiece',
+    path: ['validUntil'],
+  })
+
+/**
+ * El estado se cambia aparte del contenido. Corregir el monto de una
+ * cotización y darla por perdida son dos actos distintos, y mezclarlos
+ * convierte un dedazo en el formulario en una respuesta que nadie dio.
+ *
+ * 'aceptada' **no se pone a mano**: se llega a ella convirtiéndola en factura,
+ * que es lo único que hace que aceptar signifique algo.
+ */
+export const cotizacionEstado = z.object({
+  status: z.enum(['enviada', 'perdida']),
+})
+
+/**
+ * Convertirla en factura. Lo que no se manda se hereda de la cotización: el
+ * folio de la factura casi nunca es el de la cotización, pero el concepto, el
+ * monto y el centro sí — volver a teclearlos sería pedirle al usuario que
+ * copie lo que Finply ya tiene enfrente.
+ */
+export const cotizacionFacturar = z.object({
+  folio: z.string().trim().max(40).default(''),
+  issueDate: isoDate,
+  dueDate: isoDate.nullish(),
+})
+
+export const cotizacionQuery = z.object({
+  profileId: z.coerce.number().int().positive(),
+  direction: z.enum(['emitida', 'recibida']).optional(),
+  status: z.enum(['enviada', 'aceptada', 'perdida']).optional(),
+  hoy: isoDate.optional(),
+})
+
+/**
  * Una nota de crédito: cancela parte de una factura ya emitida. **No mueve
  * dinero** —por eso no lleva cuenta— y por eso tampoco lleva impuesto: lo que
  * baja es lo cobrable completo, con su parte de IVA adentro.
@@ -911,6 +966,23 @@ export const cortInput = z.object({
 export const cortQuery = z.object({
   profileId: z.coerce.number().int().positive(),
   accountId: z.coerce.number().int().positive().optional(),
+})
+
+/**
+ * Asentar la diferencia de un corte: el faltante o el sobrante del cajón, como
+ * movimiento del libro. Es lo que convierte un corte en algo que *arregla* la
+ * cuenta en vez de solo señalarla.
+ *
+ * La cuenta y la fecha **no se piden**: son las del corte, y dejar que se
+ * mandaran permitiría asentar el ajuste de un cajón en otro. El monto tampoco:
+ * es la diferencia que Finply ya calculó, y aceptar uno distinto convertiría el
+ * ajuste en un movimiento inventado con nombre de ajuste.
+ */
+export const ajusteCorteInput = z.object({
+  profileId: z.number().int().positive(),
+  /** Dónde cae el faltante o el sobrante. Sin categoría si el usuario no opina. */
+  categoryId: z.number().int().positive().nullish(),
+  concept: z.string().trim().max(200).default(''),
 })
 
 /** Marcar o desmarcar movimientos contra el estado de cuenta. */

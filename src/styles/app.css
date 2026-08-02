@@ -720,6 +720,10 @@ input, select { font: inherit; color: inherit; }
 /* Tres acciones desde la Fase 10 —corregir, duplicar y anular—, así que la
    columna creció: con 84px la ✕ se caía al renglón de abajo. */
 .col-acciones { width: 108px; text-align: right; }
+/* Varias ligas de texto en la misma celda se leían pegadas ("CerrarEditar").
+   El `gap` de un flex no aplica a texto en línea, así que la separación va en
+   el propio botón. Se vio en el navegador, no leyendo el JSX. */
+.col-acciones .btn-liga { padding: 0 5px; }
 .acciones { display: inline-flex; gap: 2px; white-space: nowrap; }
 .acciones { opacity: 0; transition: opacity 0.12s ease; }
 .libro-fila:hover .acciones,
@@ -2182,7 +2186,9 @@ select.campo-input { cursor: pointer; }
 }
 .tabla tr:last-child td { border-bottom: none; }
 .tabla .col-num, .tabla th.col-num { text-align: right; white-space: nowrap; }
-.tabla-sub { font-size: 12px; color: var(--tinta-2); margin-top: 2px; }
+/* El folio debajo del nombre, no pegado a él: en línea se leían como una sola
+   palabra ("Escuela PitágorasCOT-94"). Se vio en el navegador. */
+.tabla-sub { display: block; font-size: 12px; color: var(--tinta-2); margin-top: 2px; }
 /* Archivada o cancelada: se apaga, pero se sigue leyendo. Borrarla de la
    vista escondería justamente lo que el usuario fue a buscar. */
 .fila-archivada td { opacity: 0.55; }
@@ -2810,6 +2816,23 @@ select.campo-input { cursor: pointer; }
    pasar el ratón —viven en tablas normales, no en .libro-fila, donde la regla
    de .acciones las deja invisibles. */
 .giro-acciones { display: inline-flex; gap: 2px; white-space: nowrap; }
+/* Cuando lo de dentro son ligas de texto y no botones de un carácter, hay que
+   separarlas: sin esto, "Facturar Editar Perdida Borrar" se leía como una
+   sola tira y no se distinguía dónde acababa cada una. */
+.giro-acciones .btn-liga { padding: 0 6px; }
+
+/* ── Fase 19 · cotizaciones ──────────────────────────────────────────── */
+/* La que se pasó de vigencia sin respuesta. Se apaga como una archivada pero
+   marcada en rojo por el canto: sigue viva y sigue esperando, y esa es la
+   diferencia con una que ya se contestó. */
+.fila-vencida td:first-child { box-shadow: inset 2px 0 0 var(--rojo); }
+/* El renglón chico bajo una cifra de la tira: dice de qué está hecha. */
+.stat-pie { font-size: 11.5px; color: var(--tinta-3); }
+
+/* El tablero de una contraparte, desplegado dentro de su propio renglón. */
+.fila-tablero td { background: var(--papel); padding: 4px 14px 18px; }
+.tablero { display: flex; flex-direction: column; gap: 14px; }
+.tablero .stats { margin-top: 0; }
 
 /* La tira de cifras de Bienes, pero con un número variable de columnas: estas
    secciones tienen tres o cuatro según lo que haya que decir, y una rejilla

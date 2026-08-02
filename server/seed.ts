@@ -31,6 +31,7 @@ function wipe(): void {
     DELETE FROM goal_entries;
     DELETE FROM goals;
     DELETE FROM notes;
+    DELETE FROM quotes;
     DELETE FROM invoice_credit_notes;
     DELETE FROM invoice_recurrence_runs;
     DELETE FROM invoice_recurrences;
@@ -499,6 +500,49 @@ inTransaction(() => {
   factura(puerto, 'emitida', 'A-102', 'Pan de mayo', '2026-05-08', '2026-05-23', 300000, 48000, 0, 0, mostrador)
   factura(espiga, 'recibida', 'E-9012', 'Harina y empaques', '2026-07-12', '2026-07-27', 450000, 72000)
 
+  // ── Cotizaciones y órdenes (Fase 19) ─────────────────────────────────
+  // El ciclo entero en cuatro documentos: una ganada —con su factura ligada—,
+  // una que se venció sin respuesta (la que dispara la alerta), una que sigue
+  // en la calle y una orden de compra al proveedor. Sin las cuatro, la sección
+  // no enseña ni para qué sirve ni qué es cada estado.
+  const insertCot = db.prepare(
+    `INSERT INTO quotes
+      (profile_id, counterparty_id, direction, folio, concept, issue_date, valid_until,
+       subtotal_cents, tax_cents, cost_center_id, status, invoice_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  )
+  const cotizacion = (
+    cp: number,
+    direction: 'emitida' | 'recibida',
+    folio: string,
+    concept: string,
+    issue: string,
+    vigencia: string | null,
+    subtotal: number,
+    impuesto: number,
+    centro: number | null = null,
+    status: 'enviada' | 'aceptada' | 'perdida' = 'enviada',
+    facturaId: number | null = null,
+  ) =>
+    Number(
+      insertCot.run(
+        negocio, cp, direction, folio, concept, issue, vigencia,
+        subtotal, impuesto, centro, status, facturaId,
+      ).lastInsertRowid,
+    )
+
+  // La que se ganó: es la cotización de la que salió la factura A-118, y la
+  // liga entre las dos es lo que hace que "aceptada" signifique algo.
+  cotizacion(merida, 'emitida', 'COT-88', 'Pedido corporativo julio', '2026-06-28', '2026-07-15', 4000000, 640000, eventos, 'aceptada', fMerida)
+  // La que se venció sin respuesta: dispara la alerta de severidad alta.
+  cotizacion(puerto, 'emitida', 'COT-91', 'Barra de postres para boda', '2026-06-20', '2026-07-05', 2800000, 448000, eventos)
+  // La que sigue viva y esperando.
+  cotizacion(pitagoras, 'emitida', 'COT-94', 'Desayunos del ciclo escolar', '2026-07-26', '2026-08-20', 9600000, 1536000, mostrador)
+  // Y una perdida, sin la cual la tasa de éxito no tendría nada que dividir.
+  cotizacion(puerto, 'emitida', 'COT-77', 'Pan para posadas', '2026-05-30', '2026-06-15', 1500000, 240000, eventos, 'perdida')
+  // La orden de compra: el otro lado, lo que ya le encargaste al proveedor.
+  cotizacion(espiga, 'recibida', 'OC-31', 'Harina de temporada alta', '2026-07-20', '2026-08-10', 1750000, 280000)
+
   // El anticipo: Escuela Pitágoras adelantó dinero antes de que hubiera
   // factura. Ya es ingreso de julio (D14) y no lo reclama ningún documento.
   db.prepare(
@@ -735,6 +779,7 @@ inTransaction(() => {
     '[finply] Libro demo listo: 2 perfiles, 6 cuentas (una tarjeta con su tasa), ' +
       'quince meses de movimientos, deudas, inversiones, presupuestos, metas, notas, ' +
       'facturas con retención, nota de crédito, anticipo y plantilla, ' +
+      'cinco cotizaciones que cubren los cuatro estados y una orden de compra, ' +
       'y los tres módulos de giro: un depto rentado, horas sin facturar y un almacén.',
   )
 })

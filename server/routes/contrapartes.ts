@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { db, inTransaction } from '../db.ts'
 import { SALDO_FACTURA } from '../facturas.ts'
+import { tableroDe } from '../tablero.ts'
 import { contraparteInput, contrapartePatch } from '../validators.ts'
 import type { Contraparte } from '../../shared/types.ts'
 
@@ -54,6 +55,19 @@ function mapContraparte(row: any): Contraparte {
     sobreLimite: creditLimitCents !== null && porCobrarCents > creditLimitCents,
   }
 }
+
+/**
+ * Todo de una contraparte en una hoja (Fase 19). Va antes que `/:id` de
+ * escritura por orden de lectura, y es de solo lectura: no guarda nada.
+ */
+router.get('/:id/tablero', (req, res) => {
+  const profileId = Number(req.query.profileId)
+  if (!Number.isInteger(profileId) || profileId <= 0) {
+    return res.status(400).json({ error: 'Falta profileId' })
+  }
+  const hoy = typeof req.query.hoy === 'string' ? req.query.hoy : undefined
+  res.json(tableroDe(profileId, Number(req.params.id), hoy))
+})
 
 router.get('/', (req, res) => {
   const profileId = Number(req.query.profileId)

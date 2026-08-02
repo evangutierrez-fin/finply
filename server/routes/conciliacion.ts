@@ -10,8 +10,8 @@
 // solo, sin recalcular nada guardado. Es la misma línea de D7 y D10.
 
 import { Router } from 'express'
-import { db, ensureAccount, httpError, saldoAFecha } from '../db.ts'
-import { cortInput, cortQuery } from '../validators.ts'
+import { db, ensureAccount, ensureCategory, httpError, saldoAFecha } from '../db.ts'
+import { ajusteCorteInput, cortInput, cortQuery } from '../validators.ts'
 
 const router = Router()
 
@@ -91,6 +91,85 @@ router.post('/', (req, res) => {
     .prepare(`${CORTE_SELECT} WHERE s.account_id = ? AND s.date = ?`)
     .get(input.accountId, input.date)
   res.status(201).json(mapCorte(row))
+})
+
+/**
+ * Asentar la diferencia del corte como movimiento: el faltante del cajón es un
+ * gasto y el sobrante es un ingreso.
+ *
+ * Hasta la Fase 19, un corte podía decir "faltan $340" y el libro se quedaba
+ * mal para siempre — señalaba el hueco y no había forma de taparlo sin
+ * inventar una partida a mano con un monto copiado a ojo. Es la diferencia
+ * entre conciliar una cuenta de banco (donde lo que falta es una partida que
+ * **sí** existe y hay que capturar) y cuadrar un cajón de efectivo (donde lo
+ * que falta es dinero que no está y eso ya es el hecho).
+ *
+ * R4 en su forma exacta: el usuario pide el ajuste, Finply no lo asienta solo.
+ * Y el monto es **el que Finply calculó**, no uno que se mande: aceptar otro
+ * convertiría el ajuste en una partida inventada con nombre de ajuste.
+ *
+ * El movimiento nace **ya conciliado**: es del corte, así que dejarlo sin
+ * marcar volvería a descuadrar el mismo corte que acaba de cerrar.
+ */
+router.post('/:id/ajustar', (req, res) => {
+  const input = ajusteCorteInput.parse(req.body)
+  const row: any = db
+    .prepare(`${CORTE_SELECT} WHERE s.id = ? AND s.profile_id = ?`)
+    .get(Number(req.params.id), input.profileId)
+  if (!row) throw httpError(404, 'Ese corte no existe en este perfil')
+
+  const corte = mapCorte(row)
+  if (corte.diferenciaCents === 0) {
+    throw httpError(409, 'Este corte ya cuadra: no hay diferencia que asentar')
+  }
+  // ⚠ Con partidas sin palomear, la diferencia **no es un faltante**: es lo que
+  // todavía no has marcado, y asentarla taparía el hueco con una mentira del
+  // tamaño de lo que falte por revisar. Se probó en el navegador sobre el libro
+  // demo: con 53 partidas sin marcar, la "diferencia" era el saldo entero de la
+  // cuenta y el ajuste habría metido $83,045.06 de ingreso inventado.
+  //
+  // La regla vive **aquí** y no solo en el botón que la esconde: un guardia que
+  // solo vive en la vista no es un guardia.
+  if (corte.pendientes > 0) {
+    throw httpError(
+      409,
+      `Faltan ${corte.pendientes} partidas por palomear en esta cuenta: esa diferencia todavía ` +
+        'no es un faltante, es lo que no has marcado. Palomea primero y vuelve a mirar.',
+    )
+  }
+  // Sobra dinero → entró algo que no estaba apuntado. Falta → salió.
+  const sobra = corte.diferenciaCents > 0
+  const amountCents = Math.abs(corte.diferenciaCents)
+  const type = sobra ? 'ingreso' : 'gasto'
+  if (input.categoryId) ensureCategory(input.profileId, input.categoryId, type)
+
+  // El concepto va en `note`, que es como se llama en `transactions`: el
+  // movimiento tiene que poder leerse en el libro y decir de dónde salió.
+  const note =
+    input.concept ||
+    (sobra ? `Sobrante del corte del ${corte.date}` : `Faltante del corte del ${corte.date}`)
+
+  const result = db
+    .prepare(
+      `INSERT INTO transactions
+        (profile_id, account_id, type, amount_cents, date, note, category_id, reconciled_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+    )
+    .run(
+      input.profileId,
+      corte.accountId,
+      type,
+      amountCents,
+      corte.date,
+      note,
+      input.categoryId ?? null,
+    )
+
+  const despues: any = db.prepare(`${CORTE_SELECT} WHERE s.id = ?`).get(corte.id)
+  res.status(201).json({
+    txId: Number(result.lastInsertRowid),
+    corte: mapCorte(despues),
+  })
 })
 
 router.delete('/:id', (req, res) => {

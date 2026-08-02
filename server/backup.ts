@@ -64,6 +64,10 @@ export const TABLES = [
   // movimientos, como todo lo demás.
   'invoice_credit_notes',
   'invoice_recurrences',
+  // La cotización va **después** de `invoices` porque apunta a la factura que
+  // salió de ella, y después de `cost_centers` por su centro. Antes de los
+  // movimientos como todo lo demás.
+  'quotes',
   // Los módulos de giro (Fase 15). El arrendamiento va después de `assets`
   // —renta un bien— y **antes de los movimientos**, que lo referencian: un
   // movimiento con `rental_id` no puede restaurarse sin su contrato. El

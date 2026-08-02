@@ -110,8 +110,8 @@ export const MODULOS: readonly Modulo[] = [
     id: 'negocio',
     label: 'Negocio',
     descripcion:
-      'Clientes y proveedores, facturas con vencimiento, antigüedad de saldos, estado de resultados y flujo proyectado.',
-    vistas: ['contrapartes', 'facturas', 'negocio'],
+      'Clientes y proveedores, cotizaciones, facturas con vencimiento, antigüedad de saldos, estado de resultados y flujo proyectado.',
+    vistas: ['contrapartes', 'cotizaciones', 'facturas', 'negocio'],
     omision: ['negocio'],
   },
   // ── Módulos de giro (Fase 15) ─────────────────────────────────────────

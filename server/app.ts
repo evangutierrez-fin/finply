@@ -17,6 +17,7 @@ import contrapartes from './routes/contrapartes.ts'
 import centros from './routes/centros.ts'
 import facturas from './routes/facturas.ts'
 import facturasRecurrentes from './routes/facturas-recurrentes.ts'
+import cotizaciones from './routes/cotizaciones.ts'
 import negocio from './routes/negocio.ts'
 import simulador from './routes/simulador.ts'
 import budgets from './routes/budgets.ts'
@@ -61,6 +62,7 @@ export function createApp(): express.Express {
   app.use('/api/centros', centros)
   // El prefijo más específico va primero, o '/recurrentes' caería en la ruta
   // '/:id' de facturas.
+  app.use('/api/cotizaciones', cotizaciones)
   app.use('/api/facturas/recurrentes', facturasRecurrentes)
   app.use('/api/facturas', facturas)
   app.use('/api/negocio', negocio)

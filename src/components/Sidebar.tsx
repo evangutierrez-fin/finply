@@ -33,6 +33,7 @@ export type View =
   | 'inversiones'
   | 'simulador'
   | 'contrapartes'
+  | 'cotizaciones'
   | 'facturas'
   | 'negocio'
   | 'presupuestos'
@@ -93,6 +94,9 @@ const NAV_GROUPS: { label: string | null; items: { id: View; label: string }[] }
     label: 'Negocio',
     items: [
       { id: 'contrapartes', label: 'Contrapartes' },
+      // La cotización va **antes** que la factura porque en la vida va antes:
+      // el ciclo empieza en la promesa y termina en el cobro.
+      { id: 'cotizaciones', label: 'Cotizaciones' },
       { id: 'facturas', label: 'Facturas' },
       { id: 'negocio', label: 'Resultados' },
     ],

@@ -239,7 +239,7 @@ describe('las cifras del mes cuentan con la regla de D6', () => {
 
   test('el depósito de un inquilino no es ingreso de nadie', async () => {
     const { perfil, cuenta } = await libroBase(c, 'Depósito')
-    await c.put(`/api/profiles/${perfil.id}/modules`, { modules: ['inmuebles'] })
+    await c.patch(`/api/profiles/${perfil.id}`, { modules: ['inmuebles'] })
     const bien = (
       await c.post('/api/bienes', {
         profileId: perfil.id, name: 'Depto', kind: 'inmueble',

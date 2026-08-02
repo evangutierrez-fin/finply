@@ -403,6 +403,54 @@ function deArrendamientos(profileId: number, hoy: string): Alerta[] {
   })
 }
 
+/** Cuántos días antes empieza a avisar una cotización por vencer. */
+const DIAS_VIGENCIA = 7
+
+/**
+ * La cotización que se te vence sin respuesta (Fase 19).
+ *
+ * Solo las **emitidas**: una orden de compra que se pasa de vigencia es
+ * problema del proveedor, no tuyo, y avisarte de las dos convertiría la sección
+ * en ruido. Y solo las que siguen en 'enviada': una aceptada o una perdida ya
+ * tienen respuesta, y su fecha dejó de importar.
+ *
+ * Las que **ya se pasaron** son 'alta' —ese trabajo se está enfriando— y las
+ * que se pasan esta semana, 'media'.
+ */
+function deCotizaciones(profileId: number, hoy: string): Alerta[] {
+  const filas: any[] = db
+    .prepare(
+      `SELECT q.id, q.folio, q.concept, q.valid_until,
+        q.subtotal_cents + q.tax_cents AS total, c.name AS contraparte
+       FROM quotes q
+       JOIN counterparties c ON c.id = q.counterparty_id
+       WHERE q.profile_id = ? AND q.direction = 'emitida' AND q.status = 'enviada'
+         AND q.valid_until IS NOT NULL AND q.valid_until <= ?
+       ORDER BY q.valid_until ASC`,
+    )
+    .all(profileId, sumarDias(hoy, DIAS_VIGENCIA))
+
+  return filas.map((q) => {
+    const vencida = q.valid_until < hoy
+    const nombre = q.concept || q.folio || 'Una cotización'
+    return {
+      tipo: 'cotizacion' as const,
+      severidad: vencida ? ('alta' as const) : ('media' as const),
+      titulo: vencida
+        ? `Se te venció la cotización de ${q.contraparte}`
+        : `La cotización de ${q.contraparte} vence ${cuando(hoy, q.valid_until)}`,
+      detalle:
+        `${nombre} por ${pesos(q.total)}: ` +
+        (vencida
+          ? 'sigue sin respuesta y el precio que prometiste ya no te obliga'
+          : 'si la vas a sostener, conviene confirmarla antes'),
+      montoCents: q.total,
+      refId: q.id,
+      vista: 'cotizaciones' as const,
+    }
+  })
+}
+
 /**
  * El anaquel que se está vaciando. Solo habla de productos con mínimo puesto:
  * sin él, Finply no tiene forma de saber cuánto es poco para ese negocio.
@@ -469,6 +517,7 @@ const ORDEN: Record<Alerta['tipo'], number> = {
   // módulo, no de todo el mundo.
   arrendamiento: 7,
   existencias: 8,
+  cotizacion: 9,
 }
 
 /** Qué módulo tiene que estar encendido para que una familia hable. */
@@ -483,6 +532,7 @@ const MODULO_DE: Record<Alerta['tipo'], ModuloId | null> = {
   meta: 'metas',
   arrendamiento: 'inmuebles',
   existencias: 'inventario',
+  cotizacion: 'negocio',
 }
 
 /**
@@ -507,6 +557,7 @@ export function alertas(profileId: number, hoy = hoyISO()): Alerta[] {
     ...(con('metas') ? deMetas(profileId, hoy) : []),
     ...(con('inmuebles') ? deArrendamientos(profileId, hoy) : []),
     ...(con('inventario') ? deExistencias(profileId) : []),
+    ...(con('negocio') ? deCotizaciones(profileId, hoy) : []),
   ].filter((a) => {
     const modulo = MODULO_DE[a.tipo]
     return modulo === null || con(modulo)

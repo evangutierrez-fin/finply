@@ -60,6 +60,29 @@ export function Conciliar({
     setGuardando(false)
   }
 
+  /**
+   * Asentar la diferencia como movimiento (Fase 19).
+   *
+   * Hasta ayer un corte podía decir "faltan $340" y ahí se quedaba: señalaba el
+   * hueco sin forma de taparlo. Con esto, el faltante del cajón entra como
+   * gasto y el sobrante como ingreso, con el monto que Finply ya calculó.
+   *
+   * **Solo aparece cuando no hay partidas por palomear.** Con partidas
+   * pendientes la diferencia casi nunca es un faltante de verdad: es una
+   * partida que existe y falta marcar, y asentarla como ajuste taparía el
+   * hueco con una mentira. Ahí lo que hay que hacer es palomear.
+   */
+  const ajustar = async (id: number) => {
+    setError(null)
+    try {
+      await api.conciliacion.ajustar(id, profile.id)
+      stamp('Diferencia asentada')
+      bump()
+    } catch (err) {
+      setError((err as Error).message)
+    }
+  }
+
   const quitar = async (id: number) => {
     try {
       await api.conciliacion.remove(id)
@@ -73,7 +96,9 @@ export function Conciliar({
     <section className="conciliar" aria-label="Conciliación">
       <p className="conciliar-intro">
         Palomea cada partida contra tu estado de cuenta. Después declara el saldo que el
-        banco dice a esa fecha: si la diferencia es cero, la cuenta cuadra.
+        banco dice a esa fecha: si la diferencia es cero, la cuenta cuadra. Si no cuadra y ya
+        no queda nada por palomear —el caso del cajón de efectivo, donde lo que falta es
+        dinero que no está—, la diferencia se puede asentar como movimiento.
       </p>
 
       {accountId === 0 ? (
@@ -160,6 +185,15 @@ export function Conciliar({
                     : `${c.pendientes} sin palomear`}
                 </td>
                 <td className="col-acciones">
+                  {c.diferenciaCents !== 0 && c.pendientes === 0 && (
+                    <button
+                      type="button"
+                      className="btn-liga"
+                      onClick={() => void ajustar(c.id)}
+                    >
+                      Asentar la diferencia
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="accion"

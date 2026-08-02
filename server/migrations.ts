@@ -1100,6 +1100,61 @@ export const MIGRATIONS: Migration[] = [
       `)
     },
   },
+  {
+    id: 19,
+    name: 'cotizaciones y órdenes de compra: el documento antes de la factura',
+    up: (db) => {
+      // El ciclo empezaba a media calle. Finply sabía de la factura —el
+      // documento que ya es un cobro— pero no de lo que la precede: la
+      // cotización que mandas y esperas, y la orden que le pones a un
+      // proveedor. Sin eso no hay forma de contestar "¿cuánto tengo en la
+      // calle esperando respuesta?", que es la pregunta con la que un negocio
+      // decide si puede comprometerse a algo más.
+      //
+      // **Una sola tabla con `direction`**, igual que `invoices`: la
+      // cotización y la orden son el mismo documento con la flecha invertida
+      // —quién promete y a quién— y partirlas en dos tablas obligaría a cada
+      // consulta, cada alerta y cada respaldo a preguntar cuál de las dos está
+      // mirando. Es D15 al derecho: dos cosas que sí son la misma.
+      //
+      // Lo que **no** entra, y por qué: la recepción de mercancía y el cotejo
+      // de tres vías (orden/recepción/factura) abren un ciclo nuevo, no cierran
+      // el que ya estaba. D23 lo deja fuera con su criterio.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS quotes (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          counterparty_id INTEGER NOT NULL REFERENCES counterparties(id) ON DELETE CASCADE,
+          -- 'emitida' es la cotización que mandas a un cliente; 'recibida', la
+          -- orden que le pones a un proveedor. Mismo documento, flecha al revés.
+          direction TEXT NOT NULL CHECK (direction IN ('emitida', 'recibida')),
+          folio TEXT NOT NULL DEFAULT '',
+          concept TEXT NOT NULL DEFAULT '',
+          issue_date TEXT NOT NULL,
+          -- Hasta cuándo vale lo que prometiste. Nulo: sin vigencia, que es lo
+          -- que pasa con media cotización real.
+          valid_until TEXT,
+          subtotal_cents INTEGER NOT NULL CHECK (subtotal_cents > 0),
+          tax_cents INTEGER NOT NULL DEFAULT 0 CHECK (tax_cents >= 0),
+          cost_center_id INTEGER REFERENCES cost_centers(id) ON DELETE SET NULL,
+          -- Tres estados y **ninguno se llama 'vencida'**: eso se deriva de
+          -- \`valid_until\` contra hoy, y guardarlo obligaría a un trabajo
+          -- nocturno que le cambiara el estado a las cotizaciones dormidas. Es
+          -- D10 otra vez: lo que se puede derivar no se guarda, porque un
+          -- estado guardado se queda viejo y nadie se entera.
+          status TEXT NOT NULL DEFAULT 'enviada'
+            CHECK (status IN ('enviada', 'aceptada', 'perdida')),
+          -- La factura que salió de ella. Se llena al convertirla, y si esa
+          -- factura se borra la cotización sigue aceptada: la aceptaron.
+          invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_cotizaciones_perfil
+          ON quotes(profile_id, direction, status);
+        CREATE INDEX IF NOT EXISTS idx_cotizaciones_contraparte ON quotes(counterparty_id);
+      `)
+    },
+  },
 ]
 
 /** Versión de esquema que espera este código. */

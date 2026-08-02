@@ -7,6 +7,7 @@ import type {
   Bien, BienKind, CorteConciliacion, SerieCuenta, PresupuestoMes, TopeTotal,
   Anticipo, BandejaFacturas, Cobranza, FacturaRecurrente,
   Almacen, Arrendamiento, Hora, MovimientoStock, Producto, ResumenHoras,
+  Cotizacion, ResumenCotizaciones, TableroContraparte,
 } from '../shared/types.ts'
 
 /** Error de la API que conserva el código y el cuerpo, para poder reaccionar. */
@@ -454,6 +455,16 @@ export const api = {
       balanceCents: number
       note?: string
     }) => req<CorteConciliacion>('/api/conciliacion', { method: 'POST', body: JSON.stringify(data) }),
+    /**
+     * Asienta la diferencia del corte como movimiento: faltante del cajón como
+     * gasto, sobrante como ingreso. El monto no se manda — es el que Finply ya
+     * calculó, y aceptar otro convertiría el ajuste en una partida inventada.
+     */
+    ajustar: (id: number, profileId: number, datos: { categoryId?: number | null; concept?: string } = {}) =>
+      req<{ txId: number; corte: CorteConciliacion }>(`/api/conciliacion/${id}/ajustar`, {
+        method: 'POST',
+        body: JSON.stringify({ profileId, ...datos }),
+      }),
     remove: (id: number) => req<{ ok: true }>(`/api/conciliacion/${id}`, { method: 'DELETE' }),
   },
   debts: {
@@ -505,6 +516,9 @@ export const api = {
   },
   contrapartes: {
     list: (profileId: number) => req<Contraparte[]>(`/api/contrapartes?profileId=${profileId}`),
+    /** Todo de una contraparte en una hoja. Derivado: no guarda nada. */
+    tablero: (id: number, profileId: number) =>
+      req<TableroContraparte>(`/api/contrapartes/${id}/tablero?profileId=${profileId}`),
     create: (data: {
       profileId: number
       name: string
@@ -537,6 +551,53 @@ export const api = {
     update: (id: number, data: Partial<{ name: string; archived: boolean }>) =>
       req<CentroCosto>(`/api/centros/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     remove: (id: number) => req<{ ok: true }>(`/api/centros/${id}`, { method: 'DELETE' }),
+  },
+  /** Cotizaciones y órdenes de compra: el documento que va antes de la factura. */
+  cotizaciones: {
+    list: (profileId: number, opciones: { direction?: string; status?: string } = {}) => {
+      const q = new URLSearchParams({ profileId: String(profileId) })
+      if (opciones.direction) q.set('direction', opciones.direction)
+      if (opciones.status) q.set('status', opciones.status)
+      return req<Cotizacion[]>(`/api/cotizaciones?${q}`)
+    },
+    resumen: (profileId: number) =>
+      req<{ emitida: ResumenCotizaciones; recibida: ResumenCotizaciones }>(
+        `/api/cotizaciones/resumen?profileId=${profileId}`,
+      ),
+    create: (data: {
+      profileId: number
+      counterpartyId: number
+      direction: string
+      folio?: string
+      concept?: string
+      issueDate: string
+      validUntil?: string | null
+      subtotalCents: number
+      taxCents?: number
+      costCenterId?: number | null
+    }) => req<Cotizacion>('/api/cotizaciones', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: number, data: Record<string, unknown>) =>
+      req<Cotizacion>(`/api/cotizaciones/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    /** Darla por perdida, o revivirla. 'aceptada' se llega facturando. */
+    estado: (id: number, profileId: number, status: 'enviada' | 'perdida') =>
+      req<Cotizacion>(`/api/cotizaciones/${id}/estado?profileId=${profileId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      }),
+    facturar: (
+      id: number,
+      profileId: number,
+      data: { folio?: string; issueDate: string; dueDate?: string | null },
+    ) =>
+      req<{ cotizacion: Cotizacion; factura: Factura }>(
+        `/api/cotizaciones/${id}/facturar?profileId=${profileId}`,
+        { method: 'POST', body: JSON.stringify(data) },
+      ),
+    remove: (id: number, profileId: number) =>
+      req<{ ok: true; facturaViva: boolean }>(
+        `/api/cotizaciones/${id}?profileId=${profileId}`,
+        { method: 'DELETE' },
+      ),
   },
   facturas: {
     list: (profileId: number, opciones: { direction?: string; pendientes?: boolean } = {}) => {

@@ -215,6 +215,26 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   al revés: **cuánto tienes que apartar al mes** para llegar a una cifra, que se
   resuelve corriendo la misma proyección hasta encontrar el aporte más chico que
   llega. No es un pronóstico ni un consejo de inversión.
+- **Cotizaciones y órdenes de compra** — el documento que va **antes** de la
+  factura, que es donde el ciclo empezaba a media calle. Lo que le prometes a un
+  cliente y lo que le encargas a un proveedor viven en la misma sección con la
+  flecha invertida, con su vigencia y su estado. Se convierten en factura de un
+  clic heredando concepto, montos y centro —lo que Finply ya tiene enfrente no
+  se vuelve a teclear— y la que se te vence sin respuesta te avisa. La tasa de
+  éxito se mide sobre lo **contestado**: si lo que sigue esperando entrara en la
+  cuenta, mandar una cotización nueva te haría ver peor. Nada de esto mueve tu
+  libro: prometer un precio no es cobrar.
+- **Corte de caja** — el cajón de efectivo se cuadra como una cuenta de banco:
+  cuentas lo que hay, Finply dice cuánto debería haber, y **la diferencia se
+  asienta como movimiento** —faltante como gasto, sobrante como ingreso— con el
+  monto que salió de la resta, no uno tecleado. Solo cuando no queda nada por
+  palomear: con partidas sin marcar, esa diferencia no es un faltante, es lo que
+  no has revisado, y Finply se niega diciendo cuántas faltan.
+- **Tablero por contraparte** — todo de un cliente en una hoja, desplegable en
+  su renglón: facturado, cobrado, lo que te debe, lo vencido, lo cotizado sin
+  respuesta y **cuánto tarda en pagarte** contra el crédito que le diste. El
+  plazo se mide hasta el último cobro: pagar el 10 % a tiempo y el resto tres
+  meses después no es pagar a tiempo.
 - **Reportes históricos** — el año completo en una vista: patrimonio mes a mes,
   ingresos contra gastos, en qué se fue el año por categoría y por etiqueta,
   tasa de ahorro y la comparativa de un mes contra el anterior. Con una regla
@@ -366,6 +386,8 @@ server/          Express + node:sqlite
   analisis.ts    colchón, origen del gasto y concentración (solo lectura)
   precios.ts     import CSV de precios: analiza, y solo asienta lo marcado
   simulacion.ts  punto de partida del simulador (solo lectura)
+  cotizaciones.ts el documento antes de la factura, con su vigencia derivada
+  tablero.ts     todo de una contraparte, derivado de lo que ya existe
   facturas.ts    facturas con lo cobrable derivado, aging y cobranza
   facturas-recurrentes.ts plantillas de factura sobre el motor de recurrencias
   negocio.ts     estado de resultados, rentabilidad y punto de equilibrio
@@ -373,6 +395,7 @@ server/          Express + node:sqlite
   routes/        profiles · accounts · categories · tags · transactions · debts
                  · tarjetas · investments · budgets · goals · notes · summary
                  · reportes · alertas · analisis · precios · simulador
+                 · cotizaciones
                  · contrapartes · centros · facturas · facturas-recurrentes
                  · negocio
                  · recurrencias · calendario · flujo · backup · importaciones
@@ -395,6 +418,7 @@ shared/
 src/
   views/         Resumen · Movimientos · Cuentas · Categorías · Reportes
                  · Análisis · Tarjetas · Deudas · Inversiones · Simulador
+                 · Contrapartes · Cotizaciones · Facturas · Resultados
                  · Contrapartes · Facturas · Negocio · Inmuebles · Horas
                  · Inventario · Recurrencias · Calendario · Flujo
                  · Presupuestos · Metas · Notas · Ajustes
@@ -460,8 +484,14 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 | `GET /api/alertas?profileId` | Lo vencido y lo que está por vencer. **Derivadas**: no se guardan ni se descartan |
 | `GET /api/analisis?profileId&meses` | Colchón, tasa de ahorro, recurrente contra discrecional, concentración, tendencia, estacionalidad, categorías disparadas, gasto hormiga y fuentes de ingreso |
 | `GET /api/simulador?profileId&meses&ahorroMensualCents&rendimientoAnualBp&inflacionAnualBp&mesesAporte&retiroMensualCents&objetivoCents` | Las dos rutas —invertir o pagar la deuda— proyectadas sobre las mismas cifras, con rendimiento aparte, lectura en pesos de hoy, etapa de retiro y el aporte que hace falta para una meta |
+| `GET /api/contrapartes/:id/tablero?profileId&hoy` | Todo de una contraparte en una hoja: facturado, cobrado, vencido, cotizado sin respuesta y días que tarda en pagar |
 | `GET/POST /api/contrapartes` · `PATCH/DELETE /:id` | Clientes y proveedores, con lo que te deben y lo que les debes |
 | `GET/POST /api/centros` · `PATCH/DELETE /:id` | La dimensión libre del perfil (proyecto, obra, sucursal) |
+| `GET/POST /api/cotizaciones` · `PATCH/DELETE /:id` | Cotizaciones y órdenes de compra, con su vigencia y su estado |
+| `GET /api/cotizaciones/resumen?profileId&hoy` | Cuánto hay en la calle esperando respuesta, cuánto ya venció y qué proporción de lo contestado se gana |
+| `PATCH /api/cotizaciones/:id/estado` | Darla por perdida, o revivirla |
+| `POST /api/cotizaciones/:id/facturar` | Convertirla en factura heredando su contenido. No asienta dinero |
+| `POST /api/conciliacion/:id/ajustar` | Asienta la diferencia del corte como movimiento. Se niega si quedan partidas sin palomear |
 | `GET/POST /api/facturas` · `PATCH/DELETE /:id` | Facturas emitidas y recibidas, con retenciones. Registrarlas **no mueve el libro** |
 | `POST /api/facturas/:id/cobros` | El cobro (o el pago): aquí nace el asiento, con su parte del impuesto |
 | `POST /api/facturas/:id/notas` · `DELETE /notas/:notaId` | Notas de crédito: cancelan parte de la factura sin mover un peso |
@@ -527,10 +557,6 @@ donde aparece, que en el tema oscuro es la hoja, no el fondo.
   vida entera de cada uno. Así salió el defecto que daba una deuda por saldada
   once pagos antes de tiempo; lo que se hizo con crédito hay que hacerlo con
   todo lo demás.
-
-**Negocio**
-
-- Cotizaciones que se vuelven factura, corte de caja, compras y órdenes
 
 **Cómo se usa**
 

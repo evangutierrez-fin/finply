@@ -544,6 +544,8 @@ export type TipoAlerta =
   /** Módulos de giro (Fase 15): el contrato que se acaba y el anaquel vacío. */
   | 'arrendamiento'
   | 'existencias'
+  /** La cotización que se te vence sin respuesta (Fase 19). */
+  | 'cotizacion'
   /** El techo de todo el mes: no es la suma de los otros, por eso va aparte. */
   | 'presupuesto_total'
   | 'tarjeta'
@@ -573,6 +575,7 @@ export interface Alerta {
     | 'metas'
     | 'inmuebles'
     | 'inventario'
+    | 'cotizaciones'
 }
 
 export interface CategoriaParte {
@@ -1082,6 +1085,102 @@ export interface Factura {
   costCenterName: string | null
   notasCredito: NotaCredito[]
   createdAt: string
+}
+
+/** Lo que puede pasarle a una cotización. 'vencida' no está: se deriva. */
+export type EstadoCotizacion = 'enviada' | 'aceptada' | 'perdida'
+
+/**
+ * Una cotización (`emitida`) o una orden de compra (`recibida`): el documento
+ * que va **antes** de la factura. Una promesa de precio, no un cobro — no
+ * asienta nada, igual que la factura no asienta hasta que se cobra (D14).
+ */
+export interface Cotizacion {
+  id: number
+  profileId: number
+  counterpartyId: number
+  counterpartyName: string
+  direction: DireccionFactura
+  folio: string
+  concept: string
+  issueDate: string
+  /** Hasta cuándo vale lo que prometiste. Nulo si no se puso vigencia. */
+  validUntil: string | null
+  subtotalCents: number
+  taxCents: number
+  totalCents: number
+  costCenterId: number | null
+  costCenterName: string | null
+  status: EstadoCotizacion
+  /**
+   * Enviada y con la vigencia atrás. **Derivado, no guardado**: un estado
+   * guardado necesitaría que algo lo cambiara de noche y se quedaría viejo.
+   */
+  vencida: boolean
+  /** La factura que salió de ella, si ya se convirtió. */
+  invoiceId: number | null
+  invoiceFolio: string | null
+  createdAt: string
+}
+
+/**
+ * Todo de una contraparte en una hoja. Nada de esto se guarda: son las mismas
+ * cifras que ya viven en Facturas, Movimientos, la antigüedad de saldos y
+ * Resultados, juntadas por fin **por contraparte**, que es la pregunta que un
+ * negocio se hace antes de dar más crédito.
+ */
+export interface TableroContraparte {
+  counterpartyId: number
+  name: string
+  role: RolContraparte
+  creditDays: number | null
+  creditLimitCents: number | null
+  /** Lo cobrable de sus facturas abiertas: el total menos retenciones y notas. */
+  facturadoCents: number
+  /** Lo que de eso falta. */
+  saldoCents: number
+  /** Lo que falta y además ya se pasó de su fecha. */
+  vencidoCents: number
+  facturas: number
+  facturasVencidas: number
+  primeraFactura: string | null
+  ultimaFactura: string | null
+  /** Lo que de verdad entró de esta contraparte, con la regla de D6. */
+  cobradoCents: number
+  /** Y lo que salió hacia ella. */
+  pagadoCents: number
+  /** Lo cotizado que sigue esperando respuesta (Fase 19). */
+  esperandoCents: number
+  cotizacionesEsperando: number
+  /**
+   * Cuántos días tarda en pagar, en promedio, sobre sus facturas **saldadas** y
+   * contando hasta el **último** cobro. `null` si nunca ha saldado una: no se
+   * puede afirmar nada.
+   */
+  diasDePagoPromedio: number | null
+  /** Cuántas de sus cotizaciones contestadas se ganaron, en bp. */
+  tasaExitoBp: number | null
+  sobreLimite: boolean
+}
+
+/** Lo que hay en la calle esperando respuesta, de un lado o del otro. */
+export interface ResumenCotizaciones {
+  direction: DireccionFactura
+  esperandoCents: number
+  esperando: number
+  vencidoCents: number
+  vencidas: number
+  aceptadoCents: number
+  aceptadas: number
+  perdidoCents: number
+  perdidas: number
+  /**
+   * Cuántas de las **contestadas** se ganaron, en puntos base. `null` cuando
+   * nadie ha contestado: un 0 % ahí diría que pierdes todo, y lo cierto es que
+   * no se sabe (R9). Lo que sigue esperando no entra en el denominador — si
+   * entrara, mandar una cotización nueva bajaría tu tasa de éxito.
+   */
+  tasaExitoBp: number | null
 }
 
 /**
