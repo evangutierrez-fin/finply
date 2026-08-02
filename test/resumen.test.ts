@@ -142,6 +142,136 @@ describe('los treinta días de cada cuenta', () => {
   })
 })
 
+// Fase 18 · el Resumen aplica D6.
+//
+// Hasta aquí esta vista sumaba `amount_cents` en crudo mientras Reportes,
+// Análisis y el estado de resultados aplicaban la regla: un préstamo recibido
+// salía como ingreso en la portada y no en el reporte del mismo mes. Dos
+// verdades sobre el mismo peso es justo lo que D14 descartó y lo que R18
+// prohíbe, y por eso lo que se prueba aquí no es una cifra suelta: es que las
+// dos vistas **digan lo mismo**.
+describe('las cifras del mes cuentan con la regla de D6', () => {
+  const ingresar = (perfil: number, cuenta: number, amountCents: number, date: string, extra = {}) =>
+    c.post('/api/transactions', {
+      profileId: perfil, accountId: cuenta, type: 'ingreso', amountCents, date, ...extra,
+    })
+
+  test('un préstamo recibido no es ingreso de la portada', async () => {
+    const { perfil, cuenta } = await libroBase(c, 'Préstamo')
+    await ingresar(perfil.id, cuenta.id, 500000, '2026-07-03')
+    const antes = await resumenDe(perfil.id)
+    assert.equal(antes.incomeCents, 500000)
+
+    // El desembolso entra a la cuenta —el saldo sube— pero no lo ganaste.
+    await c.post('/api/debts', {
+      profileId: perfil.id, direction: 'por_pagar', counterparty: 'Nu',
+      principalCents: 3000000, startDate: '2026-07-10', accountId: cuenta.id,
+    })
+
+    const r = await resumenDe(perfil.id)
+    assert.equal(r.incomeCents, 500000, 'el préstamo no lo ganaste, lo debes')
+    assert.equal(r.totalCents, antes.totalCents + 3000000, 'pero el dinero sí está ahí')
+    const dia10 = r.byDay.find((d) => d.date === '2026-07-10')
+    assert.equal(dia10, undefined, 'y el día del desembolso no es un día con actividad')
+  })
+
+  test('el Resumen y el reporte del mismo mes dan la misma cifra', async () => {
+    const { perfil, cuenta, categorias } = await libroBase(c, 'Cuadre')
+    const gasto = categorias.find((k: any) => k.kind === 'gasto')
+    await ingresar(perfil.id, cuenta.id, 800000, '2026-07-02')
+    await gastar(perfil.id, cuenta.id, 250000, '2026-07-05')
+    const inv = (await c.post('/api/investments', { profileId: perfil.id, name: 'CETES', kind: 'cetes' })).body
+    await c.post(`/api/investments/${inv.id}/entries`, {
+      type: 'aporte', amountCents: 400000, date: '2026-07-08', accountId: cuenta.id,
+    })
+    await c.post('/api/transactions', {
+      profileId: perfil.id, accountId: cuenta.id, type: 'gasto',
+      amountCents: 90000, date: '2026-07-09', categoryId: gasto.id,
+    })
+
+    const r = await resumenDe(perfil.id)
+    const anual = (await c.get(`/api/reportes?profileId=${perfil.id}&year=2026`)).body
+    const julio = anual.meses.find((m: any) => m.month === '2026-07')
+    assert.equal(r.incomeCents, julio.incomeCents, 'la portada y el reporte, la misma cifra')
+    assert.equal(r.expenseCents, julio.expenseCents)
+    assert.equal(r.expenseCents, 340000, 'el aporte a la inversión no es gasto')
+  })
+
+  test('un ticket dividido se reparte también aquí', async () => {
+    // D17 llegó en la Fase 10 a los reportes y no al Resumen: la gráfica de
+    // "en qué se fue el gasto" enseñaba el ticket entero en una sola categoría.
+    const { perfil, cuenta, categorias } = await libroBase(c, 'Dividido')
+    const gastos = categorias.filter((k: any) => k.kind === 'gasto')
+    const [uno, dos] = [gastos[0], gastos[1]]
+    await c.post('/api/transactions', {
+      profileId: perfil.id, accountId: cuenta.id, type: 'gasto', amountCents: 90000,
+      date: '2026-07-04', categoryId: uno.id,
+      splits: [
+        { categoryId: uno.id, amountCents: 60000 },
+        { categoryId: dos.id, amountCents: 30000 },
+      ],
+    })
+
+    const r = await resumenDe(perfil.id)
+    assert.equal(r.expenseCents, 90000, 'el total del mes es el del ticket, no el de los renglones')
+    const porNombre = new Map(r.byCategory.map((k) => [k.name, k.expenseCents]))
+    assert.equal(porNombre.get(uno.name), 60000)
+    assert.equal(porNombre.get(dos.name), 30000)
+  })
+
+  test('una devolución baja su gasto en vez de inflar el ingreso', async () => {
+    const { perfil, cuenta, categorias } = await libroBase(c, 'Devolución')
+    const ropa = categorias.filter((k: any) => k.kind === 'gasto')[0]
+    const compra = (
+      await c.post('/api/transactions', {
+        profileId: perfil.id, accountId: cuenta.id, type: 'gasto',
+        amountCents: 120000, date: '2026-07-06', categoryId: ropa.id,
+      })
+    ).body
+    await ingresar(perfil.id, cuenta.id, 45000, '2026-07-12', { refundOfId: compra.id })
+
+    const r = await resumenDe(perfil.id)
+    assert.equal(r.incomeCents, 0, 'devolver una camisa no es ingreso')
+    assert.equal(r.expenseCents, 75000, 'es gasto que no acabaste haciendo')
+    const porNombre = new Map(r.byCategory.map((k) => [k.name, k.expenseCents]))
+    assert.equal(porNombre.get(ropa.name), 75000, 'y baja la categoría del gasto original')
+  })
+
+  test('el depósito de un inquilino no es ingreso de nadie', async () => {
+    const { perfil, cuenta } = await libroBase(c, 'Depósito')
+    await c.put(`/api/profiles/${perfil.id}/modules`, { modules: ['inmuebles'] })
+    const bien = (
+      await c.post('/api/bienes', {
+        profileId: perfil.id, name: 'Depto', kind: 'inmueble',
+        costCents: 100000000, acquiredDate: '2025-01-01',
+      })
+    ).body
+    const renta = (
+      await c.post('/api/inmuebles', {
+        profileId: perfil.id, assetId: bien.id, tenant: 'Ana',
+        rentCents: 1500000, dueDay: 5, startDate: '2026-01-01',
+      })
+    ).body
+    await ingresar(perfil.id, cuenta.id, 1500000, '2026-07-05', {
+      rentalId: renta.id, rentalRole: 'renta',
+    })
+    await ingresar(perfil.id, cuenta.id, 1500000, '2026-07-06', {
+      rentalId: renta.id, rentalRole: 'deposito',
+    })
+
+    const r = await resumenDe(perfil.id)
+    assert.equal(r.incomeCents, 1500000, 'la renta sí, el depósito no: lo tienes y lo debes')
+
+    // Y al borrar el contrato el papel se va con él, que es lo que el aviso
+    // promete. Sin eso quedaba un `rental_role` huérfano —un estado que el
+    // validador rechaza al escribir— y el depósito no contaba nunca.
+    const borrado = await c.del(`/api/inmuebles/${renta.id}?profileId=${perfil.id}`)
+    assert.equal(borrado.body.depositos, 1)
+    const despues = await resumenDe(perfil.id)
+    assert.equal(despues.incomeCents, 3000000, 'sin contrato vuelve a ser ingreso, como avisó')
+  })
+})
+
 describe('R11 · el Resumen no crece con el libro', () => {
   async function sembrar(nombre: string, cuentas: number, movs: number) {
     const { perfil, cuenta, categorias } = await libroBase(c, nombre)

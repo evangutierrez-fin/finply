@@ -454,14 +454,27 @@ export const preciosConfirmar = preciosInput.extend({
   filas: z.array(z.number().int().nonnegative()).min(1, 'No hay filas seleccionadas'),
 })
 
-export const simuladorQuery = z.object({
-  profileId: z.coerce.number().int().positive(),
-  meses: z.coerce.number().int().min(1).max(600).default(120),
-  ahorroMensualCents: z.coerce.number().int().min(0).max(1_000_000_000_000).default(0),
-  // De −99.99 % a +200 % anual. El techo no es una opinión sobre qué es
-  // razonable: es lo que evita que un cero de más proyecte un número absurdo.
-  rendimientoAnualBp: z.coerce.number().int().min(-9_999).max(20_000).default(700),
-})
+export const simuladorQuery = z
+  .object({
+    profileId: z.coerce.number().int().positive(),
+    meses: z.coerce.number().int().min(1).max(600).default(120),
+    ahorroMensualCents: z.coerce.number().int().min(0).max(1_000_000_000_000).default(0),
+    // De −99.99 % a +200 % anual. El techo no es una opinión sobre qué es
+    // razonable: es lo que evita que un cero de más proyecte un número absurdo.
+    rendimientoAnualBp: z.coerce.number().int().min(-9_999).max(20_000).default(700),
+    // La inflación no baja de cero: una deflación sostenida a veinte años no es
+    // un supuesto, es otra pregunta. Cero deja nominal y real idénticos.
+    inflacionAnualBp: z.coerce.number().int().min(0).max(20_000).default(0),
+    // Ausente = se aporta todo el horizonte, que es la simulación de siempre.
+    mesesAporte: z.coerce.number().int().min(0).max(600).optional(),
+    retiroMensualCents: z.coerce.number().int().min(0).max(1_000_000_000_000).default(0),
+    // Cero significa "no pregunté por una meta", y entonces no se responde.
+    objetivoCents: z.coerce.number().int().min(0).max(1_000_000_000_000_00).default(0),
+  })
+  .refine((q) => q.mesesAporte === undefined || q.mesesAporte <= q.meses, {
+    message: 'No se puede aportar más meses de los que dura la proyección',
+    path: ['mesesAporte'],
+  })
 
 /** Un año suelto, 'AAAA'. El periodo de un tope anual. */
 const isoAnio = z.string().regex(/^\d{4}$/, 'El año va como AAAA')

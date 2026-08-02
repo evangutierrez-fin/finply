@@ -23,7 +23,10 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   minigráfica de 30 días con el cambio en pesos al lado, y el patrimonio se ve
   además como dos barras a la misma escala: lo que tienes, repartido, y lo que
   debes debajo. Cuatro números en fila no dicen si tu casa pesa más que tu
-  deuda.
+  deuda. Lo que entró y salió del mes se cuenta con la **misma regla que los
+  reportes**: recibir un préstamo o guardar el depósito de un inquilino no es
+  ingreso, y un ticket dividido se reparte entre sus categorías. Tu saldo sí los
+  incluye, porque ese es el dinero que tienes.
 - **Perfiles ilimitados** — cada perfil es un libro independiente con sus
   propias cuentas, categorías, movimientos, deudas, inversiones, metas y notas.
   Ideal para separar tus finanzas personales de las de tu negocio. Cada perfil
@@ -198,8 +201,18 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   sobre el mismo peso, y la vista dice cuál es cuál.
 - **Simulador de patrimonio** — qué pasa si apartas X al mes durante N años, y
   si conviene más invertirlo o pagar primero la deuda cara. Sale de tus cifras
-  de hoy, la tasa la pones tú y los cinco supuestos van escritos junto al
-  número. No es un pronóstico ni un consejo de inversión.
+  de hoy, las tasas las pones tú y los siete supuestos van escritos junto al
+  número. Además del patrimonio —que arrastra tu punto de partida y hace que dos
+  rutas muy distintas se vean casi iguales— enseña **lo que puso la tasa**, solo:
+  en pesos, en porcentaje y como una tasa anual equivalente que sí se puede
+  comparar contra la que supusiste. Casi nunca coincide, y esa distancia es el
+  dato: el dinero parado no rinde y las deudas devengan. También el interés que
+  te ahorras liquidando antes, la misma proyección **en pesos de hoy** con tu
+  inflación, una etapa de **retiro** (aportas N años, sacas una cantidad al mes
+  hasta que se acabe — o hasta que se demuestre que no se acaba) y la pregunta
+  al revés: **cuánto tienes que apartar al mes** para llegar a una cifra, que se
+  resuelve corriendo la misma proyección hasta encontrar el aporte más chico que
+  llega. No es un pronóstico ni un consejo de inversión.
 - **Reportes históricos** — el año completo en una vista: patrimonio mes a mes,
   ingresos contra gastos, en qué se fue el año por categoría y por etiqueta,
   tasa de ahorro y la comparativa de un mes contra el anterior. Con una regla
@@ -369,8 +382,10 @@ shared/
   recurrencias.ts periodos de una plantilla y su clave estable (puro)
   color.ts       contraste WCAG y veredicto por tema (puro)
   inversiones.ts recorrido del historial y unidades en enteros ×10⁸ (puro)
-  rendimiento.ts XIRR por bisección, con null donde no se puede afirmar (puro)
-  simulador.ts   proyección de patrimonio mes a mes (puro)
+  rendimiento.ts la tasa que anula unos flujos, por bisección, y XIRR encima
+                 de ella; null donde no se puede afirmar nada (puro)
+  simulador.ts   proyección mes a mes: patrimonio, rendimiento, inflación,
+                 retiro y el aporte para una meta (puro)
   negocio.ts     tramos de antigüedad y punto de equilibrio (puro)
   modulos.ts     catálogo de secciones por perfil y su resolución (puro)
   giro.ts        promedio ponderado, horas y rendimiento de un inmueble (puro)
@@ -432,7 +447,7 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 | `GET/POST /api/goals` · `PATCH/DELETE /:id` | Metas de ahorro |
 | `POST /api/goals/:id/entries` · `DELETE /api/goals/entries/:id` | Aportes a metas |
 | `GET/POST /api/notes` · `PATCH/DELETE /:id` | Notas (con fijado) |
-| `GET /api/summary?profileId&month&hoy` | Resumen del mes + patrimonio, con el cambio contra el cierre del mes pasado y 30 días de saldo por cuenta |
+| `GET /api/summary?profileId&month&hoy` | Resumen del mes + patrimonio, con el cambio contra el cierre del mes pasado y 30 días de saldo por cuenta. Ingreso, gasto y categorías con la regla de D6 y el reparto de las partidas divididas |
 | `GET /api/reportes?profileId&year` | El año: patrimonio mes a mes, ingresos vs gastos, categorías, etiquetas, de dónde vino, tasa de ahorro y mediana |
 | `GET /api/reportes/comparativa?profileId&desde&hasta` | Dos periodos cualesquiera, categoría por categoría. Sin el segundo rango, el bloque anterior del mismo largo |
 | `GET/POST /api/recurrencias` · `PATCH/DELETE /:id` | Plantillas de lo que se repite (mensual, quincenal, semanal, anual) |
@@ -442,7 +457,7 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 | `GET /api/calendario?profileId&dias` | Lo que vence: recurrencias, cortes y pagos de tarjeta, deudas y parcialidades |
 | `GET /api/alertas?profileId` | Lo vencido y lo que está por vencer. **Derivadas**: no se guardan ni se descartan |
 | `GET /api/analisis?profileId&meses` | Colchón, tasa de ahorro, recurrente contra discrecional, concentración, tendencia, estacionalidad, categorías disparadas, gasto hormiga y fuentes de ingreso |
-| `GET /api/simulador?profileId&meses&ahorroMensualCents&rendimientoAnualBp` | Las dos rutas —invertir o pagar la deuda— proyectadas sobre las mismas cifras |
+| `GET /api/simulador?profileId&meses&ahorroMensualCents&rendimientoAnualBp&inflacionAnualBp&mesesAporte&retiroMensualCents&objetivoCents` | Las dos rutas —invertir o pagar la deuda— proyectadas sobre las mismas cifras, con rendimiento aparte, lectura en pesos de hoy, etapa de retiro y el aporte que hace falta para una meta |
 | `GET/POST /api/contrapartes` · `PATCH/DELETE /:id` | Clientes y proveedores, con lo que te deben y lo que les debes |
 | `GET/POST /api/centros` · `PATCH/DELETE /:id` | La dimensión libre del perfil (proyecto, obra, sucursal) |
 | `GET/POST /api/facturas` · `PATCH/DELETE /:id` | Facturas emitidas y recibidas, con retenciones. Registrarlas **no mueve el libro** |
@@ -510,11 +525,6 @@ donde aparece, que en el tema oscuro es la hoja, no el fondo.
   vida entera de cada uno. Así salió el defecto que daba una deuda por saldada
   once pagos antes de tiempo; lo que se hizo con crédito hay que hacerlo con
   todo lo demás.
-
-**El libro, más completo**
-
-- Simulador: la gráfica del **rendimiento solo**, sin el patrimonio, que es lo
-  que de verdad distingue una ruta de la otra; inflación y retiro
 
 **Negocio**
 

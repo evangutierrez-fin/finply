@@ -24,11 +24,14 @@ function EjeY({
   y,
   x0,
   x1,
+  rotulo = fmtCompacto,
 }: {
   marcas: number[]
   y: (cents: number) => number
   x0: number
   x1: number
+  /** Cómo se escribe cada marca. Pesos por omisión; la serie en porcentaje trae la suya. */
+  rotulo?: (v: number) => string
 }) {
   return (
     <g aria-hidden="true">
@@ -36,7 +39,7 @@ function EjeY({
         <g key={v}>
           <line x1={x0} y1={y(v)} x2={x1} y2={y(v)} className={v === 0 ? 'grafica-base' : 'grafica-guia'} />
           <text x={x0 - 6} y={y(v) + 3.2} className="grafica-tick eje-rotulo" textAnchor="end">
-            {fmtCompacto(v)}
+            {rotulo(v)}
           </text>
         </g>
       ))}
@@ -816,11 +819,38 @@ export function HistorialValor({
  */
 export function ProyeccionLineas({
   series,
+  titulo,
+  etiqueta,
+  formato = fmtMoney,
+  formatoEje = fmtCompacto,
+  marca,
 }: {
-  series: { nombre: string; puntos: { mes: number; patrimonioCents: number }[]; punteada?: boolean }[]
+  /** Una serie por ruta. `puntos[i]` es el valor del mes `i`. */
+  series: { nombre: string; puntos: number[]; punteada?: boolean }[]
+  /** Encabezado de la tabla que leen los lectores de pantalla. */
+  titulo: string
+  /** Qué se está viendo, para el `aria-label` del SVG. */
+  etiqueta: string
+  /**
+   * Cómo se escribe un valor en el pie y en la tabla. Por omisión son pesos;
+   * la serie en porcentaje pasa la suya.
+   */
+  formato?: (v: number) => string
+  /**
+   * Cómo se escribe una marca del eje. Va aparte de `formato` porque el eje
+   * tiene 46 px: los pesos van compactos ("$1.5M") o se salen del recuadro, y
+   * un porcentaje cabe entero. Cuando no se pasa, se compacta.
+   */
+  formatoEje?: (v: number) => string
+  /**
+   * Un mes que merece una raya vertical: el último de aporte, cuando hay fase
+   * de retiro. Sin él, la cima de la montaña es un cambio de pendiente que hay
+   * que adivinar.
+   */
+  marca?: { mes: number; texto: string } | null
 }) {
   const [activo, setActivo] = useState<number | null>(null)
-  const todos = series.flatMap((s) => s.puntos.map((p) => p.patrimonioCents))
+  const todos = series.flatMap((s) => s.puntos)
   const meses = Math.max(...series.map((s) => s.puntos.length), 1) - 1
   const nav = useNavegable(meses + 1, setActivo)
   if (todos.length === 0) return null
@@ -833,7 +863,7 @@ export function ProyeccionLineas({
   const width = MARGEN_EJE + ancho
   const margen = 14
   const paso = (ancho - margen * 2) / (meses || 1)
-  const y = (cents: number) => chartH - ((cents - min) / rango) * chartH * 0.88 - chartH * 0.06
+  const y = (v: number) => chartH - ((v - min) / rango) * chartH * 0.88 - chartH * 0.06
   const base = y(0)
   const x = (mes: number) => MARGEN_EJE + margen + mes * paso
 
@@ -843,15 +873,21 @@ export function ProyeccionLineas({
         viewBox={`0 0 ${width} ${chartH}`}
         className="grafica-svg"
         role="img"
-        aria-label="Patrimonio proyectado con cada estrategia. Usa las flechas para recorrer los meses."
+        aria-label={`${etiqueta} Usa las flechas para recorrer los meses.`}
         {...nav}
       >
-        <EjeY marcas={ticksBonitos(min, max, 4)} y={y} x0={MARGEN_EJE} x1={width} />
+        <EjeY marcas={ticksBonitos(min, max, 4)} y={y} x0={MARGEN_EJE} x1={width} rotulo={formatoEje} />
         {min < 0 && <line x1={MARGEN_EJE} y1={base} x2={width} y2={base} className="grafica-base" />}
+        {marca && marca.mes > 0 && marca.mes < meses && (
+          <g aria-hidden="true">
+            <line x1={x(marca.mes)} y1="0" x2={x(marca.mes)} y2={chartH} className="grafica-corte" />
+            <text x={x(marca.mes) + 4} y="11" className="grafica-tick">{marca.texto}</text>
+          </g>
+        )}
         {series.map((s) => (
           <polyline
             key={s.nombre}
-            points={s.puntos.map((p) => `${x(p.mes).toFixed(1)},${y(p.patrimonioCents).toFixed(1)}`).join(' ')}
+            points={s.puntos.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')}
             className={`serie-linea ${s.punteada ? 'serie-punteada' : ''}`}
           />
         ))}
@@ -868,10 +904,10 @@ export function ProyeccionLineas({
         ))}
         {activo !== null &&
           series.map((s) => {
-            const p = s.puntos[activo]
-            return p ? (
-              <circle key={s.nombre} cx={x(p.mes)} cy={y(p.patrimonioCents)} r="4" className="serie-punto" />
-            ) : null
+            const v = s.puntos[activo]
+            return v === undefined ? null : (
+              <circle key={s.nombre} cx={x(activo)} cy={y(v)} r="4" className="serie-punto" />
+            )
           })}
       </svg>
       <div className="grafica-pie" aria-live="polite">
@@ -881,7 +917,7 @@ export function ProyeccionLineas({
             {series.map((s) => (
               <span key={s.nombre}>
                 {' · '}
-                {s.nombre}: <span className="cifra-chica">{fmtMoney(s.puntos[activo]?.patrimonioCents ?? 0)}</span>
+                {s.nombre}: <span className="cifra-chica">{formato(s.puntos[activo] ?? 0)}</span>
               </span>
             ))}
           </span>
@@ -898,11 +934,11 @@ export function ProyeccionLineas({
         )}
       </div>
       <TablaDatos
-        titulo="Patrimonio proyectado con cada estrategia"
+        titulo={titulo}
         columnas={['Mes', ...series.map((s) => s.nombre)]}
         filas={Array.from({ length: meses + 1 }, (_, i) => [
           String(i),
-          ...series.map((s) => fmtMoney(s.puntos[i]?.patrimonioCents ?? 0)),
+          ...series.map((s) => formato(s.puntos[i] ?? 0)),
         ])}
       />
     </div>

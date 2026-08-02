@@ -189,6 +189,18 @@ export function Resumen({ onNav }: { onNav: (view: View) => void }) {
             <dd><Money cents={neto} signed /></dd>
           </div>
         </dl>
+        {/*
+          El supuesto va junto a la cifra, no en una nota al pie de otra vista
+          (R9). Estas tres cuentan con la regla de D6, la misma de Reportes y
+          Análisis: hasta la Fase 18 el Resumen sumaba en crudo y un préstamo
+          recibido salía aquí como ingreso y allá no.
+        */}
+        <p className="hero-supuesto">
+          Entró y salió cuentan lo que ganaste y lo que gastaste. Recibir un préstamo, aportar a una
+          inversión, guardar el depósito de un inquilino o abonar capital a una deuda no aparecen
+          aquí: mueven tu dinero de bolsillo, no lo crean ni lo consumen. Tu saldo de arriba sí los
+          incluye, porque ese es el dinero que tienes.
+        </p>
       </section>
 
       {flujo && <FinDeMes flujo={flujo} onNav={onNav} />}

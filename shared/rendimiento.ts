@@ -57,36 +57,33 @@ function vpn(flujos: { anios: number; monto: number }[], tasa: number): number {
 }
 
 /**
- * Tasa anual efectiva que anula el valor presente de los flujos, como decimal
- * (0.0734 = 7.34 %). `null` cuando no se puede afirmar nada:
+ * Tasa anual efectiva que anula el valor presente de unos flujos **ya
+ * reducidos a (años desde el primero, monto)**, como decimal (0.0734 = 7.34 %).
  *
- * - menos de dos flujos, o todos en la misma fecha;
- * - todos del mismo signo (sin salida no hay retorno que medir);
- * - menos de `MINIMO_DIAS` entre el primero y el último;
- * - sin raíz dentro del rango buscado.
+ * Vive aparte de `xirr` porque el simulador mide exactamente lo mismo **sin
+ * calendario**: sus flujos caen en meses exactos, no en fechas, y darles
+ * fechas para volver a convertirlas a años metería en una proyección el ruido
+ * de que febrero tiene 28 días. Un solo buscador de raíz para los dos, que es
+ * lo que evita que la tasa de una inversión y la del simulador se calculen con
+ * dos aritméticas distintas.
+ *
+ * `null` cuando no se puede afirmar nada: menos de dos flujos, todos en el
+ * mismo instante, todos del mismo signo (sin salida no hay retorno que medir) o
+ * sin raíz dentro del rango buscado.
  *
  * Se resuelve por **bisección**, no por Newton: converge siempre que la raíz
  * esté encerrada, y encerrarla es justo lo que se comprueba antes. Newton es
  * más rápido y con flujos irregulares se va a infinito; aquí la velocidad no
  * importa —son unas cuantas fechas— y la respuesta correcta sí.
  */
-export function xirr(flujos: Flujo[]): number | null {
-  const utiles = flujos.filter((f) => f.amountCents !== 0)
-  if (utiles.length < 2) return null
+export function tasaQueAnula(flujos: { anios: number; monto: number }[]): number | null {
+  const preparados = flujos.filter((f) => f.monto !== 0)
+  if (preparados.length < 2) return null
+  if (preparados.every((f) => f.anios === preparados[0]!.anios)) return null
 
-  const fechas = utiles.map((f) => f.date).sort()
-  const primera = fechas[0]!
-  const ultima = fechas[fechas.length - 1]!
-  if (diasEntre(primera, ultima) < MINIMO_DIAS) return null
-
-  const hayPositivo = utiles.some((f) => f.amountCents > 0)
-  const hayNegativo = utiles.some((f) => f.amountCents < 0)
+  const hayPositivo = preparados.some((f) => f.monto > 0)
+  const hayNegativo = preparados.some((f) => f.monto < 0)
   if (!hayPositivo || !hayNegativo) return null
-
-  const preparados = utiles.map((f) => ({
-    anios: diasEntre(primera, f.date) / DIAS_ANIO,
-    monto: f.amountCents,
-  }))
 
   let lo = TASA_MIN
   let hi = TASA_MAX
@@ -115,4 +112,24 @@ export function xirr(flujos: Flujo[]): number | null {
   }
   const tasa = (lo + hi) / 2
   return Number.isFinite(tasa) ? tasa : null
+}
+
+/**
+ * XIRR: la tasa anual que hace que todos los flujos, **puestos en su fecha**,
+ * sumen cero. Es `tasaQueAnula` con las fechas ya convertidas a años, más la
+ * única regla que sí es del calendario: por debajo de `MINIMO_DIAS` no se
+ * anualiza nada.
+ */
+export function xirr(flujos: Flujo[]): number | null {
+  const utiles = flujos.filter((f) => f.amountCents !== 0)
+  if (utiles.length < 2) return null
+
+  const fechas = utiles.map((f) => f.date).sort()
+  const primera = fechas[0]!
+  const ultima = fechas[fechas.length - 1]!
+  if (diasEntre(primera, ultima) < MINIMO_DIAS) return null
+
+  return tasaQueAnula(
+    utiles.map((f) => ({ anios: diasEntre(primera, f.date) / DIAS_ANIO, monto: f.amountCents })),
+  )
 }

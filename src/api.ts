@@ -710,12 +710,26 @@ export const api = {
   },
   simulador: (
     profileId: number,
-    opciones: { meses: number; ahorroMensualCents: number; rendimientoAnualBp: number },
+    opciones: {
+      meses: number
+      ahorroMensualCents: number
+      rendimientoAnualBp: number
+      inflacionAnualBp?: number
+      /** Ausente = se aporta todo el horizonte. */
+      mesesAporte?: number
+      retiroMensualCents?: number
+      /** Cero o ausente = no se pregunta por una meta. */
+      objetivoCents?: number
+    },
   ) =>
     req<Simulacion>(
       `/api/simulador?profileId=${profileId}&meses=${opciones.meses}` +
         `&ahorroMensualCents=${opciones.ahorroMensualCents}` +
-        `&rendimientoAnualBp=${opciones.rendimientoAnualBp}`,
+        `&rendimientoAnualBp=${opciones.rendimientoAnualBp}` +
+        `&inflacionAnualBp=${opciones.inflacionAnualBp ?? 0}` +
+        (opciones.mesesAporte === undefined ? '' : `&mesesAporte=${opciones.mesesAporte}`) +
+        `&retiroMensualCents=${opciones.retiroMensualCents ?? 0}` +
+        `&objetivoCents=${opciones.objetivoCents ?? 0}`,
     ),
   budgets: {
     /** El mes entero: topes mensuales, anuales del año, tope total y el avance. */

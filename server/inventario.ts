@@ -277,7 +277,13 @@ export function registrarMovimiento(input: EntradaMovimiento): Producto {
     input.note,
     input.txId ?? null,
   )
-  return productoPorId(input.profileId, input.productId)!
+  // La ventana del costo de ventas es la del **movimiento que se acaba de
+  // apuntar**, no la del mes en que corre el servidor: quien registra una
+  // salida de julio espera ver el costo de julio. Es la misma fecha con la que
+  // se leyó el producto al entrar, y leerlo con otra dejaba la comprobación y
+  // la respuesta mirando meses distintos — un defecto que solo se veía a
+  // partir del día 1 del mes siguiente.
+  return productoPorId(input.profileId, input.productId, input.date)!
 }
 
 export function borrarMovimiento(profileId: number, id: number): void {

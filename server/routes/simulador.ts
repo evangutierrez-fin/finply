@@ -14,6 +14,10 @@ router.get('/', (req, res) => {
       meses: q.meses,
       ahorroMensualCents: q.ahorroMensualCents,
       rendimientoAnualBp: q.rendimientoAnualBp,
+      inflacionAnualBp: q.inflacionAnualBp,
+      mesesAporte: q.mesesAporte,
+      retiroMensualCents: q.retiroMensualCents,
+      objetivoCents: q.objetivoCents,
     }),
   )
 })

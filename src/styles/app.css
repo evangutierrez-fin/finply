@@ -412,6 +412,17 @@ input, select { font: inherit; color: inherit; }
   gap: 7px;
   min-width: 230px;
 }
+/* El supuesto de D6, a lo ancho del hero: `flex: 1 0 100%` lo baja a su propio
+   renglón sin sacarlo de la caja donde vive la cifra que explica. */
+.hero-supuesto {
+  flex: 1 0 100%;
+  font-size: 12.5px;
+  color: var(--tinta-2);
+  line-height: 1.6;
+  padding-top: 12px;
+  border-top: 1px solid var(--regla);
+  max-width: 76ch;
+}
 .hero-stats .stat {
   display: flex;
   justify-content: space-between;
@@ -2137,7 +2148,15 @@ select.campo-input { cursor: pointer; }
 .ruta-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .ruta-mejor { border-color: var(--acento); }
 .ruta-cifra { display: flex; flex-direction: column; gap: 2px; }
+/* La lectura en pesos de hoy va pegada a la nominal, nunca en su lugar: dos
+   verdades del mismo patrimonio, y se ven las dos (Fase 18). */
+.ruta-real { font-size: 12.5px; color: var(--tinta-2); margin-top: 4px; }
 .chip-acento { color: var(--acento); border-color: var(--acento); }
+
+/* El mes en que la montaña cambia de dirección —dejas de aportar y empiezas a
+   retirar— se marca con una vertical: sin ella, la cima es un cambio de
+   pendiente que hay que adivinar. */
+.grafica-corte { stroke: var(--acento); stroke-width: 1; stroke-dasharray: 3 3; }
 
 /* ── perfil de negocio ───────────────────────────────────────────────── */
 .tabla {

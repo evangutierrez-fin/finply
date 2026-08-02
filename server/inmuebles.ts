@@ -17,7 +17,7 @@
 // De solo lectura salvo el alta y la edición del contrato: registrar la renta
 // es registrar un movimiento, y eso lo hace el usuario (R4).
 
-import { db, httpError } from './db.ts'
+import { db, httpError, inTransaction } from './db.ts'
 import { finDeMes, hoyISO, proximoDiaDelMes } from '../shared/fechas.ts'
 import { rendimientoInmueble } from '../shared/giro.ts'
 import type { Arrendamiento } from '../shared/types.ts'
@@ -216,6 +216,13 @@ export function actualizar(id: number, input: EntradaArrendamiento): Arrendamien
  * ⚠ Y por eso pierden también su papel: un depósito sin `rental_role` vuelve a
  * contar como ingreso. La respuesta dice cuántos movimientos toca para que el
  * aviso no mienta.
+ *
+ * El papel se borra **a mano**, aquí. La llave foránea es `ON DELETE SET NULL`
+ * y solo alcanza a `rental_id`; `rental_role` sobrevivía sola, y un papel sin
+ * contrato es un estado que el propio validador rechaza al escribir (400: "Di
+ * de qué arrendamiento es ese cobro"). Esos renglones quedaban donde ni podían
+ * editarse ni contaban como ingreso, y nadie lo veía porque hasta la Fase 18 el
+ * Resumen sumaba en crudo y no miraba el papel.
  */
 export function borrar(profileId: number, id: number): { movimientos: number; depositos: number } {
   const existe = db
@@ -230,6 +237,9 @@ export function borrar(profileId: number, id: number): { movimientos: number; de
        FROM transactions WHERE rental_id = ?`,
     )
     .get(id)
-  db.prepare('DELETE FROM rentals WHERE id = ?').run(id)
+  inTransaction(() => {
+    db.prepare('UPDATE transactions SET rental_role = NULL WHERE rental_id = ?').run(id)
+    db.prepare('DELETE FROM rentals WHERE id = ?').run(id)
+  })
   return { movimientos: cuenta.n, depositos: cuenta.depositos }
 }

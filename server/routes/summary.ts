@@ -9,6 +9,12 @@ import {
   TX_SELECT,
 } from '../db.ts'
 import { listarBienes } from '../bienes.ts'
+import {
+  CATEGORIA_OPERATIVA,
+  DESDE_MOVIMIENTOS,
+  MONTO_OPERATIVO,
+  TIPO_OPERATIVO,
+} from '../reportes.ts'
 import { hoyISO, sumarDias } from '../../shared/fechas.ts'
 import { summaryQuery } from '../validators.ts'
 import type { Account, Summary } from '../../shared/types.ts'
@@ -124,34 +130,44 @@ router.get('/', (req, res) => {
   // cifra sola no dice si viene subiendo.
   const { sparks, totalPrevioCents } = sparksDe(profileId, active, hoy ?? hoyISO(), month)
 
+  // Las tres cifras del mes se miden con **la misma regla que los reportes**
+  // (D6): mover dinero entre bolsillos tuyos no es ingreso ni gasto. Hasta la
+  // Fase 18 esta consulta sumaba `amount_cents` en crudo, así que un préstamo
+  // recibido entraba como ingreso aquí y no en Reportes — dos verdades sobre el
+  // mismo peso, que es justo lo que D14 y R18 prohíben. De regalo, el reparto
+  // de una partida dividida (D17) por fin llega al Resumen: un ticket de $900
+  // en tres categorías se repartía en Reportes y aquí seguía entero en una.
   const totals: any = db
     .prepare(
       `SELECT
-        COALESCE(SUM(CASE WHEN type = 'ingreso' THEN amount_cents END), 0) AS income,
-        COALESCE(SUM(CASE WHEN type = 'gasto' THEN amount_cents END), 0) AS expense
-      FROM transactions
-      WHERE profile_id = ? AND substr(date, 1, 7) = ? AND type IN ('ingreso', 'gasto')`,
+        COALESCE(SUM(CASE WHEN ${TIPO_OPERATIVO} = 'ingreso' THEN ${MONTO_OPERATIVO} END), 0) AS income,
+        COALESCE(SUM(CASE WHEN ${TIPO_OPERATIVO} = 'gasto' THEN ${MONTO_OPERATIVO} END), 0) AS expense
+      ${DESDE_MOVIMIENTOS}
+      WHERE t.profile_id = ? AND substr(t.date, 1, 7) = ? AND t.type IN ('ingreso', 'gasto')`,
     )
     .get(profileId, month)
 
+  // El día que solo tuvo un aporte a inversión no es un día con actividad
+  // operativa: sin el `HAVING` saldría con dos ceros y la tabla del lector de
+  // pantalla anunciaría un movimiento que no hubo.
   const byDay: any[] = db
     .prepare(
-      `SELECT date,
-        COALESCE(SUM(CASE WHEN type = 'ingreso' THEN amount_cents END), 0) AS income,
-        COALESCE(SUM(CASE WHEN type = 'gasto' THEN amount_cents END), 0) AS expense
-      FROM transactions
-      WHERE profile_id = ? AND substr(date, 1, 7) = ? AND type IN ('ingreso', 'gasto')
-      GROUP BY date ORDER BY date ASC`,
+      `SELECT t.date AS date,
+        COALESCE(SUM(CASE WHEN ${TIPO_OPERATIVO} = 'ingreso' THEN ${MONTO_OPERATIVO} END), 0) AS income,
+        COALESCE(SUM(CASE WHEN ${TIPO_OPERATIVO} = 'gasto' THEN ${MONTO_OPERATIVO} END), 0) AS expense
+      ${DESDE_MOVIMIENTOS}
+      WHERE t.profile_id = ? AND substr(t.date, 1, 7) = ? AND t.type IN ('ingreso', 'gasto')
+      GROUP BY t.date HAVING income <> 0 OR expense <> 0 ORDER BY t.date ASC`,
     )
     .all(profileId, month)
 
   const byCategory: any[] = db
     .prepare(
-      `SELECT COALESCE(c.name, 'Sin categoría') AS name, SUM(t.amount_cents) AS expense
-      FROM transactions t
-      LEFT JOIN categories c ON c.id = t.category_id
-      WHERE t.profile_id = ? AND substr(t.date, 1, 7) = ? AND t.type = 'gasto'
-      GROUP BY COALESCE(c.name, 'Sin categoría')
+      `SELECT COALESCE(c.name, 'Sin categoría') AS name, SUM(${MONTO_OPERATIVO}) AS expense
+      ${DESDE_MOVIMIENTOS}
+      LEFT JOIN categories c ON c.id = ${CATEGORIA_OPERATIVA}
+      WHERE t.profile_id = ? AND substr(t.date, 1, 7) = ? AND ${TIPO_OPERATIVO} = 'gasto'
+      GROUP BY name HAVING expense <> 0
       ORDER BY expense DESC LIMIT 6`,
     )
     .all(profileId, month)

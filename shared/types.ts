@@ -724,16 +724,34 @@ export interface PuntoProyeccion {
   inversionesCents: number
   deudaCents: number
   patrimonioCents: number
+  /** El mismo patrimonio en pesos del mes 0. Igual al nominal sin inflación. */
+  patrimonioRealCents: number
+  aportadoCents: number
+  /** Las cuotas del plan de tus deudas hasta aquí: dinero tuyo que entra. */
+  pagadoAPlanCents: number
+  retiradoCents: number
+  /** Lo que puso la tasa hasta aquí, sin el punto de partida ni lo que pusiste. */
+  rendimientoCents: number
+  /** Ese rendimiento contra lo puesto, en bp. `null` si la base no es positiva. */
+  rendimientoBp: number | null
+  interesPagadoCents: number
 }
 
 export interface Proyeccion {
   estrategia: EstrategiaSimulacion
   puntos: PuntoProyeccion[]
   patrimonioFinalCents: number
+  patrimonioRealFinalCents: number
   aportadoCents: number
+  pagadoAPlanCents: number
+  retiradoCents: number
   rendimientoCents: number
   interesPagadoCents: number
   mesSinDeuda: number | null
+  /** Primer mes en que el retiro no se pudo pagar completo. `null` si aguantó. */
+  mesSinFondos: number | null
+  /** La tasa anual que le sacaste a todo tu dinero, en bp. Ver `Proyeccion` en shared/simulador.ts. */
+  tasaEquivalenteBp: number | null
 }
 
 export interface Simulacion {
@@ -749,10 +767,19 @@ export interface Simulacion {
     meses: number
     ahorroMensualCents: number
     rendimientoAnualBp: number
+    inflacionAnualBp: number
+    mesesAporte: number
+    retiroMensualCents: number
   }
   /** Las dos rutas, sobre los mismos supuestos, para poder compararlas. */
   invertir: Proyeccion
   deuda: Proyeccion
+  /**
+   * Cuánto habría que apartar al mes para llegar al objetivo, por ruta. `null`
+   * en el objeto cuando no se preguntó; `null` en una ruta cuando no se llega
+   * ni apartando el tope.
+   */
+  meta: { objetivoCents: number; invertirCents: number | null; deudaCents: number | null } | null
 }
 
 export interface Budget {
