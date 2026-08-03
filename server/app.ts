@@ -35,6 +35,7 @@ import conciliacion from './routes/conciliacion.ts'
 import inmuebles from './routes/inmuebles.ts'
 import horas from './routes/horas.ts'
 import inventario from './routes/inventario.ts'
+import personalizacion from './routes/personalizacion.ts'
 import backup from './routes/backup.ts'
 
 /**
@@ -84,6 +85,9 @@ export function createApp(): express.Express {
   app.use('/api/inmuebles', inmuebles)
   app.use('/api/horas', horas)
   app.use('/api/inventario', inventario)
+  // Configuración del perfil (Fase 21): campos propios y plantillas. Aquí no
+  // se asienta dinero — lo que se escribe con ellos pasa por /api/transactions.
+  app.use('/api/personalizacion', personalizacion)
   app.use('/api/respaldo', backup)
 
   app.use('/api', (_req, res) => {

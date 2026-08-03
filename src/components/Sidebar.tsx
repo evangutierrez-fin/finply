@@ -115,6 +115,45 @@ const NAV_GROUPS: { label: string | null; items: { id: View; label: string }[] }
   },
 ]
 
+/**
+ * Todas las secciones del lomo, aplanadas y en el orden por omisión. Es la
+ * lista que ve el usuario en Ajustes cuando quiere reordenarlas, y la misma
+ * que arma el lomo: dos listas que deben coincidir son dos listas que se
+ * separan.
+ */
+export const NAV_ITEMS: { id: View; label: string }[] = NAV_GROUPS.flatMap((g) => g.items)
+
+/**
+ * El lomo, con el orden que pida el perfil (Fase 21).
+ *
+ * Con un orden propio **el lomo se aplana**: los grupos son un orden, y dos
+ * órdenes sobre la misma lista no pueden convivir. Se dice donde se elige, y
+ * quitar el orden propio devuelve los grupos intactos.
+ *
+ * Lo que el orden guardado no menciona —una sección que se encendió después de
+ * haberlo fijado— se va al final en vez de desaparecer: un módulo nuevo no
+ * puede quedar invisible por una preferencia vieja.
+ */
+export function armarLomo(
+  modules: readonly string[],
+  orden: string[] | null,
+): { label: string | null; items: { id: View; label: string }[] }[] {
+  const visibles = NAV_ITEMS.filter((item) => vistaVisible(item.id, modules as any))
+  if (!orden || orden.length === 0) {
+    // Un grupo que se queda sin renglones desaparece con su rótulo: "Patrimonio"
+    // sobre un hueco se lee como un error de la app, no como una elección.
+    return NAV_GROUPS.map((group) => ({
+      ...group,
+      items: group.items.filter((item) => vistaVisible(item.id, modules as any)),
+    })).filter((group) => group.items.length > 0)
+  }
+  const puesto = new Map(orden.map((id, i) => [id, i]))
+  const items = [...visibles].sort(
+    (a, b) => (puesto.get(a.id) ?? Infinity) - (puesto.get(b.id) ?? Infinity),
+  )
+  return [{ label: null, items }]
+}
+
 const THEME_LABEL: Record<ThemePref, string> = {
   claro: '☀ Claro',
   oscuro: '☾ Oscuro',
@@ -149,12 +188,7 @@ export function Sidebar({
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
-  // Un grupo que se queda sin renglones desaparece con su rótulo: "Patrimonio"
-  // sobre un hueco se lee como un error de la app, no como una elección.
-  const grupos = NAV_GROUPS.map((group) => ({
-    ...group,
-    items: group.items.filter((item) => vistaVisible(item.id, profile.modules)),
-  })).filter((group) => group.items.length > 0)
+  const grupos = armarLomo(profile.modules, profile.navOrder)
 
   useEffect(() => {
     if (!open) return

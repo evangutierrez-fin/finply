@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Account, Category, SugerenciaTx, TxType } from '../../shared/types.ts'
+import type { Account, Category, PlantillaTx, SugerenciaTx, TxType } from '../../shared/types.ts'
 import { camposQueFaltan } from '../../shared/campos.ts'
 import { api } from '../api.ts'
 import { useApp } from '../context.ts'
@@ -32,6 +32,8 @@ export function BarraRapida() {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [sugerencia, setSugerencia] = useState<SugerenciaTx | null>(null)
+  // Las plantillas del perfil (Fase 21): el formulario ya llenado, esperando.
+  const [plantillas, setPlantillas] = useState<PlantillaTx[]>([])
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const montoRef = useRef<HTMLInputElement>(null)
@@ -44,11 +46,13 @@ export function BarraRapida() {
       api.accounts.list(profile.id),
       api.categories.list(profile.id),
       api.tx.sugerencia(profile.id),
+      api.personalizacion.plantillas.list(profile.id),
     ]).then(
-      ([accs, cats, sug]) => {
+      ([accs, cats, sug, plt]) => {
         setAccounts(accs.filter((a) => !a.archived))
         setCategories(cats)
         setSugerencia(sug)
+        setPlantillas(plt)
       },
       (err: Error) => setError(err.message),
     )
@@ -78,6 +82,35 @@ export function BarraRapida() {
     setNote(ultima.note)
     setAccountId(ultima.accountId)
     setCategoryId(ultima.categoryId ?? 0)
+    setDate(todayISO())
+    montoRef.current?.focus()
+  }
+
+  /**
+   * Traer una plantilla a la barra. Igual que repetir: **llena, no guarda**.
+   *
+   * Lo que la plantilla no diga se queda como está —una plantilla sin cuenta
+   * conserva la que ya venía propuesta— y el monto vacío es una elección suya:
+   * "lo pongo yo cada vez". Ese es el caso de la gasolina.
+   */
+  const traerPlantilla = (p: PlantillaTx) => {
+    if (p.type === 'transferencia') {
+      // La barra no registra transferencias: son dos cuentas y una regla de D6
+      // que no cabe en una línea. Se abre el formulario completo con lo suyo.
+      openTx(null, {
+        type: 'transferencia',
+        accountId: p.accountId ?? undefined,
+        transferAccountId: p.transferAccountId ?? undefined,
+        amountCents: p.amountCents ?? undefined,
+        note: p.note,
+      })
+      return
+    }
+    setType(p.type)
+    setAmount(p.amountCents === null ? '' : (p.amountCents / 100).toFixed(2))
+    setNote(p.note)
+    if (p.accountId) setAccountId(p.accountId)
+    if (p.categoryId) setCategoryId(p.categoryId)
     setDate(todayISO())
     montoRef.current?.focus()
   }
@@ -219,6 +252,26 @@ export function BarraRapida() {
           {saving ? 'Guardando…' : 'Registrar'}
         </button>
       </form>
+
+      {plantillas.length > 0 && (
+        <div className="barra-rapida-plantillas">
+          {plantillas.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              className="chip chip-plantilla"
+              onClick={() => traerPlantilla(p)}
+              title={
+                p.amountCents === null
+                  ? `${p.name}: el monto lo pones tú`
+                  : `${p.name}: ${fmtMoney(p.amountCents)}`
+              }
+            >
+              {p.name}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="barra-rapida-pie">
         {ultima ? (

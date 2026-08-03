@@ -272,6 +272,13 @@ export function mapProfile(row: any, modulos?: ModuloId[]) {
     // Quien ya tenga la lista la pasa: el listado de perfiles resuelve los
     // overrides de todos en una consulta, no en una por perfil (R11).
     modules: modulos ?? modulosDe(row.id, row.kind),
+    // Las preferencias de la Fase 21. Nulas significan "lo de siempre", y por
+    // eso un libro que no toque nada se ve exactamente igual que ayer.
+    navOrder: row.nav_order ? String(row.nav_order).split(',') : null,
+    homeView: row.home_view ?? null,
+    dateFormat: row.date_format ?? 'corto',
+    weekStart: row.week_start ?? 1,
+    hideCents: row.hide_cents === 1,
     createdAt: row.created_at,
   }
 }
@@ -315,6 +322,12 @@ export function mapTx(row: any) {
     attachments: [] as TxAttachment[],
     /** Las notas de la libreta atadas a esta partida (Fase 20), solo el título. */
     notes: [] as { id: number; title: string }[],
+    /**
+     * Los campos propios del perfil contestados en esta partida (Fase 21),
+     * por id de campo. Vacío significa "no contestó ninguno", que es lo que
+     * pasa en un libro sin campos propios — es decir, en casi todos.
+     */
+    fields: {} as Record<string, string>,
   }
 }
 

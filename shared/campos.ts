@@ -40,6 +40,8 @@ export type CampoTx =
   | 'etiquetas'
   /** El recibo adjunto. Exige que el movimiento ya exista. */
   | 'recibo'
+  /** Los campos propios del perfil (D24, Fase 21). Solo si hay alguno vivo. */
+  | 'propios'
 
 export interface ContextoCampos {
   modules: ModuloId[]
@@ -50,6 +52,8 @@ export interface ContextoCampos {
   hayArrendamientos?: boolean
   /** ¿El movimiento ya existe? Sin id no hay dónde colgar un recibo. */
   existe?: boolean
+  /** ¿Este libro tiene campos propios sin archivar? (Fase 21). */
+  hayCamposPropios?: boolean
 }
 
 /**
@@ -65,7 +69,11 @@ export function camposDelMovimiento(ctx: ContextoCampos): CampoTx[] {
   if (ctx.type === 'transferencia') {
     // Mover dinero entre dos bolsillos tuyos no tiene categoría, ni reparto,
     // ni impuesto, ni inquilino: es el mismo peso cambiando de lugar (D6).
+    // Los campos propios **sí**: son del usuario y él sabrá si su traspaso
+    // lleva número de obra. Finply no tiene por qué opinar de un dato que no
+    // entiende.
     campos.push('cuentaDestino')
+    if (ctx.hayCamposPropios) campos.push('propios')
     campos.push('etiquetas')
     if (ctx.existe) campos.push('recibo')
     return campos
@@ -79,6 +87,9 @@ export function camposDelMovimiento(ctx: ContextoCampos): CampoTx[] {
   // encienda Negocio tiene que verlos igual.
   if (con('negocio')) campos.push('negocio')
   if (con('inmuebles') && ctx.hayArrendamientos) campos.push('inmueble')
+  // Los propios van al final de lo que Finply entiende y antes de las
+  // etiquetas: son del libro, no de un módulo, así que no dependen de ninguno.
+  if (ctx.hayCamposPropios) campos.push('propios')
   campos.push('etiquetas')
   if (ctx.existe) campos.push('recibo')
   return campos
@@ -99,7 +110,12 @@ export function pideCampo(ctx: ContextoCampos, campo: CampoTx): boolean {
 export function libroPide(modules: ModuloId[], campo: CampoTx): boolean {
   const tipos: TxType[] = ['gasto', 'ingreso', 'transferencia']
   return tipos.some((type) =>
-    camposDelMovimiento({ modules, type, hayArrendamientos: true }).includes(campo),
+    camposDelMovimiento({
+      modules,
+      type,
+      hayArrendamientos: true,
+      hayCamposPropios: true,
+    }).includes(campo),
   )
 }
 

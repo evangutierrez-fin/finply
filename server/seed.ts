@@ -30,6 +30,8 @@ function wipe(): void {
     DELETE FROM budget_totals;
     DELETE FROM goal_entries;
     DELETE FROM goals;
+    DELETE FROM tx_templates;
+    DELETE FROM profile_fields;
     DELETE FROM notes;
     DELETE FROM quotes;
     DELETE FROM invoice_credit_notes;
@@ -809,10 +811,58 @@ inTransaction(() => {
     '2026-06',
   )
 
+  // ── Personalización (Fase 21) ─────────────────────────────────────────
+  //
+  // Un campo propio y dos plantillas en cada libro: sin ellos, la función solo
+  // se ve creándola a mano, y lo que hay que enseñar es cómo se **usa**.
+  const insertCampo = db.prepare(
+    'INSERT INTO profile_fields (profile_id, label, kind, options, position) VALUES (?, ?, ?, ?, ?)',
+  )
+  // En el personal, un dato que Finply no tiene por qué entender: con quién.
+  const conQuien = Number(
+    insertCampo.run(personal, 'Con quién', 'texto', '', 0).lastInsertRowid,
+  )
+  // En el de negocio, la dimensión que un taller sí necesita y ningún reporte
+  // de Finply sabe leer.
+  insertCampo.run(negocio, 'Número de obra', 'texto', '', 0)
+  insertCampo.run(
+    negocio,
+    'Turno',
+    'lista',
+    'Mañana\nTarde',
+    1,
+  )
+
+  // El campo contestado en un par de partidas, para que se vea en el libro y
+  // salga en el CSV.
+  const cenas: any[] = db
+    .prepare(
+      `SELECT id FROM transactions
+       WHERE profile_id = ? AND note LIKE 'Restaurante%' ORDER BY date DESC LIMIT 2`,
+    )
+    .all(personal)
+  const insertValor = db.prepare(
+    'INSERT INTO tx_field_values (tx_id, field_id, value) VALUES (?, ?, ?)',
+  )
+  for (const [i, fila] of cenas.entries()) {
+    insertValor.run(fila.id, conQuien, i === 0 ? 'Bere' : 'Los del trabajo')
+  }
+
+  const insertPlantilla = db.prepare(
+    `INSERT INTO tx_templates
+      (profile_id, name, type, account_id, category_id, amount_cents, note, position)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  )
+  // La gasolina va sin monto —nunca cuesta lo mismo— y la suscripción con el
+  // suyo: es exactamente la diferencia que la plantilla viene a respetar.
+  insertPlantilla.run(personal, 'Gasolina', 'gasto', banco, cTransporte, null, 'Gasolina', 0)
+  insertPlantilla.run(personal, 'Despensa', 'gasto', efectivo, cSuper, null, 'Súper semanal', 1)
+  insertPlantilla.run(negocio, 'Harina', 'gasto', bancoNeg, null, null, 'Harina de la semana', 0)
+
   console.log(
     '[finply] Libro demo listo: 2 perfiles, 6 cuentas (una tarjeta con su tasa), ' +
       'quince meses de movimientos, deudas, inversiones, presupuestos, metas, ' +
-      'notas —una atada a su partida y otra a su mes—, ' +
+      'notas —una atada a su partida y otra a su mes—, campos propios y plantillas, ' +
       'facturas con retención, nota de crédito, anticipo y plantilla, ' +
       'cinco cotizaciones que cubren los cuatro estados y una orden de compra, ' +
       'y los tres módulos de giro: un depto rentado, horas sin facturar y un almacén.',

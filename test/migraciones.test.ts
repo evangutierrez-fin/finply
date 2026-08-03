@@ -691,6 +691,85 @@ describe('migraciones', () => {
     db.close()
   })
 
+  test('un libro en la versión 20 estrena la personalización sin estrenar una sola preferencia', () => {
+    const db = baseEnVersion(20)
+    db.exec(`
+      INSERT INTO transactions (id, profile_id, account_id, type, amount_cents, date)
+        VALUES (50, 1, 1, 'gasto', 42000, '2026-07-12');
+    `)
+
+    migrate(db)
+
+    assert.equal((db.prepare('PRAGMA user_version').get() as any).user_version, SCHEMA_VERSION)
+
+    // D16 otra vez: las tablas existen aunque nadie tenga un campo propio, para
+    // que crearlo a media vida del libro no exija una migración (R1).
+    for (const tabla of ['profile_fields', 'tx_field_values', 'tx_templates']) {
+      assert.equal((db.prepare(`SELECT COUNT(*) AS n FROM ${tabla}`).get() as any).n, 0, tabla)
+    }
+
+    // Y el perfil que ya existía se ve exactamente igual que ayer: lo que falta
+    // significa "lo de antes", así que nadie estrena un formato ni un orden.
+    const perfil = db.prepare('SELECT * FROM profiles WHERE id = 1').get() as any
+    assert.equal(perfil.nav_order, null)
+    assert.equal(perfil.home_view, null)
+    assert.equal(perfil.date_format, null)
+    assert.equal(perfil.week_start, null)
+    assert.equal(perfil.hide_cents, 0)
+
+    const tx = db.prepare('SELECT * FROM transactions WHERE id = 50').get() as any
+    assert.equal(tx.amount_cents, 42000)
+    assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0)
+    db.close()
+  })
+
+  test('borrar el campo se lleva sus respuestas; borrar el movimiento también', () => {
+    const db = baseEnVersion(20)
+    migrate(db)
+    db.exec(`
+      INSERT INTO profile_fields (id, profile_id, label, kind) VALUES (1, 1, 'Placa', 'texto');
+      INSERT INTO transactions (id, profile_id, account_id, type, amount_cents, date)
+        VALUES (60, 1, 1, 'gasto', 1000, '2026-07-12');
+      INSERT INTO tx_field_values (tx_id, field_id, value) VALUES (60, 1, 'ABC-123');
+    `)
+
+    // Una respuesta sin su campo o sin su movimiento no significa nada: aquí
+    // sí es CASCADE, al revés que la nota de la Fase 20 —esa es texto que el
+    // usuario escribió por su cuenta; esto es la respuesta a una pregunta que
+    // ya no existe—.
+    db.exec('DELETE FROM transactions WHERE id = 60')
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM tx_field_values').get() as any).n, 0)
+
+    db.exec(`
+      INSERT INTO transactions (id, profile_id, account_id, type, amount_cents, date)
+        VALUES (61, 1, 1, 'gasto', 1000, '2026-07-12');
+      INSERT INTO tx_field_values (tx_id, field_id, value) VALUES (61, 1, 'XYZ-789');
+    `)
+    db.exec('DELETE FROM profile_fields WHERE id = 1')
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM tx_field_values').get() as any).n, 0)
+    // El movimiento se queda: ese dinero se movió, y lo que se fue con el campo
+    // es solo la respuesta a una pregunta que ya no existe.
+    const vivo = db.prepare('SELECT * FROM transactions WHERE id = 61').get() as any
+    assert.equal(vivo.amount_cents, 1000)
+    db.close()
+  })
+
+  test('una plantilla sobrevive a que archiven su cuenta o borren su categoría', () => {
+    const db = baseEnVersion(20)
+    migrate(db)
+    db.exec(`
+      INSERT INTO tx_templates (id, profile_id, name, type, account_id, category_id)
+        VALUES (1, 1, 'Gasolina', 'gasto', 1, 1);
+      DELETE FROM categories WHERE id = 1;
+    `)
+    // Coja pero viva: borrarla tiraría el nombre y el concepto que ya se
+    // habían escrito, y eso es más de lo que el usuario pidió.
+    const plantilla = db.prepare('SELECT * FROM tx_templates WHERE id = 1').get() as any
+    assert.equal(plantilla.name, 'Gasolina')
+    assert.equal(plantilla.category_id, null)
+    db.close()
+  })
+
   test('una base de una versión más nueva no se toca', () => {
     const db = baseVieja()
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`)

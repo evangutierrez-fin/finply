@@ -45,6 +45,12 @@ export const TABLES = [
   // El tope de todo el mes es una tabla más, y una tabla que se olvide aquí
   // se pierde en cada respaldo sin decir nada.
   'budget_totals',
+  // El catálogo de campos propios cuelga del perfil (Fase 21); sus **valores**
+  // cuelgan del movimiento y por eso viven al final, con los demás hijos.
+  'profile_fields',
+  // Las plantillas apuntan a cuenta y categoría, así que van después de las dos
+  // y antes de los movimientos, como todo lo demás.
+  'tx_templates',
   'import_batches',
   'recurrences',
   'recurrence_tags',
@@ -80,6 +86,10 @@ export const TABLES = [
   // solo necesita su cuenta.
   'tx_splits',
   'tx_attachments',
+  // Los valores de los campos propios: cuelgan del movimiento **y** del campo,
+  // así que van después de los dos. Tabla puente sin columna `id`, como
+  // `transaction_tags`: se vuelca por `rowid`.
+  'tx_field_values',
   'account_statements',
   // ⚠ La libreta se mudó aquí en la Fase 20 y **tenía** que mudarse: desde la
   // migración 20 una nota puede apuntar al movimiento que explica, y estaba

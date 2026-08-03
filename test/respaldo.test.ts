@@ -91,6 +91,56 @@ describe('respaldo', () => {
     assert.equal(despues.filter((n: any) => n.period !== null).length, 1)
   })
 
+  test('los campos propios y sus respuestas viajan enteros', async () => {
+    // `tx_field_values` cuelga del movimiento **y** del campo, así que va
+    // después de los dos en la lista de `backup.ts` —el mismo cuidado de
+    // `rentals` en la Fase 15 y de `notes` en la 20—. Y es tabla puente sin
+    // columna `id`: se vuelca por `rowid`.
+    const { perfil, cuenta } = await libroBase(c, 'Personalizado')
+    const campo = (
+      await c.post('/api/personalizacion/campos', {
+        profileId: perfil.id, label: 'Placa', kind: 'texto',
+      })
+    ).body
+    await c.post('/api/personalizacion/plantillas', {
+      profileId: perfil.id, name: 'Gasolina', type: 'gasto', accountId: cuenta.id,
+    })
+    await c.post('/api/transactions', {
+      profileId: perfil.id, accountId: cuenta.id, type: 'gasto',
+      amountCents: 80000, date: '2026-06-14', note: 'Verificación',
+      fields: { [campo.id]: 'ABC-123' },
+    })
+    await c.patch(`/api/profiles/${perfil.id}`, { dateFormat: 'iso', hideCents: true })
+
+    const antes = {
+      campos: (await c.get(`/api/personalizacion/campos?profileId=${perfil.id}`)).body,
+      plantillas: (await c.get(`/api/personalizacion/plantillas?profileId=${perfil.id}`)).body,
+      movimientos: (await c.get(`/api/transactions?profileId=${perfil.id}`)).body,
+      perfiles: (await c.get('/api/profiles')).body,
+    }
+
+    const respaldo = (await c.get('/api/respaldo')).body
+    await c.del(`/api/profiles/${perfil.id}`)
+
+    const res = await c.post('/api/respaldo/restaurar', respaldo)
+    assert.equal(res.status, 200, JSON.stringify(res.body))
+
+    assert.deepEqual(
+      (await c.get(`/api/personalizacion/campos?profileId=${perfil.id}`)).body,
+      antes.campos,
+    )
+    assert.deepEqual(
+      (await c.get(`/api/personalizacion/plantillas?profileId=${perfil.id}`)).body,
+      antes.plantillas,
+    )
+    // Lo contestado vuelve con su movimiento, y las preferencias con su perfil.
+    assert.deepEqual(
+      (await c.get(`/api/transactions?profileId=${perfil.id}`)).body,
+      antes.movimientos,
+    )
+    assert.deepEqual((await c.get('/api/profiles')).body, antes.perfiles)
+  })
+
   test('un archivo que no es respaldo se rechaza sin tocar el libro', async () => {
     await libroBase(c, 'Intacto')
     const antes = (await c.get('/api/profiles')).body

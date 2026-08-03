@@ -1187,6 +1187,95 @@ export const MIGRATIONS: Migration[] = [
       `)
     },
   },
+  {
+    id: 21,
+    name: 'personalización: campos propios, plantillas y preferencias del perfil',
+    up: (db) => {
+      // **D24 resuelta: llave-valor, no columnas.** Un campo propio por perfil
+      // no puede ser una columna de `transactions` —cada libro pediría su
+      // migración y eso choca de frente con R1—, así que el catálogo vive en
+      // su tabla y los valores en otra, uno por (movimiento, campo).
+      //
+      // El costo conocido y aceptado: filtrar o sumar por un campo propio es
+      // más caro que por una columna. Se paga barato porque **no se suma**: un
+      // campo propio se ve, se edita y se exporta, pero ningún reporte lo
+      // agrega. Es el criterio que la propia D24 dejó escrito —"si entran a los
+      // reportes hay que definir su tipo, y ahí empieza otra fase"— y además lo
+      // que impide que un dato que Finply no entiende mueva una cifra.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS profile_fields (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          label TEXT NOT NULL,
+          -- El tipo decide qué control se dibuja y qué se valida al guardar.
+          -- 'lista' trae sus opciones en \`options\`, un renglón cada una.
+          kind TEXT NOT NULL DEFAULT 'texto'
+            CHECK (kind IN ('texto', 'numero', 'fecha', 'lista', 'casilla')),
+          options TEXT NOT NULL DEFAULT '',
+          position INTEGER NOT NULL DEFAULT 0,
+          -- Archivar y no borrar: un campo que ya no se usa no puede llevarse
+          -- por delante lo que se apuntó con él (R17 otra vez, en chico).
+          archived INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_campos_perfil ON profile_fields(profile_id, position);
+
+        CREATE TABLE IF NOT EXISTS tx_field_values (
+          tx_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+          field_id INTEGER NOT NULL REFERENCES profile_fields(id) ON DELETE CASCADE,
+          value TEXT NOT NULL,
+          PRIMARY KEY (tx_id, field_id)
+        );
+
+        -- Plantillas de movimiento: "gasolina", "despensa quincenal". No es
+        -- una recurrencia —no tiene fecha ni periodo y no propone nada sola—:
+        -- es el formulario ya llenado, esperando a que alguien lo confirme.
+        -- \`amount_cents\` nulo significa "el monto lo pongo yo cada vez", que
+        -- es lo normal en la gasolina y lo raro en la colegiatura.
+        CREATE TABLE IF NOT EXISTS tx_templates (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          type TEXT NOT NULL DEFAULT 'gasto'
+            CHECK (type IN ('ingreso', 'gasto', 'transferencia')),
+          account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+          transfer_account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+          category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+          amount_cents INTEGER CHECK (amount_cents IS NULL OR amount_cents > 0),
+          note TEXT NOT NULL DEFAULT '',
+          position INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_plantillas_perfil ON tx_templates(profile_id, position);
+      `)
+
+      // Las preferencias del perfil van en columnas suyas y **no** en una
+      // tabla como los módulos, porque nadie las consulta: se leen con el
+      // perfil y las aplica el cliente. `profile_modules` es tabla porque
+      // `modulosDe` las cruza en un JOIN en cada carga del Resumen.
+      //
+      // Todas nulas o en cero: lo que falta significa "lo de antes", así que un
+      // libro que no toque nada se ve exactamente igual que ayer.
+      if (hasColumn(db, 'profiles', 'nav_order')) return
+      db.exec(`
+        -- Orden propio del lomo, ids de vista separados por coma. Nulo: el
+        -- orden agrupado de siempre.
+        ALTER TABLE profiles ADD COLUMN nav_order TEXT;
+        -- Qué sección abre al entrar. Nulo: el Resumen.
+        ALTER TABLE profiles ADD COLUMN home_view TEXT;
+        -- Cómo se ven las fechas. Nulo: 'corto' ("12 jun").
+        ALTER TABLE profiles ADD COLUMN date_format TEXT;
+        -- Qué día empieza la semana (1 = lunes … 7 = domingo). Nulo: lunes.
+        -- ⚠ Es **solo de vista**: la clave de periodo de una recurrencia
+        -- semanal sigue siendo la semana ISO, que empieza en lunes por
+        -- definición. Moverla rompería la idempotencia de R5 y reproponría el
+        -- histórico entero.
+        ALTER TABLE profiles ADD COLUMN week_start INTEGER;
+        -- Redondear las cifras a la vista. Cero: con centavos, como siempre.
+        ALTER TABLE profiles ADD COLUMN hide_cents INTEGER NOT NULL DEFAULT 0;
+      `)
+    },
+  },
 ]
 
 /** Versión de esquema que espera este código. */

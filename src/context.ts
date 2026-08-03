@@ -23,6 +23,15 @@ export interface AppState {
    * para que no puedan decir cosas distintas.
    */
   editProfile: () => void
+  /**
+   * Reemplaza en memoria el perfil que se acaba de guardar (Fase 21).
+   *
+   * `bump()` no basta: invalida los datos de las **vistas**, pero la lista de
+   * perfiles vive en App y se pide una sola vez al arrancar. Sin esto, cambiar
+   * el orden del lomo o el formato guardaba bien en la base y no se veía hasta
+   * recargar — que es exactamente como se ve un ajuste que no funciona.
+   */
+  perfilGuardado: (profile: Profile) => void
 }
 
 export const AppCtx = createContext<AppState | null>(null)

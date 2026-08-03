@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
-  Account, Arrendamiento, BorradorTx, CentroCosto, Category, Contraparte, Tag, Tx, TxAttachment,
-  TxType,
+  Account, Arrendamiento, BorradorTx, CampoPropio, CentroCosto, Category, Contraparte, Tag, Tx,
+  TxAttachment, TxType,
 } from '../../shared/types.ts'
 import { libroPide, pideCampo, type CampoTx } from '../../shared/campos.ts'
 import { api } from '../api.ts'
@@ -71,6 +71,9 @@ export function TxModal({
   const [tax, setTax] = useState(tx?.taxCents ? (tx.taxCents / 100).toFixed(2) : '')
   const [deductible, setDeductible] = useState(tx?.deductible ?? false)
   const [arrendamientos, setArrendamientos] = useState<Arrendamiento[]>([])
+  // Los campos propios del perfil (Fase 21) y lo contestado en esta partida.
+  const [propios, setPropios] = useState<CampoPropio[]>([])
+  const [valores, setValores] = useState<Record<string, string>>(tx?.fields ?? {})
   const [rentalId, setRentalId] = useState<number>(tx?.rentalId ?? previo?.rentalId ?? 0)
   const [rentalRole, setRentalRole] = useState<string>(tx?.rentalRole ?? previo?.rentalRole ?? '')
   const [newTag, setNewTag] = useState('')
@@ -115,6 +118,7 @@ export function TxModal({
         dividida,
         hayArrendamientos: arrendamientos.length > 0,
         existe: Boolean(tx),
+        hayCamposPropios: propios.length > 0,
       },
       campo,
     )
@@ -154,6 +158,18 @@ export function TxModal({
       },
     )
   }, [profile.id, usaNegocio])
+
+  // Los campos propios se piden siempre: no dependen de ningún módulo, son del
+  // libro. En el que no tenga ninguno, la respuesta vacía apaga la sección
+  // entera sin que nadie tenga que decidir nada.
+  useEffect(() => {
+    api.personalizacion.campos.list(profile.id).then(
+      (cs) => setPropios(cs.filter((c) => !c.archived)),
+      () => {
+        // Que fallen no impide registrar: son campos opcionales por definición.
+      },
+    )
+  }, [profile.id])
 
   useEffect(() => {
     if (!usaInmuebles) return
@@ -322,6 +338,11 @@ export function TxModal({
         // monto. Misma regla de R17 que los campos de negocio.
         rentalId: rentalRole ? rentalId || null : null,
         rentalRole: rentalId && rentalRole ? (rentalRole as Tx['rentalRole']) : null,
+        // Se mandan los del catálogo vivo, incluso vacíos: vacío **borra** esa
+        // respuesta, que es lo que hace que se pueda desdecir. Lo contestado
+        // con un campo archivado no viaja y por eso no se pierde — misma regla
+        // de R17 que la contraparte y el impuesto.
+        fields: Object.fromEntries(propios.map((c) => [String(c.id), valores[String(c.id)] ?? ''])),
       }
       if (tx) await api.tx.update(tx.id, draft)
       else await api.tx.create(draft)
@@ -715,6 +736,29 @@ export function TxModal({
           </>
         )}
 
+        {/*
+          Los campos propios de este libro (D24, Fase 21). Van juntos y con su
+          nombre, porque son suyos: Finply no sabe qué significan y por eso
+          tampoco los suma en ningún lado.
+        */}
+        {pide('propios') && (
+          <fieldset className="campo campo-fieldset">
+            <legend className="campo-label">Datos de este libro</legend>
+            <div className="campos-2">
+              {propios.map((c) => (
+                <label className="campo" key={c.id}>
+                  <span className="campo-label">{c.label}</span>
+                  <CampoPropioInput
+                    campo={c}
+                    valor={valores[String(c.id)] ?? ''}
+                    onChange={(v) => setValores((prev) => ({ ...prev, [String(c.id)]: v }))}
+                  />
+                </label>
+              ))}
+            </div>
+          </fieldset>
+        )}
+
         <fieldset className="campo campo-fieldset">
           <legend className="campo-label">Etiquetas</legend>
           {tags.length > 0 && (
@@ -809,5 +853,60 @@ export function TxModal({
         </footer>
       </form>
     </Modal>
+  )
+}
+
+/**
+ * El control de un campo propio. El tipo elegido en Ajustes decide qué se
+ * dibuja: es lo único que separa un campo de "texto libre con etiqueta".
+ *
+ * Una lista sin opciones cae a texto en vez de dejar un select vacío — quien
+ * la creó todavía no las escribió, y un control con el que no se puede hacer
+ * nada es peor que uno sencillo.
+ */
+function CampoPropioInput({
+  campo,
+  valor,
+  onChange,
+}: {
+  campo: CampoPropio
+  valor: string
+  onChange: (v: string) => void
+}) {
+  const opciones = campo.kind === 'lista'
+    ? campo.options.split('\n').map((o) => o.trim()).filter(Boolean)
+    : []
+
+  if (campo.kind === 'casilla') {
+    return (
+      <span className="campo-casilla campo-casilla-suelta">
+        <input
+          type="checkbox"
+          checked={valor === 'si'}
+          onChange={(e) => onChange(e.target.checked ? 'si' : '')}
+        />
+        <span>Sí</span>
+      </span>
+    )
+  }
+  if (campo.kind === 'lista' && opciones.length > 0) {
+    return (
+      <select className="campo-input" value={valor} onChange={(e) => onChange(e.target.value)}>
+        <option value="">Sin elegir</option>
+        {opciones.map((o) => (
+          <option key={o} value={o}>{o}</option>
+        ))}
+      </select>
+    )
+  }
+  return (
+    <input
+      className="campo-input"
+      type={campo.kind === 'fecha' ? 'date' : 'text'}
+      inputMode={campo.kind === 'numero' ? 'decimal' : undefined}
+      maxLength={200}
+      value={valor}
+      onChange={(e) => onChange(e.target.value)}
+    />
   )
 }

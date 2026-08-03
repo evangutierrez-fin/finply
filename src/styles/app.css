@@ -3035,3 +3035,109 @@ kbd {
   .alerta { flex-direction: column; }
   .alerta-accion { align-self: flex-start; }
 }
+
+/* ── Fase 21 · personalización ─────────────────────────────────────────── */
+
+/* Ajustes partido en dos: lo del libro y lo de la máquina. La intro de cada
+   pestaña dice cuál es cuál, que era justo lo que faltaba cuando el respaldo
+   —que reemplaza TODOS los perfiles— vivía junto a los módulos de uno solo. */
+.ajustes-intro { max-width: 680px; margin-bottom: 18px; }
+.ajustes-sub {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--regla);
+}
+.ajustes-sub-titulo {
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--tinta-3);
+  margin-bottom: 10px;
+}
+
+/* Campos propios y plantillas: la misma lista con acciones a la derecha. */
+.campos-lista {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 14px;
+}
+.campo-fila {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--regla);
+}
+.campo-fila:last-child { border-bottom: none; }
+.campo-fila.archivado { opacity: 0.55; }
+.campo-fila-datos { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.campo-fila-sub { font-size: 12px; color: var(--tinta-2); }
+.campo-fila-acciones { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.campo-fila-acciones .btn-liga { padding: 0 5px; }
+.campos-forma {
+  margin-top: 12px;
+  padding-top: 14px;
+  border-top: 1px solid var(--regla);
+}
+
+/* El orden del lomo, con sus flechas. Se numera porque el orden **es** el
+   dato: una lista sin número no dice en qué lugar quedó lo que subiste. El
+   número va en su propio `<span>` y no como marcador de lista: un `li` que es
+   flex no dibuja su marcador, y la lista salía sin numerar. Se vio en el
+   navegador, como siempre. */
+.orden-lomo {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-bottom: 12px;
+  max-width: 380px;
+}
+.orden-lomo li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 8px;
+  font-size: 13.5px;
+  background: var(--tinte-neutro);
+  border-radius: var(--radio);
+}
+.orden-nombre { flex: 1; }
+.orden-num {
+  flex: 0 0 18px;
+  font-family: var(--f-mono);
+  font-size: 11px;
+  color: var(--tinta-3);
+  text-align: right;
+}
+
+/* Las plantillas, como chips debajo de la barra rápida. */
+.barra-rapida-plantillas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+.chip-plantilla {
+  font-size: 11.5px;
+  padding: 2px 9px;
+  background: var(--tinte-verde);
+  border-color: var(--regla);
+  color: var(--tinta-2);
+  cursor: pointer;
+}
+.chip-plantilla:hover { border-color: var(--acento); color: var(--acento); }
+
+/* Una casilla suelta dentro de un campo con etiqueta propia. */
+.campo-casilla-suelta { display: inline-flex; align-items: center; gap: 7px; padding-top: 6px; }
+
+/* Los radios del formato van en columna: cada uno lleva su ejemplo al lado y
+   en fila se leerían como una sola frase larga. */
+.radios-columna { flex-direction: column; align-items: flex-start; gap: 8px; }
+
+@media (max-width: 720px) {
+  .campo-fila { flex-direction: column; align-items: flex-start; }
+}

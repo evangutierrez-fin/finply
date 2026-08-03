@@ -69,6 +69,27 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   lista. Dentro de un campo de texto se callan todos —salvo Escape—, para que
   escribir «notas» en el buscador no abra media aplicación. Ninguno asienta
   nada en el libro.
+- **Plantillas de movimiento** — lo que tecleas igual cada vez, guardado: la
+  gasolina, la despensa, la comida del martes. Se elige una y el formulario
+  aparece lleno; el monto puede quedarse libre —«lo pongo yo cada vez»—, que es
+  justo el caso de la gasolina. **No es una recurrencia**: no sabe qué día cae y
+  no propone nada sola. La colegiatura es una recurrencia; la gasolina es una
+  plantilla.
+- **Campos propios** — un dato que solo tu libro necesita y que Finply no tiene
+  por qué entender: la placa del coche, el número de obra, con quién fuiste a
+  cenar. Texto, número, fecha, lista de opciones o sí/no, con su tipo validado
+  de verdad. Aparecen en el formulario de movimiento y salen en el CSV con su
+  columna. **No entran a ningún reporte**, y eso es a propósito: nada que Finply
+  no entienda puede mover una cifra que sí entiende.
+- **El libro se lee como tú quieras** — el orden de las secciones en el lomo,
+  cuál abre al entrar, cómo se escriben las fechas (`12 jun`, `12/06/2026` o
+  `2026-06-12`), si se enseñan los centavos y en qué día empieza la semana. Nada
+  de esto cambia una cifra: el libro sigue en centavos y las fechas siguen
+  siendo las mismas. Y la configuración completa de un perfil —secciones, tinta,
+  formato, categorías, campos propios y plantillas, **sin una sola cifra**— se
+  descarga y se aplica a otro libro para montarlo igual sin rearmarlo a mano.
+  Aplicarla crea lo que falta y respeta lo que ya está: no borra una categoría
+  ni toca un movimiento.
 - **Categorías y etiquetas** — renombra o borra categorías reasignando sus
   movimientos (ningún monto cambia nunca al reclasificar). Las etiquetas cruzan
   categorías: un mismo viaje lleva comida, transporte y hospedaje.
@@ -416,6 +437,8 @@ server/          Express + node:sqlite
   facturas-recurrentes.ts plantillas de factura sobre el motor de recurrencias
   negocio.ts     estado de resultados, rentabilidad y punto de equilibrio
   flujo.ts       la caja proyectada día a día, auditable (solo lectura)
+  personalizacion.ts campos propios (llave-valor, D24) y plantillas de movimiento
+  config-perfil.ts   la configuración de un perfil, por nombre y sin sus cifras
   routes/        profiles · accounts · categories · tags · transactions · debts
                  · tarjetas · investments · budgets · goals · notes · summary
                  · reportes · alertas · analisis · precios · simulador
@@ -423,6 +446,7 @@ server/          Express + node:sqlite
                  · contrapartes · centros · facturas · facturas-recurrentes
                  · negocio
                  · recurrencias · calendario · flujo · backup · importaciones
+                 · personalizacion
   seed.ts        datos demo deterministas
 shared/
   types.ts       tipos compartidos cliente/servidor
@@ -441,6 +465,7 @@ shared/
   escalas.ts     marcas del eje y techo de una escala con atípico (puro)
   campos.ts      qué campos pide un movimiento: el único lugar que lo decide (puro)
   atajos.ts      catálogo de atajos y cuándo una tecla lo es (puro)
+  formato.ts     cómo se leen las fechas y las cifras de este libro (puro)
 src/
   views/         Resumen · Movimientos · Cuentas · Categorías · Reportes
                  · Análisis · Tarjetas · Deudas · Inversiones · Simulador
@@ -502,6 +527,9 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 | `POST /api/goals/:id/entries` · `DELETE /api/goals/entries/:id` | Aportes a metas |
 | `GET/POST /api/notes` · `PATCH/DELETE /:id` | Notas (con fijado), atadas opcionalmente a un movimiento (`txId`) o a un mes (`period`); `?txId=` y `?period=` filtran |
 | `GET /api/transactions/sugerencia?profileId` | Lo que propone la barra rápida: la última partida registrada y, por tipo, la cuenta y la categoría de la última vez. **No escribe nada** |
+| `GET/POST /api/personalizacion/campos` · `PATCH/DELETE /:id` | Campos propios del perfil. Borrar dice cuántas respuestas se lleva; el tipo no se cambia si ya las tiene |
+| `GET/POST /api/personalizacion/plantillas` · `PATCH/DELETE /:id` | Plantillas de movimiento. Borrarlas no toca lo que se asentó con ellas |
+| `GET/POST /api/personalizacion/config?profileId` | La configuración del perfil, sin sus datos. Aplicarla es aditivo: crea lo que falta y respeta lo que hay |
 | `GET /api/summary?profileId&month&hoy` | Resumen del mes + patrimonio, con el cambio contra el cierre del mes pasado y 30 días de saldo por cuenta. Ingreso, gasto y categorías con la regla de D6 y el reparto de las partidas divididas |
 | `GET /api/reportes?profileId&year` | El año: patrimonio mes a mes, ingresos vs gastos, categorías, etiquetas, de dónde vino, tasa de ahorro y mediana |
 | `GET /api/reportes/comparativa?profileId&desde&hasta` | Dos periodos cualesquiera, categoría por categoría. Sin el segundo rango, el bloque anterior del mismo largo |
@@ -589,8 +617,6 @@ donde aparece, que en el tema oscuro es la hoja, no el fondo.
 
 **Cómo se usa**
 
-- Personalización: campos propios, plantillas de movimiento, orden de las
-  secciones, formato de fechas
 - Subcategorías y reglas que proponen categoría al importar
 - Bola de nieve contra avalancha con varias deudas, y qué te ahorras abonando
   de más

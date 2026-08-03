@@ -8,6 +8,7 @@ import type {
   Anticipo, BandejaFacturas, Cobranza, FacturaRecurrente,
   Almacen, Arrendamiento, Hora, MovimientoStock, Producto, ResumenHoras,
   Cotizacion, ResumenCotizaciones, TableroContraparte, SugerenciaTx,
+  CampoPropio, PlantillaTx,
 } from '../shared/types.ts'
 
 /** Error de la API que conserva el código y el cuerpo, para poder reaccionar. */
@@ -299,6 +300,12 @@ export const api = {
         accent: string
         dimensionLabel: string
         modules: ModuloId[]
+        /** Preferencias de la Fase 21. `null` vuelve al valor de siempre. */
+        navOrder: string[] | null
+        homeView: string | null
+        dateFormat: string
+        weekStart: number
+        hideCents: boolean
       }> &
         TintaDraft,
     ) => req<Profile>(`/api/profiles/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
@@ -849,6 +856,73 @@ export const api = {
       req<Goal>(`/api/goals/${id}/entries`, { method: 'POST', body: JSON.stringify(data) }),
     removeEntry: (entryId: number) =>
       req<Goal>(`/api/goals/entries/${entryId}`, { method: 'DELETE' }),
+  },
+  /**
+   * Configuración del perfil (Fase 21). Ni una de estas rutas mueve dinero:
+   * lo que se registra con un campo propio o con una plantilla pasa por
+   * `/api/transactions`, como todo lo demás.
+   */
+  personalizacion: {
+    campos: {
+      list: (profileId: number) =>
+        req<CampoPropio[]>(`/api/personalizacion/campos?profileId=${profileId}`),
+      create: (data: {
+        profileId: number
+        label: string
+        kind: string
+        options?: string
+      }) =>
+        req<CampoPropio>('/api/personalizacion/campos', {
+          method: 'POST',
+          body: JSON.stringify(data),
+        }),
+      update: (
+        id: number,
+        profileId: number,
+        data: Partial<{ label: string; kind: string; options: string; position: number; archived: boolean }>,
+      ) =>
+        req<CampoPropio>(`/api/personalizacion/campos/${id}?profileId=${profileId}`, {
+          method: 'PATCH',
+          body: JSON.stringify(data),
+        }),
+      /** Se lleva sus respuestas, y la respuesta dice cuántas eran. */
+      remove: (id: number, profileId: number) =>
+        req<{ ok: true; respuestas: number }>(
+          `/api/personalizacion/campos/${id}?profileId=${profileId}`,
+          { method: 'DELETE' },
+        ),
+    },
+    plantillas: {
+      list: (profileId: number) =>
+        req<PlantillaTx[]>(`/api/personalizacion/plantillas?profileId=${profileId}`),
+      create: (data: Record<string, unknown>) =>
+        req<PlantillaTx>('/api/personalizacion/plantillas', {
+          method: 'POST',
+          body: JSON.stringify(data),
+        }),
+      update: (id: number, profileId: number, data: Record<string, unknown>) =>
+        req<PlantillaTx>(`/api/personalizacion/plantillas/${id}?profileId=${profileId}`, {
+          method: 'PATCH',
+          body: JSON.stringify(data),
+        }),
+      /** Borrarla no toca un solo movimiento de los que salieron de ella. */
+      remove: (id: number, profileId: number) =>
+        req<{ ok: true }>(`/api/personalizacion/plantillas/${id}?profileId=${profileId}`, {
+          method: 'DELETE',
+        }),
+    },
+    configUrl: (profileId: number) => `/api/personalizacion/config?profileId=${profileId}`,
+    aplicarConfig: (profileId: number, config: unknown) =>
+      req<{
+        categoriasNuevas: number
+        camposNuevos: number
+        plantillasNuevas: number
+        plantillasCojas: string[]
+        respetadas: { categorias: number; campos: number; plantillas: number }
+      }>(`/api/personalizacion/config?profileId=${profileId}`, {
+        method: 'POST',
+        body: JSON.stringify(config),
+      }),
   },
   notes: {
     /** Sin filtro son todas; con `txId` o `period`, las de esa partida o ese mes. */

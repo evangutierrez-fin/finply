@@ -55,9 +55,51 @@ export const profileInput = z.object({
    * elección legítima —un libro de puro movimiento— y se guarda como tal.
    */
   modules: z.array(z.enum(MODULO_IDS as [ModuloId, ...ModuloId[]])).optional(),
+  /**
+   * Las preferencias de la Fase 21. Todas `nullish`: ausente no opina y `null`
+   * explícito vuelve al valor de siempre, que es la misma convención de la
+   * tinta y de las etiquetas de un movimiento.
+   *
+   * `navOrder` es una lista de ids de vista; se guarda tal cual porque el lomo
+   * la aplica en el cliente y nadie la consulta.
+   */
+  navOrder: z.array(z.string().trim().min(1).max(30)).max(40).nullish(),
+  homeView: z.string().trim().min(1).max(30).nullish(),
+  dateFormat: z.enum(['corto', 'numerico', 'iso']).nullish(),
+  weekStart: z.number().int().min(1, 'El día va del 1 al 7').max(7, 'El día va del 1 al 7').nullish(),
+  hideCents: z.boolean().optional(),
 })
 
 export const profilePatch = profileInput.partial()
+
+/** Un campo propio del perfil (D24). El catálogo, no sus valores. */
+export const campoInput = z.object({
+  profileId: z.number().int().positive(),
+  label: z.string().trim().min(1, 'El campo necesita un nombre').max(40),
+  kind: z.enum(['texto', 'numero', 'fecha', 'lista', 'casilla']).default('texto'),
+  /** Solo para 'lista': una opción por renglón. */
+  options: z.string().max(500).default(''),
+  position: z.number().int().min(0).optional(),
+  archived: z.boolean().optional(),
+})
+
+export const campoPatch = campoInput.partial().omit({ profileId: true })
+
+/** Una plantilla de movimiento: el formulario ya llenado, sin fecha. */
+export const plantillaTxInput = z.object({
+  profileId: z.number().int().positive(),
+  name: z.string().trim().min(1, 'La plantilla necesita un nombre').max(40),
+  type: z.enum(['ingreso', 'gasto', 'transferencia']).default('gasto'),
+  accountId: z.number().int().positive().nullish(),
+  transferAccountId: z.number().int().positive().nullish(),
+  categoryId: z.number().int().positive().nullish(),
+  /** Nulo: "el monto lo pongo yo cada vez". */
+  amountCents: z.number().int().positive('El monto tiene que ser mayor que cero').nullish(),
+  note: z.string().max(200).default(''),
+  position: z.number().int().min(0).optional(),
+})
+
+export const plantillaTxPatch = plantillaTxInput.partial().omit({ profileId: true })
 
 const diaDelMes = z
   .number()
@@ -188,6 +230,13 @@ export const txInput = z
     rentalRole: z
       .enum(['renta', 'deposito', 'devolucion_deposito', 'mantenimiento'])
       .nullish(),
+    /**
+     * Los campos propios contestados (Fase 21), por id de campo. **Ausente ≠
+     * vacío**, como las etiquetas y el reparto: ausente deja lo contestado como
+     * estaba —y eso es R17, porque el modal de un libro sin campos propios no
+     * los manda—, y un objeto con la clave en '' borra esa respuesta.
+     */
+    fields: z.record(z.string(), z.string().max(200)).optional(),
   })
   .superRefine((t, ctx) => {
     if (t.splits && t.splits.length > 0) {

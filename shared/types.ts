@@ -48,7 +48,57 @@ export interface Profile {
    * overrides y lo que falta sale del juego por omisión del tipo (D16).
    */
   modules: import('./modulos.ts').ModuloId[]
+  /**
+   * Orden propio del lomo (Fase 21). `null` es el orden agrupado de siempre;
+   * con una lista, el lomo se aplana y manda ella.
+   */
+  navOrder: string[] | null
+  /** Qué sección abre al entrar. `null` es el Resumen. */
+  homeView: string | null
+  dateFormat: import('./formato.ts').FormatoFecha
+  /** 1 = lunes … 7 = domingo. **Solo de vista**: no mueve la semana ISO (R5). */
+  weekStart: number
+  /** Redondear las cifras al peso a la vista. Nunca cambia lo guardado. */
+  hideCents: boolean
   createdAt: string
+}
+
+/** Un campo propio del perfil (D24): el catálogo, no sus valores. */
+export type TipoCampo = 'texto' | 'numero' | 'fecha' | 'lista' | 'casilla'
+
+export interface CampoPropio {
+  id: number
+  profileId: number
+  label: string
+  kind: TipoCampo
+  /** Solo en 'lista': una opción por renglón. */
+  options: string
+  position: number
+  archived: boolean
+  /** Cuántos movimientos lo tienen contestado. Derivado. */
+  usos: number
+}
+
+/**
+ * Una plantilla de movimiento: el formulario ya llenado, esperando confirmación.
+ * **No es una recurrencia**: no tiene fecha, no tiene periodo y no propone nada
+ * sola. Es lo que se teclea igual cada vez, guardado.
+ */
+export interface PlantillaTx {
+  id: number
+  profileId: number
+  name: string
+  type: TxType
+  accountId: number | null
+  accountName: string | null
+  transferAccountId: number | null
+  transferAccountName: string | null
+  categoryId: number | null
+  categoryName: string | null
+  /** `null`: "el monto lo pongo yo cada vez". */
+  amountCents: number | null
+  note: string
+  position: number
 }
 
 export type AccountType = 'efectivo' | 'banco' | 'tarjeta' | 'ahorro' | 'otro'
@@ -161,6 +211,11 @@ export interface Tx {
    * en el listado se enseña que **hay** una nota, no la nota entera.
    */
   notes: { id: number; title: string }[]
+  /**
+   * Los campos propios contestados en esta partida (Fase 21), por id de campo.
+   * **Ningún reporte los suma**: se ven, se editan y se exportan (D24).
+   */
+  fields: Record<string, string>
 }
 
 /**

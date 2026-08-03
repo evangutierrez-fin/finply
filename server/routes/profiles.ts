@@ -52,9 +52,18 @@ router.patch('/:id', (req, res) => {
   if (!existing) return res.status(404).json({ error: 'Perfil no encontrado' })
   // La tinta distingue "no opiné" de "quítala", igual que las etiquetas de un
   // movimiento: ausente la deja como estaba, `null` explícito vuelve al preset.
+  // Las preferencias de la Fase 21 siguen exactamente la misma regla, y por eso
+  // guardar los módulos desde otro formulario no le borra el orden del lomo.
+  const orden =
+    input.navOrder === undefined
+      ? existing.nav_order
+      : input.navOrder === null || input.navOrder.length === 0
+        ? null
+        : input.navOrder.join(',')
   db.prepare(
     `UPDATE profiles SET name = ?, kind = ?, accent = ?, accent_hex = ?, accent_hex_dark = ?,
-       dimension_label = ? WHERE id = ?`,
+       dimension_label = ?, nav_order = ?, home_view = ?, date_format = ?, week_start = ?,
+       hide_cents = ? WHERE id = ?`,
   ).run(
     input.name ?? existing.name,
     input.kind ?? existing.kind,
@@ -62,6 +71,11 @@ router.patch('/:id', (req, res) => {
     input.accentHex === undefined ? existing.accent_hex : input.accentHex,
     input.accentHexDark === undefined ? existing.accent_hex_dark : input.accentHexDark,
     input.dimensionLabel ?? existing.dimension_label,
+    orden,
+    input.homeView === undefined ? existing.home_view : input.homeView,
+    input.dateFormat === undefined ? existing.date_format : input.dateFormat,
+    input.weekStart === undefined ? existing.week_start : input.weekStart,
+    input.hideCents === undefined ? existing.hide_cents : input.hideCents ? 1 : 0,
     id,
   )
   // Misma convención que la tinta: ausente no opina, presente manda. Un
@@ -96,6 +110,8 @@ router.delete('/:id', (req, res) => {
     db.prepare('DELETE FROM invoices WHERE profile_id = ?').run(id)
     db.prepare('DELETE FROM counterparties WHERE profile_id = ?').run(id)
     db.prepare('DELETE FROM cost_centers WHERE profile_id = ?').run(id)
+    db.prepare('DELETE FROM tx_templates WHERE profile_id = ?').run(id)
+    db.prepare('DELETE FROM profile_fields WHERE profile_id = ?').run(id)
     db.prepare('DELETE FROM categories WHERE profile_id = ?').run(id)
     db.prepare('DELETE FROM accounts WHERE profile_id = ?').run(id)
     db.prepare('DELETE FROM profile_modules WHERE profile_id = ?').run(id)

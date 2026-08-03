@@ -7,7 +7,8 @@
 // motor, y tiene que decirse igual en los dos lados.
 
 import type { Frecuencia } from '../../shared/types.ts'
-import { MESES } from '../format.ts'
+import { diasDesde } from '../../shared/formato.ts'
+import { MESES, formatoActual } from '../format.ts'
 
 const FRECUENCIAS: { id: Frecuencia; label: string }[] = [
   { id: 'mensual', label: 'Cada mes' },
@@ -16,15 +17,16 @@ const FRECUENCIAS: { id: Frecuencia; label: string }[] = [
   { id: 'anual', label: 'Cada año' },
 ]
 
-const DIAS_SEMANA = [
-  { id: 1, label: 'lunes' },
-  { id: 2, label: 'martes' },
-  { id: 3, label: 'miércoles' },
-  { id: 4, label: 'jueves' },
-  { id: 5, label: 'viernes' },
-  { id: 6, label: 'sábado' },
-  { id: 7, label: 'domingo' },
-]
+/**
+ * Los días, empezando por el que diga el perfil (Fase 21).
+ *
+ * ⚠ Solo cambia **el orden en que se ofrecen**. El `weekday` que se guarda
+ * sigue siendo el día ISO (1 = lunes) y la clave de periodo sigue siendo la
+ * semana ISO: moverla reproponría el histórico entero (R5).
+ */
+function diasSemana() {
+  return diasDesde(formatoActual().inicioSemana)
+}
 
 /** 1–31, con el 31 marcado como "el último" porque en febrero cae el 28. */
 const DIAS_MES = Array.from({ length: 31 }, (_, i) => ({
@@ -75,7 +77,7 @@ export function Cadencia({
               value={weekday}
               onChange={(e) => onChange({ weekday: Number(e.target.value) })}
             >
-              {DIAS_SEMANA.map((d) => (
+              {diasSemana().map((d) => (
                 <option key={d.id} value={d.id}>{d.label}</option>
               ))}
             </select>

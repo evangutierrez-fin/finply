@@ -5,18 +5,20 @@ import {
   TX_SELECT,
 } from '../db.ts'
 import { armarCsv, celdaTexto, montoCsv } from '../csv.ts'
+import { attachCampos, listarCampos, setCamposDeTx } from '../personalizacion.ts'
 import { sincronizarCompraMSI } from '../tarjetas.ts'
 import { adjuntoInput, conciliarInput, txInput, txQuery } from '../validators.ts'
 import { hoyISO } from '../../shared/fechas.ts'
 
 const router = Router()
 
-/** Todo lo que cuelga de un movimiento, en cuatro consultas y no en 4×N (R11). */
+/** Todo lo que cuelga de un movimiento, en cinco consultas y no en 5×N (R11). */
 function hidratar(txs: ReturnType<typeof mapTx>[]) {
   attachTags(txs)
   attachSplits(txs)
   attachAdjuntos(txs)
   attachNotas(txs)
+  attachCampos(txs)
   return txs
 }
 
@@ -291,9 +293,17 @@ router.get('/export.csv', (req, res) => {
     .all(...params) as any[]
   const txs = hidratar(rows.map(mapTx))
 
+  // Los campos propios salen en su propia columna cada uno (Fase 21). Un campo
+  // que solo se puede ver dentro de Finply es un dato atrapado, y eso choca con
+  // lo que el libro promete. Se ordenan como en el formulario para que el
+  // archivo se lea igual que la pantalla; los archivados entran si tienen
+  // respuestas, porque esas respuestas existen.
+  const campos = listarCampos(query.profileId).filter((c) => !c.archived || c.usos > 0)
+
   const encabezados = [
     'fecha', 'tipo', 'cuenta', 'cuenta_destino', 'categoria', 'etiquetas', 'monto', 'concepto',
     'conciliado',
+    ...campos.map((c) => celdaTexto(c.label)),
   ]
   const filas = txs.map((t) => [
     t.date,
@@ -313,6 +323,9 @@ router.get('/export.csv', (req, res) => {
     montoCsv(t.type === 'gasto' ? -t.amountCents : t.amountCents),
     celdaTexto(t.note),
     t.reconciledAt ? 'sí' : 'no',
+    // El valor lo escribió el usuario, así que se sanea como cualquier texto
+    // suyo (R7): un campo propio llamado "=cmd" es exactamente el vector.
+    ...campos.map((c) => celdaTexto(t.fields[String(c.id)] ?? '')),
   ])
 
   const dia = new Date().toISOString().slice(0, 10)
@@ -358,6 +371,7 @@ router.post('/', (req, res) => {
     const nuevo = Number(result.lastInsertRowid)
     if (input.tagIds) setTxTags(nuevo, input.tagIds)
     if (input.splits) setTxSplits(nuevo, input.splits)
+    if (input.fields) setCamposDeTx(input.profileId, nuevo, input.fields)
     return nuevo
   })
   res.status(201).json(hidratar([mapTx(getTx(id))])[0])
@@ -429,6 +443,9 @@ router.patch('/:id', (req, res) => {
     } else if (input.amountCents !== existing.amount_cents) {
       db.prepare('DELETE FROM tx_splits WHERE tx_id = ?').run(id)
     }
+    // Misma regla de R17 que los campos de negocio: ausente deja lo contestado
+    // como estaba. Un libro sin campos propios no manda nada y no pierde nada.
+    if (input.fields) setCamposDeTx(input.profileId, id, input.fields)
     if (existing.debt_payment_id) {
       // El interés que el usuario ya fijó se respeta, pero nunca puede pasar
       // del abono: el capital no puede quedar negativo.
