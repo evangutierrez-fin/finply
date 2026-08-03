@@ -45,7 +45,6 @@ export const TABLES = [
   // El tope de todo el mes es una tabla más, y una tabla que se olvide aquí
   // se pierde en cada respaldo sin decir nada.
   'budget_totals',
-  'notes',
   'import_batches',
   'recurrences',
   'recurrence_tags',
@@ -82,6 +81,13 @@ export const TABLES = [
   'tx_splits',
   'tx_attachments',
   'account_statements',
+  // ⚠ La libreta se mudó aquí en la Fase 20 y **tenía** que mudarse: desde la
+  // migración 20 una nota puede apuntar al movimiento que explica, y estaba
+  // listada arriba, antes de `transactions`. Restaurar habría reventado con
+  // una llave foránea rota. Es exactamente lo que ya pasó con `rentals` en la
+  // Fase 15: la lista está ordenada por dependencias y una columna nueva puede
+  // cambiar de lugar una tabla vieja.
+  'notes',
   // Los periodos resueltos van hasta el final: apuntan al movimiento asentado.
   'recurrence_runs',
   // Y los de facturas apuntan a la factura que salió de ellos.

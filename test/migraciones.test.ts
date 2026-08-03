@@ -650,6 +650,47 @@ describe('migraciones', () => {
     db.close()
   })
 
+  test('un libro en la versión 19 estrena las ligas de la libreta sin atar una sola nota', () => {
+    const db = baseEnVersion(19)
+    db.exec(`
+      INSERT INTO notes (id, profile_id, title, body, pinned)
+        VALUES (1, 1, 'Pendientes', 'Cobrarle a Luis.', 1);
+    `)
+
+    migrate(db)
+
+    assert.equal((db.prepare('PRAGMA user_version').get() as any).user_version, SCHEMA_VERSION)
+    // Lo que falta significa "lo de antes": la nota que ya existía sigue
+    // siendo una nota suelta, que es exactamente lo que era.
+    const nota = db.prepare('SELECT * FROM notes WHERE id = 1').get() as any
+    assert.equal(nota.body, 'Cobrarle a Luis.')
+    assert.equal(nota.pinned, 1)
+    assert.equal(nota.tx_id, null)
+    assert.equal(nota.period, null)
+    assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0)
+    db.close()
+  })
+
+  test('anular el movimiento deja la nota en la libreta y solo le quita la liga', () => {
+    const db = baseEnVersion(19)
+    migrate(db)
+    db.exec(`
+      INSERT INTO transactions (id, profile_id, account_id, type, amount_cents, date)
+        VALUES (40, 1, 1, 'gasto', 180000, '2026-07-12');
+      INSERT INTO notes (id, profile_id, title, body, tx_id)
+        VALUES (2, 1, 'Por qué tan caro', 'Llevé a los niños.', 40);
+    `)
+
+    db.exec('DELETE FROM transactions WHERE id = 40')
+
+    // ON DELETE SET NULL y no CASCADE: ese dinero se fue, pero lo que el
+    // usuario escribió es suyo. Mismo trato que el desembolso de una deuda.
+    const nota = db.prepare('SELECT * FROM notes WHERE id = 2').get() as any
+    assert.equal(nota.body, 'Llevé a los niños.')
+    assert.equal(nota.tx_id, null)
+    db.close()
+  })
+
   test('una base de una versión más nueva no se toca', () => {
     const db = baseVieja()
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`)

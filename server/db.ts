@@ -313,6 +313,8 @@ export function mapTx(row: any) {
     splits: [] as TxSplit[],
     /** Solo la ficha del recibo; los bytes se piden aparte. */
     attachments: [] as TxAttachment[],
+    /** Las notas de la libreta atadas a esta partida (Fase 20), solo el título. */
+    notes: [] as { id: number; title: string }[],
   }
 }
 
@@ -407,6 +409,36 @@ export function attachAdjuntos(txs: { id: number; attachments: TxAttachment[] }[
     porTx.set(r.tx_id, lista)
   }
   for (const tx of txs) tx.attachments = porTx.get(tx.id) ?? []
+}
+
+/**
+ * Las notas atadas a estos movimientos, en una sola consulta (R11).
+ *
+ * Solo el título, y sin el cuerpo a propósito: en el libro se enseña que
+ * **hay** una nota, no la nota entera. Un mes de apuntes largos serían cientos
+ * de kilobytes en cada carga del listado, que es el mismo cuidado que ya se
+ * tiene con los bytes de un recibo.
+ */
+export function attachNotas(txs: { id: number; notes: { id: number; title: string }[] }[]): void {
+  if (txs.length === 0) return
+  const ids = txs.map((t) => t.id)
+  const rows = db
+    .prepare(
+      `SELECT id, tx_id, title, body FROM notes
+       WHERE tx_id IN (${ids.map(() => '?').join(',')})
+       ORDER BY id ASC`,
+    )
+    .all(...ids) as any[]
+  const porTx = new Map<number, { id: number; title: string }[]>()
+  for (const r of rows) {
+    const lista = porTx.get(r.tx_id) ?? []
+    // Una nota sin título se nombra con su primer renglón: "nota" a secas no
+    // dice nada, y el usuario ya escribió cómo se llama esto.
+    const primera = String(r.body ?? '').split('\n')[0]?.trim() ?? ''
+    lista.push({ id: r.id, title: r.title || primera.slice(0, 60) || 'Nota' })
+    porTx.set(r.tx_id, lista)
+  }
+  for (const tx of txs) tx.notes = porTx.get(tx.id) ?? []
 }
 
 /** Todas las etiquetas deben existir y ser del perfil. */

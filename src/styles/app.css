@@ -2894,3 +2894,144 @@ select.campo-input { cursor: pointer; }
   .rentas-lista { grid-template-columns: 1fr; }
   .giro-acciones { opacity: 1; }
 }
+
+/* ── Fase 20 · registrar rápido y secciones que se hablan ──────────────── */
+
+/* La barra de registro rápido. Todo en una línea porque esa es la promesa:
+   lo que cambia entre un ticket y el siguiente es el monto y el concepto, y
+   lo demás viene propuesto de la última vez. En pantalla chica se apila, que
+   es lo único que puede hacer sin dejar campos fuera de la vista — y dejar un
+   campo fuera de la vista en un formulario que guarda dinero no es opción. */
+.barra-rapida {
+  background: var(--hoja);
+  border: 1px solid var(--regla);
+  border-radius: var(--radio);
+  padding: 10px 12px;
+  margin-bottom: 16px;
+}
+.barra-rapida-forma {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.barra-rapida-forma .campo-input { padding: 7px 10px; font-size: 13.5px; }
+.barra-rapida-tipo { flex-shrink: 0; }
+.barra-rapida-monto { width: 130px; flex-shrink: 0; }
+.barra-rapida-monto .monto { font-size: 15px; }
+.barra-rapida-concepto { flex: 1 1 180px; min-width: 130px; }
+.barra-rapida-select { flex: 0 1 145px; min-width: 105px; }
+/* `.campo-input` es `width: 100%`, así que sin base propia la fecha se comía
+   el renglón entero y empujaba el botón a una tercera línea. Se vio en el
+   navegador; el ancho es el que pide 'DD/MM/AAAA' con su calendario. */
+.barra-rapida-fecha { flex: 0 0 132px; }
+/* Siete controles no siempre caben en un renglón, y estrecharlos hasta que
+   quepan sería cortar la fecha. Cuando el renglón se parte, el botón se va al
+   extremo: así el corte se lee como una decisión y no como un descuido. */
+.barra-rapida-forma > .btn { margin-left: auto; }
+.barra-rapida-pie {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.barra-rapida-nota { font-size: 12px; color: var(--tinta-3); }
+.barra-rapida kbd { margin: 0 1px; }
+
+/* La acción al lado de una alerta. El aviso decía cuánto y para cuándo, y
+   hacerle caso costaba tres clics y volver a teclear la cifra que estaba
+   arriba. El cuerpo sigue llevando a su sección; el botón abre el formulario
+   ya lleno. Son dos botones hermanos y no uno dentro de otro, que además de
+   inválido dejaría al lector de pantalla sin saber qué hace cada uno. */
+.alerta { display: flex; align-items: stretch; gap: 8px; }
+.alerta-accion { flex-shrink: 0; align-self: center; }
+
+/* Lo mismo en el calendario, donde el renglón ya no es solo un recordatorio. */
+.cal-evento-accion { flex-shrink: 0; }
+
+/* La nota atada a una partida, en el renglón del libro. */
+.chip-nota {
+  font-size: 10.5px;
+  padding: 1px 7px;
+  margin-left: 8px;
+  background: var(--tinte-neutro);
+  border-color: var(--regla);
+  color: var(--tinta-2);
+  cursor: pointer;
+}
+.chip-nota:hover { border-color: var(--acento); color: var(--acento); }
+
+/* De qué habla una nota, en la libreta. */
+.nota-ata {
+  display: block;
+  padding: 0 14px 8px;
+  font-size: 11.5px;
+  color: var(--tinta-3);
+  text-align: left;
+}
+button.nota-ata:hover { color: var(--acento); }
+
+/* Las notas del mes, en el Resumen. */
+.notas-mes-lista { display: flex; flex-direction: column; gap: 8px; }
+.nota-liga {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  text-align: left;
+  background: var(--tinte-neutro);
+  border: 1px solid var(--regla);
+  border-radius: var(--radio);
+  cursor: pointer;
+}
+.nota-liga:hover { border-color: var(--acento); }
+.nota-liga-titulo { font-weight: 620; font-size: 13px; }
+.nota-liga-texto {
+  font-size: 12.5px;
+  color: var(--tinta-2);
+  white-space: pre-wrap;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+/* La lista de atajos. */
+.atajos { display: flex; flex-direction: column; gap: 18px; }
+.atajos-titulo {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--tinta-3);
+  margin-bottom: 8px;
+}
+.atajos-lista { display: flex; flex-direction: column; gap: 6px; }
+.atajos-lista > div {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.atajos-lista dt { flex: 0 0 84px; display: flex; gap: 4px; }
+.atajos-lista dd { font-size: 13.5px; color: var(--tinta-2); }
+kbd {
+  display: inline-block;
+  min-width: 20px;
+  padding: 2px 6px;
+  font-family: var(--f-mono);
+  font-size: 11.5px;
+  text-align: center;
+  background: var(--tinte-neutro);
+  border: 1px solid var(--regla-fuerte);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  color: var(--tinta);
+}
+
+@media (max-width: 720px) {
+  .barra-rapida-monto, .barra-rapida-concepto, .barra-rapida-select { flex: 1 1 100%; }
+  .alerta { flex-direction: column; }
+  .alerta-accion { align-self: flex-start; }
+}

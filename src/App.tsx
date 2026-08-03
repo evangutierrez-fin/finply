@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import type { ModuloId, Profile, ProfileKind, Tx } from '../shared/types.ts'
+import type { BorradorTx, ModuloId, Profile, ProfileKind, Tx } from '../shared/types.ts'
 import { MODULOS, moduloDeVista, porOmision, vistaVisible } from '../shared/modulos.ts'
 import { api } from './api.ts'
 import { AppCtx } from './context.ts'
+import { useAtajos } from './atajos.ts'
 import { Sidebar, type ThemePref, type View } from './components/Sidebar.tsx'
+import { Atajos } from './components/Atajos.tsx'
 import { TxModal } from './components/TxModal.tsx'
 import { ModulosPicker } from './components/ModulosPicker.tsx'
 import { ProfileModal } from './components/ProfileModal.tsx'
@@ -191,7 +193,12 @@ export default function App() {
   const [view, setView] = useState<View>(viewFromHash)
   const [refreshKey, setRefreshKey] = useState(0)
   const [stampText, setStampText] = useState<string | null>(null)
-  const [txModal, setTxModal] = useState<{ open: boolean; tx: Tx | null }>({ open: false, tx: null })
+  const [ayuda, setAyuda] = useState(false)
+  const [txModal, setTxModal] = useState<{
+    open: boolean
+    tx: Tx | null
+    borrador?: BorradorTx
+  }>({ open: false, tx: null })
   const [profileModal, setProfileModal] = useState<{ open: boolean; profile: Profile | null }>({
     open: false,
     profile: null,
@@ -251,7 +258,38 @@ export default function App() {
     stampTimer.current = setTimeout(() => setStampText(null), 1000)
   }, [])
 
-  const openTx = useCallback((tx?: Tx) => setTxModal({ open: true, tx: tx ?? null }), [])
+  const openTx = useCallback(
+    (tx?: Tx | null, borrador?: BorradorTx) =>
+      setTxModal({ open: true, tx: tx ?? null, borrador }),
+    [],
+  )
+
+  /**
+   * Los atajos de la app entera. `b` y `r` no están aquí: son de la barra de
+   * registro rápido y solo significan algo donde hay una barra (Resumen y
+   * Movimientos). Desde cualquier otra vista, `b` lleva al libro, que es donde
+   * está la barra.
+   *
+   * Ninguno escribe: `n` abre el formulario y guardar sigue siendo un clic
+   * (R4). La navegación respeta los módulos apagados —mandar a una sección que
+   * no está en el lomo sería peor que no hacer nada (R17)—.
+   */
+  const conBarra = view === 'resumen' || view === 'movimientos'
+  useAtajos({
+    nuevo: () => openTx(),
+    ayuda: () => setAyuda(true),
+    ...(conBarra ? {} : { barra: () => nav('movimientos') }),
+    'ir-resumen': () => nav('resumen'),
+    'ir-movimientos': () => nav('movimientos'),
+    'ir-cuentas': () => nav('cuentas'),
+    'ir-flujo': () => irSiSeVe('flujo'),
+    'ir-presupuestos': () => irSiSeVe('presupuestos'),
+    'ir-notas': () => irSiSeVe('notas'),
+  })
+
+  function irSiSeVe(destino: View) {
+    if (profile && vistaVisible(destino, profile.modules)) nav(destino)
+  }
 
   if (profiles === null) {
     return (
@@ -354,10 +392,13 @@ export default function App() {
         {txModal.open && (
           <TxModal
             tx={txModal.tx}
+            borrador={txModal.borrador}
             onClose={() => setTxModal({ open: false, tx: null })}
             onSaved={bump}
           />
         )}
+
+        {ayuda && <Atajos onClose={() => setAyuda(false)} />}
 
         {profileModal.open && (
           <ProfileModal

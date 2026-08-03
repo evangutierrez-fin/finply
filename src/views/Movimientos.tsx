@@ -1,11 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, type TxFilters } from '../api.ts'
 import { useApp } from '../context.ts'
+import { useAtajos } from '../atajos.ts'
 import { useFetch } from '../hooks.ts'
 import { currentMonth, fmtDate, monthLabel, parseAmount, shiftMonth, todayISO } from '../format.ts'
 import { Money } from '../components/Money.tsx'
+import { BarraRapida } from '../components/BarraRapida.tsx'
 import { Conciliar } from '../components/Conciliar.tsx'
-import type { Tx } from '../../shared/types.ts'
+import { NotaModal } from '../components/NotaModal.tsx'
+import type { Note, Tx } from '../../shared/types.ts'
 
 const POR_PAGINA = 50
 
@@ -26,6 +29,14 @@ export function Movimientos() {
   const [qInput, setQInput] = useState('')
   const [q, setQ] = useState('')
   const [deletingId, setDeletingId] = useState<number | null>(null)
+  // La nota de una partida (Fase 20): se escribe desde el renglón, que es
+  // donde uno se acuerda de lo que quería apuntar.
+  const [anotando, setAnotando] = useState<{ txId: number; note: Note | null } | null>(null)
+  const buscarRef = useRef<HTMLInputElement>(null)
+
+  // `/` es de esta vista, porque el buscador vive aquí. El atajo no se declara
+  // en la app entera: mandaría a buscar a quien está en otra sección.
+  useAtajos({ buscar: () => buscarRef.current?.focus() })
 
   // Filtros avanzados: ocultos por omisión para no saturar la vista diaria.
   const [avanzados, setAvanzados] = useState(false)
@@ -114,6 +125,20 @@ export function Movimientos() {
     }
   }
 
+  /**
+   * Abrir la nota que ya cuelga de una partida. El renglón solo trae su título
+   * —el cuerpo no viaja en el listado—, así que se pide la nota entera al
+   * tocarla, que es cuando de verdad hace falta.
+   */
+  const abrirNota = async (noteId: number, txId: number) => {
+    try {
+      const notas = await api.notes.list(profile.id, { txId })
+      setAnotando({ txId, note: notas.find((n) => n.id === noteId) ?? null })
+    } catch (err) {
+      alert((err as Error).message)
+    }
+  }
+
   /** Palomear o despalomear una partida. No mueve un solo saldo. */
   const marcar = async (tx: Tx, reconciled: boolean) => {
     try {
@@ -165,8 +190,9 @@ export function Movimientos() {
           <option value="transferencia">Transferencias</option>
         </select>
         <input
+          ref={buscarRef}
           className="filtro filtro-busqueda"
-          placeholder="Buscar concepto, categoría o cuenta…"
+          placeholder="Buscar concepto, categoría o cuenta…  ( / )"
           value={qInput}
           onChange={(e) => setQInput(e.target.value)}
           aria-label="Buscar"
@@ -227,6 +253,8 @@ export function Movimientos() {
       )}
 
       {error && <p className="aviso" role="alert">{error}</p>}
+
+      <BarraRapida />
 
       {page && txs.length === 0 ? (
         <div className="vacio">
@@ -327,6 +355,22 @@ export function Movimientos() {
                       <span className="mov-cat" title="Tiene recibo">◫ recibo</span>
                     )}
                     {/*
+                      La nota de la libreta atada a esta partida (Fase 20). Se
+                      enseña el título, no el cuerpo: aquí la noticia es que
+                      **hay** una explicación y dónde tocarla.
+                    */}
+                    {tx.notes.map((n) => (
+                      <button
+                        key={n.id}
+                        type="button"
+                        className="chip chip-nota"
+                        onClick={() => void abrirNota(n.id, tx.id)}
+                        title="Ver la nota de esta partida"
+                      >
+                        ✎ {n.title}
+                      </button>
+                    ))}
+                    {/*
                       El reparto se enseña entero: un ticket dividido cuya
                       categoría no se ve se lee como "sin clasificar", que es
                       justo lo contrario de lo que pasó.
@@ -371,6 +415,14 @@ export function Movimientos() {
                       <span className="acciones">
                         <button type="button" className="accion" onClick={() => openTx(tx)} aria-label="Corregir">✎</button>
                         <button type="button" className="accion" onClick={() => void duplicar(tx)} aria-label="Duplicar con la fecha de hoy">⧉</button>
+                        <button
+                          type="button"
+                          className="accion"
+                          onClick={() => setAnotando({ txId: tx.id, note: null })}
+                          aria-label="Escribir una nota de esta partida"
+                        >
+                          ✑
+                        </button>
                         <button type="button" className="accion" onClick={() => setDeletingId(tx.id)} aria-label="Anular">✕</button>
                       </span>
                     )}
@@ -420,6 +472,15 @@ export function Movimientos() {
             </nav>
           )}
         </>
+      )}
+
+      {anotando && (
+        <NotaModal
+          note={anotando.note}
+          txId={anotando.txId}
+          onClose={() => setAnotando(null)}
+          onSaved={bump}
+        />
       )}
     </div>
   )

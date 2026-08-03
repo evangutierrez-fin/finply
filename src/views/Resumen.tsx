@@ -1,12 +1,15 @@
+import { useState } from 'react'
 import { api } from '../api.ts'
 import { useApp } from '../context.ts'
 import { useFetch } from '../hooks.ts'
 import { currentMonth, fmtDate, fmtMoney, monthLabel, shiftMonth, todayISO } from '../format.ts'
 import { CountUpMoney, Money } from '../components/Money.tsx'
 import { CategoryBars, Composicion, MonthBars, Spark } from '../components/Charts.tsx'
+import { BarraRapida } from '../components/BarraRapida.tsx'
+import { NotaModal } from '../components/NotaModal.tsx'
 import type { View } from '../components/Sidebar.tsx'
 import { diasEntre, finDeMes } from '../../shared/fechas.ts'
-import type { Alerta, FlujoProyectado, Tx } from '../../shared/types.ts'
+import type { Alerta, FlujoProyectado, Note, Tx } from '../../shared/types.ts'
 
 function txSignedCents(tx: Tx): number {
   return tx.type === 'gasto' ? -tx.amountCents : tx.amountCents
@@ -16,8 +19,21 @@ function txSignedCents(tx: Tx): number {
  * Las alertas no se descartan (D10): se apagan solas cuando el hecho deja de
  * ser cierto. Por eso no hay una ✕ en ninguna — cerrar una sería esconder algo
  * que sigue pasando.
+ *
+ * Desde la Fase 20 la de la tarjeta trae **el pago al lado**. El aviso decía
+ * cuánto y cuándo, y para hacerle caso había que ir a Tarjetas, abrir el
+ * formulario y volver a teclear una cifra que estaba dos centímetros arriba.
+ * El botón la lleva puesta; lo que no hace es pagar solo (R4).
  */
-function Alertas({ alertas, onNav }: { alertas: Alerta[]; onNav: (view: View) => void }) {
+function Alertas({
+  alertas,
+  onNav,
+  onPagarTarjeta,
+}: {
+  alertas: Alerta[]
+  onNav: (view: View) => void
+  onPagarTarjeta: (alerta: Alerta) => void
+}) {
   if (alertas.length === 0) return null
   return (
     <section className="alertas" aria-label="Avisos">
@@ -34,9 +50,62 @@ function Alertas({ alertas, onNav }: { alertas: Alerta[]; onNav: (view: View) =>
                 <span className="cifra alerta-monto">{fmtMoney(a.montoCents)}</span>
               )}
             </button>
+            {a.tipo === 'tarjeta' && a.refId !== null && a.montoCents !== null && (
+              <button
+                type="button"
+                className="btn btn-fantasma btn-chico alerta-accion"
+                onClick={() => onPagarTarjeta(a)}
+              >
+                Pagarla
+              </button>
+            )}
           </li>
         ))}
       </ul>
+    </section>
+  )
+}
+
+/**
+ * Las notas del mes (Fase 20). La libreta era la única sección que no se
+ * hablaba con ninguna otra: aquí es donde tiene sentido leer "este mes gasté
+ * de más por la mudanza", junto a la cifra que lo dice.
+ */
+function NotasDelMes({
+  notas,
+  month,
+  onEscribir,
+  onAbrir,
+}: {
+  notas: Note[]
+  month: string
+  onEscribir: () => void
+  onAbrir: (nota: Note) => void
+}) {
+  return (
+    <section className="hoja notas-mes">
+      <div className="hoja-head">
+        <h2 className="hoja-titulo">Notas de {monthLabel(month).toLowerCase()}</h2>
+        <button type="button" className="btn-liga" onClick={onEscribir}>
+          ＋ Apuntar algo del mes
+        </button>
+      </div>
+      {notas.length === 0 ? (
+        <p className="grafica-vacia">
+          Nada apuntado este mes. Lo que explica una cifra vale tanto como la cifra.
+        </p>
+      ) : (
+        <ul className="notas-mes-lista">
+          {notas.map((n) => (
+            <li key={n.id}>
+              <button type="button" className="nota-liga" onClick={() => onAbrir(n)}>
+                {n.title && <span className="nota-liga-titulo">{n.title}</span>}
+                <span className="nota-liga-texto">{n.body}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   )
 }
@@ -114,8 +183,12 @@ function FinDeMes({ flujo, onNav }: { flujo: FlujoProyectado; onNav: (view: View
 }
 
 export function Resumen({ onNav }: { onNav: (view: View) => void }) {
-  const { profile, refreshKey, openTx } = useApp()
+  const { profile, refreshKey, bump, openTx } = useApp()
   const month = currentMonth()
+  const [nota, setNota] = useState<{ open: boolean; note: Note | null }>({
+    open: false,
+    note: null,
+  })
   const { data, error } = useFetch(
     () => api.summary(profile.id, month),
     [profile.id, refreshKey],
@@ -128,6 +201,11 @@ export function Resumen({ onNav }: { onNav: (view: View) => void }) {
   // días redondos: "a fin de mes" es una fecha, no un plazo.
   const { data: flujo } = useFetch(
     () => api.flujo(profile.id, Math.max(0, diasEntre(todayISO(), finDeMes(todayISO())))),
+    [profile.id, refreshKey],
+  )
+  // Las notas de este mes, en su propia petición como las alertas y el flujo.
+  const { data: notasDelMes } = useFetch(
+    () => api.notes.list(profile.id, { period: month }),
     [profile.id, refreshKey],
   )
 
@@ -163,7 +241,25 @@ export function Resumen({ onNav }: { onNav: (view: View) => void }) {
         <span className="vista-mes">{monthLabel(month)}</span>
       </header>
 
-      <Alertas alertas={alertas ?? []} onNav={onNav} />
+      <Alertas
+        alertas={alertas ?? []}
+        onNav={onNav}
+        onPagarTarjeta={(a) => {
+          // Pagar una tarjeta es una **transferencia**: sale del banco y baja
+          // lo que debes, no es un gasto nuevo (D6). El monto y el destino los
+          // pone la alerta; de qué cuenta sale lo dice el usuario, que es la
+          // única parte que Finply no sabe.
+          const tarjeta = data.accounts.find((a2) => a2.id === a.refId)
+          openTx(null, {
+            type: 'transferencia',
+            transferAccountId: a.refId ?? undefined,
+            amountCents: a.montoCents ?? undefined,
+            note: tarjeta ? `Pago de ${tarjeta.name}` : 'Pago de tarjeta',
+          })
+        }}
+      />
+
+      <BarraRapida />
 
       <section className="hero">
         <div className="hero-total">
@@ -372,6 +468,22 @@ export function Resumen({ onNav }: { onNav: (view: View) => void }) {
           )}
         </article>
       </section>
+
+      <NotasDelMes
+        notas={notasDelMes ?? []}
+        month={month}
+        onEscribir={() => setNota({ open: true, note: null })}
+        onAbrir={(n) => setNota({ open: true, note: n })}
+      />
+
+      {nota.open && (
+        <NotaModal
+          note={nota.note}
+          period={month}
+          onClose={() => setNota({ open: false, note: null })}
+          onSaved={bump}
+        />
+      )}
     </div>
   )
 }

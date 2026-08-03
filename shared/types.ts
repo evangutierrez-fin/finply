@@ -156,6 +156,43 @@ export interface Tx {
   splits: TxSplit[]
   /** La ficha de los recibos adjuntos; los bytes se piden por su propia ruta. */
   attachments: TxAttachment[]
+  /**
+   * Las notas de la libreta atadas a esta partida (Fase 20). Solo el título:
+   * en el listado se enseña que **hay** una nota, no la nota entera.
+   */
+  notes: { id: number; title: string }[]
+}
+
+/**
+ * Un movimiento a medio escribir. Lo que una sección le pasa al formulario
+ * cuando ya sabe parte de la respuesta: la alerta de la tarjeta sabe cuánto y
+ * a qué tarjeta, el calendario sabe qué renta cae y de cuánto es.
+ *
+ * Es **relleno, no registro** (R4): abre el formulario con los campos puestos
+ * y el usuario sigue teniendo que confirmarlo.
+ */
+export interface BorradorTx {
+  type?: TxType
+  amountCents?: number
+  accountId?: number
+  transferAccountId?: number
+  categoryId?: number | null
+  date?: string
+  note?: string
+  rentalId?: number | null
+  rentalRole?: Tx['rentalRole']
+  counterpartyId?: number | null
+}
+
+/**
+ * Lo que la barra de registro rápido propone antes de que se escriba nada.
+ * Es una propuesta y nada más: nadie asienta hasta que el usuario lo diga (R4).
+ */
+export interface SugerenciaTx {
+  /** La última partida **registrada**, para poder repetirla. */
+  ultima: Tx | null
+  /** Por tipo, la cuenta y la categoría de la última vez. */
+  porTipo: Partial<Record<TxType, { accountId: number; categoryId: number | null }>>
 }
 
 export interface TxSplit {
@@ -915,6 +952,16 @@ export interface Note {
   title: string
   body: string
   pinned: boolean
+  /**
+   * A qué se refiere la nota (Fase 20). Excluyentes y las dos opcionales: una
+   * nota explica un movimiento, o un mes, o nada — la libreta sigue siendo la
+   * libreta.
+   */
+  txId: number | null
+  /** El mes al que pertenece, 'AAAA-MM'. */
+  period: string | null
+  /** Cómo se llama ese movimiento, para poder escribirlo sin otra consulta. */
+  tx: { id: number; date: string; note: string; amountCents: number; type: TxType } | null
   createdAt: string
   updatedAt: string
 }

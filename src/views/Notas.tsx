@@ -2,115 +2,52 @@ import { useState } from 'react'
 import { api } from '../api.ts'
 import { useApp } from '../context.ts'
 import { useFetch } from '../hooks.ts'
-import { fmtDate } from '../format.ts'
-import { Modal } from '../components/Modal.tsx'
+import { fmtDate, fmtMoney, monthLabel } from '../format.ts'
+import { NotaModal } from '../components/NotaModal.tsx'
 import type { Note } from '../../shared/types.ts'
 
-function NoteModal({
-  note,
-  onClose,
-  onSaved,
-}: {
-  note: Note | null
-  onClose: () => void
-  onSaved: () => void
-}) {
-  const { profile, stamp, bump } = useApp()
-  const [title, setTitle] = useState(note?.title ?? '')
-  const [body, setBody] = useState(note?.body ?? '')
-  const [confirmDelete, setConfirmDelete] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
+/** Los filtros de la libreta: de qué habla cada apunte. */
+const FILTROS = [
+  { id: 'todas', label: 'Todas' },
+  { id: 'movimiento', label: 'De un movimiento' },
+  { id: 'mes', label: 'De un mes' },
+  { id: 'suelta', label: 'Sueltas' },
+] as const
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!title.trim() && !body.trim()) return setError('La nota está vacía')
-    setSaving(true)
-    setError(null)
-    try {
-      if (note) {
-        await api.notes.update(note.id, { title: title.trim(), body })
-      } else {
-        await api.notes.create({ profileId: profile.id, title: title.trim(), body })
-      }
-      stamp('Guardada')
-      onSaved()
-      onClose()
-    } catch (err) {
-      setError((err as Error).message)
-      setSaving(false)
-    }
+type Filtro = (typeof FILTROS)[number]['id']
+
+function cumple(n: Note, filtro: Filtro): boolean {
+  if (filtro === 'todas') return true
+  if (filtro === 'movimiento') return n.txId !== null
+  if (filtro === 'mes') return n.period !== null
+  return n.txId === null && n.period === null
+}
+
+/**
+ * De qué habla la nota, escrito (Fase 20). Una liga que no se puede leer no
+ * sirve de nada: "nota del movimiento #418" no le dice nada a nadie, así que
+ * se nombra la partida como se nombra en el libro.
+ */
+function DeQueHabla({ nota, onVerMovimiento }: { nota: Note; onVerMovimiento: () => void }) {
+  if (nota.tx) {
+    return (
+      <button type="button" className="btn-liga nota-ata" onClick={onVerMovimiento}>
+        ⇢ {fmtDate(nota.tx.date)} · {nota.tx.note || 'Sin concepto'} ·{' '}
+        {fmtMoney(nota.tx.amountCents)}
+      </button>
+    )
   }
-
-  const remove = async () => {
-    if (!note) return
-    setSaving(true)
-    try {
-      await api.notes.remove(note.id)
-      stamp('Borrada')
-      bump()
-      onClose()
-    } catch (err) {
-      setError((err as Error).message)
-      setSaving(false)
-    }
-  }
-
-  return (
-    <Modal title={note ? 'Editar nota' : 'Nueva nota'} onClose={onClose}>
-      <form className="forma" onSubmit={submit}>
-        <label className="campo">
-          <span className="campo-label">Título</span>
-          <input
-            className="campo-input"
-            placeholder="Ej. Pendientes de julio"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            autoFocus={!note}
-          />
-        </label>
-        <label className="campo">
-          <span className="campo-label">Apunte</span>
-          <textarea
-            className="campo-input nota-textarea"
-            rows={9}
-            placeholder="Escribe aquí, renglón por renglón…"
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-          />
-        </label>
-        {error && <p className="forma-error" role="alert">{error}</p>}
-        <footer className="forma-pie forma-pie-doble">
-          {note ? (
-            confirmDelete ? (
-              <span className="confirmar">
-                ¿Borrar la nota?
-                <button type="button" className="btn-liga btn-liga-rojo" onClick={remove}>Sí, borrar</button>
-                <button type="button" className="btn-liga" onClick={() => setConfirmDelete(false)}>No</button>
-              </span>
-            ) : (
-              <button type="button" className="btn-liga btn-liga-rojo" onClick={() => setConfirmDelete(true)}>
-                Borrar
-              </button>
-            )
-          ) : (
-            <span />
-          )}
-          <span className="forma-pie-der">
-            <button type="button" className="btn btn-fantasma" onClick={onClose}>Cancelar</button>
-            <button type="submit" className="btn btn-primario" disabled={saving}>
-              {saving ? 'Guardando…' : 'Guardar nota'}
-            </button>
-          </span>
-        </footer>
-      </form>
-    </Modal>
-  )
+  // Con `txId` y sin `tx`, el movimiento se anuló: la nota sobrevive porque la
+  // llave es `ON DELETE SET NULL`, y decirlo es más honesto que callarlo.
+  if (nota.txId) return <span className="nota-ata">⇢ su movimiento ya no está</span>
+  if (nota.period) return <span className="nota-ata">⇢ {monthLabel(nota.period)}</span>
+  return null
 }
 
 export function Notas() {
   const { profile, refreshKey, bump, stamp } = useApp()
   const [modal, setModal] = useState<{ open: boolean; note: Note | null }>({ open: false, note: null })
+  const [filtro, setFiltro] = useState<Filtro>('todas')
   const { data: notes, error } = useFetch(() => api.notes.list(profile.id), [profile.id, refreshKey])
 
   const togglePin = async (note: Note) => {
@@ -123,6 +60,9 @@ export function Notas() {
     }
   }
 
+  const lista = (notes ?? []).filter((n) => cumple(n, filtro))
+  const atadas = (notes ?? []).filter((n) => n.txId !== null || n.period !== null).length
+
   return (
     <div className="vista">
       <header className="vista-head">
@@ -134,20 +74,42 @@ export function Notas() {
 
       {error && <p className="aviso" role="alert">{error}</p>}
 
-      {notes && notes.length === 0 ? (
+      {notes && notes.length > 0 && atadas > 0 && (
+        <div className="seg seg-chico" role="radiogroup" aria-label="Qué notas ver">
+          {FILTROS.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              role="radio"
+              aria-checked={filtro === f.id}
+              className={`seg-item${filtro === f.id ? ' activa' : ''}`}
+              onClick={() => setFiltro(f.id)}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {notes && lista.length === 0 ? (
         <div className="vacio">
-          <p className="vacio-titulo">El margen está limpio.</p>
+          <p className="vacio-titulo">
+            {filtro === 'todas' ? 'El margen está limpio.' : 'Ninguna nota de esas.'}
+          </p>
           <p className="vacio-sub">
             Apunta pendientes, acuerdos, reglas propias — todo lo que no es un número
-            pero pertenece a tu libro.
+            pero pertenece a tu libro. Una nota puede quedarse aquí, explicar un movimiento
+            o hablar de todo un mes.
           </p>
-          <button type="button" className="btn btn-primario" onClick={() => setModal({ open: true, note: null })}>
-            Escribir la primera
-          </button>
+          {filtro === 'todas' && (
+            <button type="button" className="btn btn-primario" onClick={() => setModal({ open: true, note: null })}>
+              Escribir la primera
+            </button>
+          )}
         </div>
       ) : (
         <section className="notas-tablero">
-          {(notes ?? []).map((n, i) => (
+          {lista.map((n, i) => (
             <article className="nota" key={n.id} style={{ animationDelay: `${Math.min(i * 40, 300)}ms` }}>
               <button
                 type="button"
@@ -162,6 +124,12 @@ export function Notas() {
                 {n.title && <span className="nota-titulo">{n.title}</span>}
                 <span className="nota-texto">{n.body}</span>
               </button>
+              <DeQueHabla
+                nota={n}
+                onVerMovimiento={() => {
+                  window.location.hash = '#/movimientos'
+                }}
+              />
               <footer className="nota-pie">
                 <span className="nota-fecha">{fmtDate(n.updatedAt.slice(0, 10))}</span>
                 <button
@@ -178,7 +146,7 @@ export function Notas() {
       )}
 
       {modal.open && (
-        <NoteModal note={modal.note} onClose={() => setModal({ open: false, note: null })} onSaved={bump} />
+        <NotaModal note={modal.note} onClose={() => setModal({ open: false, note: null })} onSaved={bump} />
       )}
     </div>
   )

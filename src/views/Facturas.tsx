@@ -969,33 +969,49 @@ export function Facturas() {
                 <th>Cliente</th>
                 <th>Desde cuándo</th>
                 <th className="col-num">Falta</th>
+                <th className="col-acciones"><span className="sr-only">Acciones</span></th>
               </tr>
             </thead>
             <tbody>
-              {cobranza.renglones.map((r) => (
-                <tr key={r.facturaId} className={r.diasVencida > 0 ? 'cobranza-vencida' : ''}>
-                  <td>
-                    <strong>{r.counterpartyName}</strong>
-                    <div className="tabla-sub">
-                      {[r.folio && `Folio ${r.folio}`, r.concept, r.contact].filter(Boolean).join(' · ')}
-                    </div>
-                  </td>
-                  <td className="cifra-chica">
-                    {r.diasVencida > 0
-                      ? `${r.diasVencida} día(s) vencida`
-                      : r.dueDate
-                        ? `vence el ${fmtDate(r.dueDate)}`
-                        : 'sin fecha pactada'}
-                  </td>
-                  <td className="col-num"><Money cents={r.saldoCents} className="cifra-chica" /></td>
-                </tr>
-              ))}
+              {cobranza.renglones.map((r) => {
+                // La factura completa, para poder cobrarla desde aquí. La lista
+                // de cobranza es derivada y solo trae el id: el cobro necesita
+                // el documento entero —su impuesto, su retención, su saldo— y
+                // copiarlo al renglón sería tener dos versiones de la factura.
+                const factura = (facturas ?? []).find((f) => f.id === r.facturaId)
+                return (
+                  <tr key={r.facturaId} className={r.diasVencida > 0 ? 'cobranza-vencida' : ''}>
+                    <td>
+                      <strong>{r.counterpartyName}</strong>
+                      <div className="tabla-sub">
+                        {[r.folio && `Folio ${r.folio}`, r.concept, r.contact].filter(Boolean).join(' · ')}
+                      </div>
+                    </td>
+                    <td className="cifra-chica">
+                      {r.diasVencida > 0
+                        ? `${r.diasVencida} día(s) vencida`
+                        : r.dueDate
+                          ? `vence el ${fmtDate(r.dueDate)}`
+                          : 'sin fecha pactada'}
+                    </td>
+                    <td className="col-num"><Money cents={r.saldoCents} className="cifra-chica" /></td>
+                    <td className="col-acciones">
+                      {factura && (
+                        <button type="button" className="btn-liga" onClick={() => setCobrando(factura)}>
+                          Cobrar
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
           <p className="reportes-supuesto">
             Ordenada por antigüedad: primero lo más vencido, porque un saldo de hace noventa días no
             vale lo mismo que uno de ayer. Lo que ves es lo <strong>cobrable</strong> — ya sin lo
-            retenido y sin lo que cancelaste con notas de crédito.
+            retenido y sin lo que cancelaste con notas de crédito. Se cobra desde aquí, sin ir a
+            buscarla en la lista de abajo.
           </p>
         </section>
       )}

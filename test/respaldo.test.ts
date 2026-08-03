@@ -55,6 +55,42 @@ describe('respaldo', () => {
     assert.equal(perfiles[0].name, 'Respaldable')
   })
 
+  test('⚠ la libreta vuelve atada a su movimiento y a su mes', async () => {
+    // La lista de `backup.ts` está **ordenada por dependencias**, y en la Fase
+    // 20 `notes` tuvo que mudarse detrás de `transactions`: una nota que
+    // apunta a una partida no se puede restaurar antes que la partida. Es
+    // exactamente lo que ya pasó con `rentals` en la Fase 15, y solo se ve
+    // haciendo el viaje redondo — la prueba que compara la lista contra el
+    // esquema pasa igual, porque la tabla sí está.
+    const { perfil, cuenta } = await libroBase(c, 'Libreta')
+    const tx = (
+      await c.post('/api/transactions', {
+        profileId: perfil.id, accountId: cuenta.id, type: 'gasto',
+        amountCents: 180000, date: '2026-06-14', note: 'Viaje',
+      })
+    ).body
+    await c.post('/api/notes', {
+      profileId: perfil.id, title: 'Por qué tan caro', body: 'Boletos de los cuatro.',
+      txId: tx.id,
+    })
+    await c.post('/api/notes', {
+      profileId: perfil.id, title: 'Junio se pasó', body: 'Fue el viaje.', period: '2026-06',
+    })
+    await c.post('/api/notes', { profileId: perfil.id, title: 'Suelta', body: 'De nada.' })
+
+    const antes = (await c.get(`/api/notes?profileId=${perfil.id}`)).body
+    const respaldo = (await c.get('/api/respaldo')).body
+    await c.del(`/api/profiles/${perfil.id}`)
+
+    const res = await c.post('/api/respaldo/restaurar', respaldo)
+    assert.equal(res.status, 200, JSON.stringify(res.body))
+
+    const despues = (await c.get(`/api/notes?profileId=${perfil.id}`)).body
+    assert.deepEqual(despues, antes)
+    assert.equal(despues.filter((n: any) => n.txId !== null).length, 1)
+    assert.equal(despues.filter((n: any) => n.period !== null).length, 1)
+  })
+
   test('un archivo que no es respaldo se rechaza sin tocar el libro', async () => {
     await libroBase(c, 'Intacto')
     const antes = (await c.get('/api/profiles')).body

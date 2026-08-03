@@ -7,7 +7,7 @@ import type {
   Bien, BienKind, CorteConciliacion, SerieCuenta, PresupuestoMes, TopeTotal,
   Anticipo, BandejaFacturas, Cobranza, FacturaRecurrente,
   Almacen, Arrendamiento, Hora, MovimientoStock, Producto, ResumenHoras,
-  Cotizacion, ResumenCotizaciones, TableroContraparte,
+  Cotizacion, ResumenCotizaciones, TableroContraparte, SugerenciaTx,
 } from '../shared/types.ts'
 
 /** Error de la API que conserva el código y el cuerpo, para poder reaccionar. */
@@ -386,6 +386,9 @@ export const api = {
       }
     },
     exportUrl: (params: TxFilters) => `/api/transactions/export.csv?${txSearch(params)}`,
+    /** Lo que la barra rápida propone: la última partida y los usos recientes. */
+    sugerencia: (profileId: number) =>
+      req<SugerenciaTx>(`/api/transactions/sugerencia?profileId=${profileId}`),
     create: (data: TxDraft) =>
       req<Tx>('/api/transactions', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: number, data: TxDraft) =>
@@ -848,11 +851,30 @@ export const api = {
       req<Goal>(`/api/goals/entries/${entryId}`, { method: 'DELETE' }),
   },
   notes: {
-    list: (profileId: number) => req<Note[]>(`/api/notes?profileId=${profileId}`),
-    create: (data: { profileId: number; title: string; body: string }) =>
-      req<Note>('/api/notes', { method: 'POST', body: JSON.stringify(data) }),
-    update: (id: number, data: Partial<{ title: string; body: string; pinned: boolean }>) =>
-      req<Note>(`/api/notes/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    /** Sin filtro son todas; con `txId` o `period`, las de esa partida o ese mes. */
+    list: (profileId: number, filtro?: { txId?: number; period?: string }) => {
+      const params = new URLSearchParams({ profileId: String(profileId) })
+      if (filtro?.txId) params.set('txId', String(filtro.txId))
+      if (filtro?.period) params.set('period', filtro.period)
+      return req<Note[]>(`/api/notes?${params}`)
+    },
+    create: (data: {
+      profileId: number
+      title: string
+      body: string
+      txId?: number | null
+      period?: string | null
+    }) => req<Note>('/api/notes', { method: 'POST', body: JSON.stringify(data) }),
+    update: (
+      id: number,
+      data: Partial<{
+        title: string
+        body: string
+        pinned: boolean
+        txId: number | null
+        period: string | null
+      }>,
+    ) => req<Note>(`/api/notes/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     remove: (id: number) => req<{ ok: true }>(`/api/notes/${id}`, { method: 'DELETE' }),
   },
   importaciones: {

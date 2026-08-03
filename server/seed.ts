@@ -775,9 +775,44 @@ inTransaction(() => {
     1,
   )
 
+  // Las dos ligas de la Fase 20, para que la demo enseñe que la libreta ya se
+  // habla con el libro: una nota que explica **una partida** y otra que habla
+  // de **todo un mes**. Sin ellas, la función solo se ve creándola a mano.
+  const insertNotaAtada = db.prepare(
+    'INSERT INTO notes (profile_id, title, body, pinned, tx_id, period) VALUES (?, ?, ?, 0, ?, ?)',
+  )
+  // El gasto más caro de junio del perfil personal: el viaje. Es la partida
+  // que cualquiera abriría a preguntarse "¿y esto qué fue?".
+  const caraDeJunio: any = db
+    .prepare(
+      `SELECT id FROM transactions
+       WHERE profile_id = ? AND type = 'gasto' AND substr(date, 1, 7) = '2026-06'
+       ORDER BY amount_cents DESC LIMIT 1`,
+    )
+    .get(personal)
+  if (caraDeJunio) {
+    insertNotaAtada.run(
+      personal,
+      'Por qué fue tan caro',
+      'Boletos para los cuatro y el hotel completo por adelantado. Se pagó de una en junio, ' +
+        'pero cubre el viaje entero: no compararlo contra un mes normal.',
+      caraDeJunio.id,
+      null,
+    )
+  }
+  insertNotaAtada.run(
+    personal,
+    'Junio se pasó, y se sabe por qué',
+    'El viaje y lo que se adelantó del seguro. Julio vuelve a lo de siempre: si el promedio ' +
+      'del año sale alto, es este mes.',
+    null,
+    '2026-06',
+  )
+
   console.log(
     '[finply] Libro demo listo: 2 perfiles, 6 cuentas (una tarjeta con su tasa), ' +
-      'quince meses de movimientos, deudas, inversiones, presupuestos, metas, notas, ' +
+      'quince meses de movimientos, deudas, inversiones, presupuestos, metas, ' +
+      'notas —una atada a su partida y otra a su mes—, ' +
       'facturas con retención, nota de crédito, anticipo y plantilla, ' +
       'cinco cotizaciones que cubren los cuatro estados y una orden de compra, ' +
       'y los tres módulos de giro: un depto rentado, horas sin facturar y un almacén.',

@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
-  Account, Arrendamiento, CentroCosto, Category, Contraparte, Tag, Tx, TxAttachment, TxType,
+  Account, Arrendamiento, BorradorTx, CentroCosto, Category, Contraparte, Tag, Tx, TxAttachment,
+  TxType,
 } from '../../shared/types.ts'
+import { libroPide, pideCampo, type CampoTx } from '../../shared/campos.ts'
 import { api } from '../api.ts'
 import { fmtDate, parseAmount, todayISO } from '../format.ts'
 import { useApp } from '../context.ts'
@@ -25,23 +27,36 @@ const RENGLON_VACIO: Renglon = { categoryId: 0, amount: '', note: '' }
 
 export function TxModal({
   tx,
+  borrador,
   onClose,
   onSaved,
 }: {
   tx: Tx | null
+  /**
+   * Un movimiento a medio escribir, para abrir el formulario ya lleno desde
+   * donde apareció el dato (Fase 20). Solo cuenta al **crear**: corrigiendo
+   * manda el movimiento, siempre.
+   */
+  borrador?: BorradorTx
   onClose: () => void
   onSaved: () => void
 }) {
   const { profile, stamp } = useApp()
+  const previo = tx ? undefined : borrador
   const [accounts, setAccounts] = useState<Account[]>([])
   const [categories, setCategories] = useState<Category[]>([])
-  const [type, setType] = useState<TxType>(tx?.type ?? 'gasto')
-  const [amount, setAmount] = useState(tx ? (tx.amountCents / 100).toFixed(2) : '')
-  const [accountId, setAccountId] = useState<number>(tx?.accountId ?? 0)
-  const [transferAccountId, setTransferAccountId] = useState<number>(tx?.transferAccountId ?? 0)
-  const [categoryId, setCategoryId] = useState<number>(tx?.categoryId ?? 0)
-  const [date, setDate] = useState(tx?.date ?? todayISO())
-  const [note, setNote] = useState(tx?.note ?? '')
+  const [type, setType] = useState<TxType>(tx?.type ?? previo?.type ?? 'gasto')
+  const [amount, setAmount] = useState(() => {
+    const cents = tx?.amountCents ?? previo?.amountCents
+    return cents === undefined ? '' : (cents / 100).toFixed(2)
+  })
+  const [accountId, setAccountId] = useState<number>(tx?.accountId ?? previo?.accountId ?? 0)
+  const [transferAccountId, setTransferAccountId] = useState<number>(
+    tx?.transferAccountId ?? previo?.transferAccountId ?? 0,
+  )
+  const [categoryId, setCategoryId] = useState<number>(tx?.categoryId ?? previo?.categoryId ?? 0)
+  const [date, setDate] = useState(tx?.date ?? previo?.date ?? todayISO())
+  const [note, setNote] = useState(tx?.note ?? previo?.note ?? '')
   const [newCategory, setNewCategory] = useState<string | null>(null)
   const [tags, setTags] = useState<Tag[]>([])
   const [tagIds, setTagIds] = useState<number[]>(tx?.tags.map((t) => t.id) ?? [])
@@ -49,21 +64,15 @@ export function TxModal({
   // personal serían cuatro casillas que nadie va a llenar nunca.
   const [contrapartes, setContrapartes] = useState<Contraparte[]>([])
   const [centros, setCentros] = useState<CentroCosto[]>([])
-  const [counterpartyId, setCounterpartyId] = useState<number>(tx?.counterpartyId ?? 0)
+  const [counterpartyId, setCounterpartyId] = useState<number>(
+    tx?.counterpartyId ?? previo?.counterpartyId ?? 0,
+  )
   const [costCenterId, setCostCenterId] = useState<number>(tx?.costCenterId ?? 0)
   const [tax, setTax] = useState(tx?.taxCents ? (tx.taxCents / 100).toFixed(2) : '')
   const [deductible, setDeductible] = useState(tx?.deductible ?? false)
-  // Los campos de negocio los trae el módulo, no el tipo de perfil: desde la
-  // Fase 9 el tipo solo elige el juego por omisión, y un libro personal que
-  // encienda Negocio tiene que verlos igual.
-  const esNegocio = profile.modules.includes('negocio')
-  // Fase 15. El papel del movimiento en un arrendamiento: es lo que hace que el
-  // depósito no cuente como ingreso (D6). Vive **en el movimiento**, así que
-  // apagar Inmuebles después no lo convierte en ingreso (R18).
-  const conInmuebles = profile.modules.includes('inmuebles')
   const [arrendamientos, setArrendamientos] = useState<Arrendamiento[]>([])
-  const [rentalId, setRentalId] = useState<number>(tx?.rentalId ?? 0)
-  const [rentalRole, setRentalRole] = useState<string>(tx?.rentalRole ?? '')
+  const [rentalId, setRentalId] = useState<number>(tx?.rentalId ?? previo?.rentalId ?? 0)
+  const [rentalRole, setRentalRole] = useState<string>(tx?.rentalRole ?? previo?.rentalRole ?? '')
   const [newTag, setNewTag] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -89,6 +98,27 @@ export function TxModal({
   const [subiendo, setSubiendo] = useState(false)
   const archivoRef = useRef<HTMLInputElement>(null)
 
+  /**
+   * Qué campos pide este movimiento. **La respuesta vive en un solo lugar**
+   * (`shared/campos.ts`, Fase 20); aquí solo se pregunta.
+   *
+   * Antes estaba repartida por todo el archivo —un `includes('negocio')` en un
+   * `useEffect`, un `type !== 'transferencia'` en cada bloque, la regla de "solo
+   * si hay contratos" escondida en el JSX— y cada módulo nuevo agregaba otra
+   * condición suelta que nadie podía probar sin montar el componente.
+   */
+  const pide = (campo: CampoTx) =>
+    pideCampo(
+      {
+        modules: profile.modules,
+        type,
+        dividida,
+        hayArrendamientos: arrendamientos.length > 0,
+        existe: Boolean(tx),
+      },
+      campo,
+    )
+
   useEffect(() => {
     Promise.all([
       api.accounts.list(profile.id),
@@ -106,10 +136,14 @@ export function TxModal({
     )
   }, [profile.id, tx])
 
-  // Contrapartes y centros solo se piden en un libro de negocio: en uno
-  // personal serían dos llamadas por cada movimiento que nadie usa.
+  // Qué se **carga** no depende del tipo elegido ahora, sino de si este libro
+  // pide esos campos alguna vez: cambiar de gasto a transferencia no puede
+  // costar dos llamadas más. En un libro personal no se piden nunca.
+  const usaNegocio = libroPide(profile.modules, 'negocio')
+  const usaInmuebles = libroPide(profile.modules, 'inmueble')
+
   useEffect(() => {
-    if (!esNegocio) return
+    if (!usaNegocio) return
     Promise.all([api.contrapartes.list(profile.id), api.centros.list(profile.id)]).then(
       ([cps, ccs]) => {
         setContrapartes(cps.filter((c) => !c.archived))
@@ -119,17 +153,17 @@ export function TxModal({
         // Que falten no impide registrar el movimiento: son campos opcionales.
       },
     )
-  }, [profile.id, esNegocio])
+  }, [profile.id, usaNegocio])
 
   useEffect(() => {
-    if (!conInmuebles) return
+    if (!usaInmuebles) return
     api.inmuebles.list(profile.id).then(
       (rs) => setArrendamientos(rs.filter((r) => !r.archived)),
       () => {
         // Que falten no impide registrar el movimiento: el campo es opcional.
       },
     )
-  }, [profile.id, conInmuebles])
+  }, [profile.id, usaInmuebles])
 
   // Los gastos a los que se puede ligar una devolución. Solo se piden cuando el
   // movimiento es un ingreso: en cualquier otro caso la pregunta no existe.
@@ -330,6 +364,18 @@ export function TxModal({
             {tx?.debtId && ' Anularlo no borra la deuda; solo quita el movimiento del libro.'}
           </p>
         )}
+        {/*
+          Llegó lleno desde donde apareció el dato: la alerta de la tarjeta, un
+          renglón del calendario, la barra rápida. Se dice, porque un
+          formulario que aparece con cifras puestas tiene que explicar de dónde
+          salieron — y porque lo que sigue es confirmarlo, no aceptarlo (R4).
+        */}
+        {previo && (
+          <p className="forma-nota">
+            Finply llenó lo que ya sabía. Revísalo y confirma: nada entra al libro hasta que
+            guardes.
+          </p>
+        )}
 
         <label className="campo campo-monto">
           <span className="campo-label">Monto</span>
@@ -361,7 +407,7 @@ export function TxModal({
             </select>
           </label>
 
-          {type === 'transferencia' ? (
+          {pide('cuentaDestino') ? (
             <label className="campo">
               <span className="campo-label">A la cuenta</span>
               <select
@@ -377,7 +423,7 @@ export function TxModal({
                   ))}
               </select>
             </label>
-          ) : dividida ? (
+          ) : !pide('categoria') ? (
             <div className="campo">
               <span className="campo-label">Categoría</span>
               <p className="campo-nota">
@@ -450,7 +496,7 @@ export function TxModal({
           El reparto por categoría. Un ticket con despensa, farmacia y ropa es
           un solo movimiento —el saldo bajó una vez—, con varias categorías.
         */}
-        {type !== 'transferencia' && (
+        {pide('reparto') && (
           <fieldset className="campo campo-fieldset">
             <legend className="campo-label">Reparto por categoría</legend>
             <label className="campo-casilla">
@@ -539,7 +585,7 @@ export function TxModal({
           La devolución. Ligarla al gasto original es lo que evita que una
           camisa devuelta cuente como ingreso e infle la tasa de ahorro.
         */}
-        {type === 'ingreso' && (
+        {pide('devolucion') && (
           <label className="campo">
             <span className="campo-label">¿Devuelve un gasto?</span>
             <select
@@ -563,7 +609,7 @@ export function TxModal({
           </label>
         )}
 
-        {esNegocio && type !== 'transferencia' && (
+        {pide('negocio') && (
           <>
             <div className="campos-2">
               <label className="campo">
@@ -622,8 +668,9 @@ export function TxModal({
         )}
 
         {/* Un movimiento de un inmueble rentado. Se pregunta solo si hay
-            contratos: sin ellos son dos selects vacíos en cada partida. */}
-        {conInmuebles && arrendamientos.length > 0 && (
+            contratos: sin ellos son dos selects vacíos en cada partida. Esa
+            regla vive en `shared/campos.ts`, con todas las demás. */}
+        {pide('inmueble') && (
           <>
             <div className="campos-2">
               <label className="campo">
@@ -706,8 +753,10 @@ export function TxModal({
           </div>
         </fieldset>
 
-        {/* El recibo. Exige que el movimiento exista: sin id no hay dónde colgarlo. */}
-        {tx && (
+        {/* El recibo. Exige que el movimiento exista: sin id no hay dónde
+            colgarlo, y eso es lo que dice `existe` en `shared/campos.ts`. El
+            `tx &&` de al lado es para el compilador, que no puede saberlo. */}
+        {pide('recibo') && tx && (
           <fieldset className="campo campo-fieldset">
             <legend className="campo-label">Recibo</legend>
             {adjuntos.length > 0 && (

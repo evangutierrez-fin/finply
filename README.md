@@ -49,6 +49,26 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   con categorías, etiquetas, búsqueda y filtros por mes, rango de fechas,
   cuenta, tipo, etiqueta y rango de montos. Corrección o anulación de partidas,
   paginación y sumas del periodo al pie, como en el libro real.
+- **Registrar en una línea** — el registro manual es el valor de Finply, y por
+  eso mismo el costo de cada partida importa: si apuntar un café cuesta abrir un
+  modal y elegir cinco cosas, el libro se abandona. La barra pide lo que de
+  verdad cambia entre una partida y la siguiente —cuánto y de qué— y propone lo
+  demás de la última vez, **por tipo**: la cuenta del sueldo no es la del súper.
+  Todo lo que se va a guardar está a la vista, cuenta y fecha incluidas, porque
+  una barra que adivina la cuenta en silencio es peor que el modal. Un botón
+  trae la última partida para repetirla —la **llena**, no la guarda— y «Más
+  campos» abre el formulario completo con lo que ya escribiste.
+- **Acción desde donde aparece el dato** — la alerta de la tarjeta trae el pago
+  al lado, el vencimiento del calendario se asienta desde su renglón y la
+  factura se cobra desde la lista de cobranza. El formulario se abre **con lo
+  que Finply ya sabía** —cuánto, a qué cuenta, de qué contrato— y lo dice;
+  confirmarlo sigue siendo tuyo. Nada se registra solo: lo que se acorta es el
+  camino hasta la confirmación, nunca la confirmación.
+- **Atajos de teclado** — `n` registra, `b` va a la barra rápida, `r` trae la
+  última partida, `/` busca, `g` y una letra saltan de sección, `?` enseña la
+  lista. Dentro de un campo de texto se callan todos —salvo Escape—, para que
+  escribir «notas» en el buscador no abra media aplicación. Ninguno asienta
+  nada en el libro.
 - **Categorías y etiquetas** — renombra o borra categorías reasignando sus
   movimientos (ningún monto cambia nunca al reclasificar). Las etiquetas cruzan
   categorías: un mismo viaje lleva comida, transporte y hospedaje.
@@ -291,8 +311,12 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   arrastrar el del mes anterior de un clic.
 - **Metas** — fondos de emergencia, viajes, enganches. Aporta cuando puedas;
   la meta se marca cumplida sola.
-- **Notas** — apuntes con renglones de libreta y margen rojo, fijables al
-  tablero, por perfil.
+- **Notas que se hablan con el libro** — apuntes con renglones de libreta y
+  margen rojo, fijables al tablero. Una nota puede quedarse suelta, explicar
+  **un movimiento** ("el súper salió carísimo porque llevé a los niños") o
+  hablar de **un mes** entero, y entonces aparece donde sirve: en el renglón de
+  esa partida y en el Resumen de ese mes. Anular el movimiento no borra lo que
+  escribiste — se pierde la liga, nunca el apunte.
 - **Respaldo y restauración** — descarga todo tu libro en un JSON legible y
   vuelve a cargarlo cuando quieras. Además, Finply deja una copia `.db` del día
   en `data/respaldos/` cada vez que arranca y conserva las últimas siete.
@@ -415,6 +439,8 @@ shared/
   modulos.ts     catálogo de secciones por perfil y su resolución (puro)
   giro.ts        promedio ponderado, horas y rendimiento de un inmueble (puro)
   escalas.ts     marcas del eje y techo de una escala con atípico (puro)
+  campos.ts      qué campos pide un movimiento: el único lugar que lo decide (puro)
+  atajos.ts      catálogo de atajos y cuándo una tecla lo es (puro)
 src/
   views/         Resumen · Movimientos · Cuentas · Categorías · Reportes
                  · Análisis · Tarjetas · Deudas · Inversiones · Simulador
@@ -422,7 +448,9 @@ src/
                  · Contrapartes · Facturas · Negocio · Inmuebles · Horas
                  · Inventario · Recurrencias · Calendario · Flujo
                  · Presupuestos · Metas · Notas · Ajustes
-  components/    formularios, gráficas, sello, barra lateral
+  atajos.ts      el teclado global: dónde está el foco y si hay un modal encima
+  components/    formularios, gráficas, sello, barra lateral, barra de registro
+                 rápido y la lista de atajos
   styles/        tokens.css (temas claro/oscuro) + app.css
 test/            pruebas de integridad contra una base temporal
 data/finply.db   tu libro (gitignored — nunca se versiona)
@@ -472,7 +500,8 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 | `GET /api/accounts/:id/serie` | Saldo de esa cuenta al cierre de cada mes |
 | `GET/POST /api/goals` · `PATCH/DELETE /:id` | Metas de ahorro |
 | `POST /api/goals/:id/entries` · `DELETE /api/goals/entries/:id` | Aportes a metas |
-| `GET/POST /api/notes` · `PATCH/DELETE /:id` | Notas (con fijado) |
+| `GET/POST /api/notes` · `PATCH/DELETE /:id` | Notas (con fijado), atadas opcionalmente a un movimiento (`txId`) o a un mes (`period`); `?txId=` y `?period=` filtran |
+| `GET /api/transactions/sugerencia?profileId` | Lo que propone la barra rápida: la última partida registrada y, por tipo, la cuenta y la categoría de la última vez. **No escribe nada** |
 | `GET /api/summary?profileId&month&hoy` | Resumen del mes + patrimonio, con el cambio contra el cierre del mes pasado y 30 días de saldo por cuenta. Ingreso, gasto y categorías con la regla de D6 y el reparto de las partidas divididas |
 | `GET /api/reportes?profileId&year` | El año: patrimonio mes a mes, ingresos vs gastos, categorías, etiquetas, de dónde vino, tasa de ahorro y mediana |
 | `GET /api/reportes/comparativa?profileId&desde&hasta` | Dos periodos cualesquiera, categoría por categoría. Sin el segundo rango, el bloque anterior del mismo largo |
@@ -560,14 +589,12 @@ donde aparece, que en el tema oscuro es la hoja, no el fondo.
 
 **Cómo se usa**
 
-- Registrar más rápido, y que las secciones se hablen: pagar la tarjeta desde
-  la alerta, asentar el vencimiento desde el calendario, cobrar la factura
-  desde la antigüedad de saldos — sin navegar ni volver a teclear lo que Finply
-  ya sabe. Nunca automático: se acorta el camino hasta la confirmación, no se
-  quita la confirmación.
 - Personalización: campos propios, plantillas de movimiento, orden de las
   secciones, formato de fechas
-- Adjuntar recibos a los movimientos
+- Subcategorías y reglas que proponen categoría al importar
+- Bola de nieve contra avalancha con varias deudas, y qué te ahorras abonando
+  de más
+- Export completo del perfil, no solo movimientos
 - Móvil/PWA e internacionalización
 
 Las contribuciones son bienvenidas: abre un issue o un PR. `npm test` corre en

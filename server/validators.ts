@@ -548,16 +548,37 @@ export const goalEntryInput = z.object({
   accountId: z.number().int().positive().nullish(),
 })
 
+/**
+ * El mes al que se ata una nota: 'AAAA-MM'. Es la misma clave que usan los
+ * presupuestos y las recurrencias, y por eso "la nota de julio" y "el tope de
+ * julio" hablan del mismo julio.
+ */
+const periodoMes = z
+  .string()
+  .regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'El mes va como AAAA-MM')
+
 export const noteInput = z.object({
   profileId: z.number().int().positive(),
   title: z.string().trim().max(80).default(''),
   body: z.string().max(5000).default(''),
+  // Las dos ligas de la Fase 20, las dos opcionales: una nota suelta sigue
+  // siendo una nota. Que sean excluyentes lo decide la ruta, no el esquema.
+  txId: z.number().int().positive().nullable().optional(),
+  period: periodoMes.nullable().optional(),
 })
 
 export const notePatch = z.object({
   title: z.string().trim().max(80).optional(),
   body: z.string().max(5000).optional(),
   pinned: z.boolean().optional(),
+  txId: z.number().int().positive().nullable().optional(),
+  period: periodoMes.nullable().optional(),
+})
+
+export const noteQuery = z.object({
+  profileId: z.coerce.number().int().positive(),
+  txId: z.coerce.number().int().positive().optional(),
+  period: periodoMes.optional(),
 })
 
 export const reporteQuery = z.object({

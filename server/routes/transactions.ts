@@ -1,7 +1,8 @@
 import { Router } from 'express'
 import {
-  attachAdjuntos, attachSplits, attachTags, db, ensureAccount, ensureCategory, ensureTags, getTx,
-  httpError, inTransaction, mapTx, refreshDebtStatus, setTxSplits, setTxTags, TX_SELECT,
+  attachAdjuntos, attachNotas, attachSplits, attachTags, db, ensureAccount, ensureCategory,
+  ensureTags, getTx, httpError, inTransaction, mapTx, refreshDebtStatus, setTxSplits, setTxTags,
+  TX_SELECT,
 } from '../db.ts'
 import { armarCsv, celdaTexto, montoCsv } from '../csv.ts'
 import { sincronizarCompraMSI } from '../tarjetas.ts'
@@ -10,11 +11,12 @@ import { hoyISO } from '../../shared/fechas.ts'
 
 const router = Router()
 
-/** Todo lo que cuelga de un movimiento, en tres consultas y no en 3×N (R11). */
+/** Todo lo que cuelga de un movimiento, en cuatro consultas y no en 4×N (R11). */
 function hidratar(txs: ReturnType<typeof mapTx>[]) {
   attachTags(txs)
   attachSplits(txs)
   attachAdjuntos(txs)
+  attachNotas(txs)
   return txs
 }
 
@@ -213,6 +215,52 @@ function totalsMatching(where: string, params: (string | number)[]) {
     .get(...params)
   return { count: row.n, gasto: row.gasto, ingreso: row.ingreso }
 }
+
+/**
+ * Lo que la barra de registro rápido propone antes de que el usuario escriba
+ * nada: la última partida —para poder repetirla— y, por tipo, la cuenta y la
+ * categoría que se usaron la última vez.
+ *
+ * Es **solo lectura y solo una propuesta**. No asienta nada, no adivina el
+ * monto y no rellena el concepto: R4 sigue entero, lo único que se acorta es
+ * el camino hasta la confirmación. Quien registra el súper de cada semana no
+ * tiene que volver a elegir "Efectivo" y "Despensa" cincuenta veces.
+ *
+ * Dos consultas, no una por tipo (R11), y la segunda solo mira las últimas
+ * filas de cada tipo por su índice `(profile_id, date)`.
+ */
+router.get('/sugerencia', (req, res) => {
+  const profileId = Number(req.query.profileId)
+  if (!Number.isInteger(profileId) || profileId <= 0) {
+    return res.status(400).json({ error: 'Falta profileId' })
+  }
+  // Por `id` y no por fecha: "la última" es **la última que registraste**, no
+  // la de fecha más reciente. Quien acaba de corregir una partida de enero no
+  // quiere repetir la de enero, y quien apunta el café de esta mañana sí. La
+  // vista escribe cuál es —fecha, concepto y monto— antes de repetirla, así
+  // que la ambigüedad no llega hasta el libro.
+  const ultimaRow = db
+    .prepare(`${TX_SELECT} WHERE t.profile_id = ? ORDER BY t.id DESC LIMIT 1`)
+    .get(profileId)
+  const ultima = ultimaRow ? hidratar([mapTx(ultimaRow)])[0] : null
+
+  // La última de **cada** tipo, en una sola consulta: la transferencia no
+  // propone categoría y el ingreso no propone la del gasto.
+  const porTipo = db
+    .prepare(
+      `SELECT type, account_id, category_id FROM transactions
+       WHERE id IN (
+         SELECT MAX(id) FROM transactions WHERE profile_id = ? GROUP BY type
+       )`,
+    )
+    .all(profileId) as any[]
+
+  const propuesta: Record<string, { accountId: number; categoryId: number | null }> = {}
+  for (const row of porTipo) {
+    propuesta[row.type] = { accountId: row.account_id, categoryId: row.category_id ?? null }
+  }
+  res.json({ ultima, porTipo: propuesta })
+})
 
 router.get('/', (req, res) => {
   const query = txQuery.parse(req.query)

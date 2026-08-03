@@ -1155,6 +1155,38 @@ export const MIGRATIONS: Migration[] = [
       `)
     },
   },
+  {
+    id: 20,
+    name: 'la nota se ata a lo que habla: un movimiento o un mes',
+    up: (db) => {
+      // La libreta era la única sección que no se hablaba con ninguna otra:
+      // apuntabas "el súper del 12 salió carísimo porque llevé a los niños" y
+      // esa frase vivía en una isla, sin forma de llegar desde el movimiento
+      // ni de volver a él.
+      //
+      // Dos ligas y las dos **opcionales**, porque una nota suelta sigue
+      // siendo legítima —la libreta es la libreta—:
+      //
+      //   · `tx_id`   — esta nota explica **ese** movimiento.
+      //   · `period`  — esta nota es del mes ('AAAA-MM'), que es donde caen
+      //                 los "este mes gasté de más por la mudanza".
+      //
+      // `ON DELETE SET NULL` y no CASCADE: anular el movimiento no borra lo
+      // que el usuario escribió. Es el mismo trato que ya tienen el desembolso
+      // de una deuda (Fase 3), la devolución (Fase 10) y el papel de un
+      // arrendamiento (Fase 15): se pierde la liga, nunca el dato.
+      //
+      // Aditiva y por eso inofensiva: sin las dos columnas, una nota es
+      // exactamente la nota suelta de siempre.
+      if (hasColumn(db, 'notes', 'tx_id')) return
+      db.exec(`
+        ALTER TABLE notes ADD COLUMN tx_id INTEGER REFERENCES transactions(id) ON DELETE SET NULL;
+        ALTER TABLE notes ADD COLUMN period TEXT;
+        CREATE INDEX IF NOT EXISTS idx_notes_tx ON notes(tx_id);
+        CREATE INDEX IF NOT EXISTS idx_notes_periodo ON notes(profile_id, period);
+      `)
+    },
+  },
 ]
 
 /** Versión de esquema que espera este código. */
