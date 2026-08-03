@@ -361,6 +361,14 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
 - **Diseño accesible** — pares de colores de gráfica validados para daltonismo
   en ambos temas (con textura como codificación secundaria), foco visible por
   teclado y respeto a `prefers-reduced-motion`.
+- **Las cuentas están auditadas, y el informe se publica** — cada dominio que
+  toca dinero se simuló de punta a punta —la vida entera de un crédito de 48
+  abonos, seis cortes de una tarjeta, dos años de una inversión, un año de
+  libro, una factura cobrada en siete pedazos— y se comparó contra aritmética
+  **hecha aparte**: fórmulas cerradas de hoja de cálculo, no el propio código
+  de Finply. Salió un defecto de redondeo en el impuesto de una factura,
+  arreglado y con pruebas de regresión. El informe completo, con lo que **no**
+  cubre, está en [AUDITORIA.md](AUDITORIA.md).
 
 ## Stack
 
@@ -478,8 +486,11 @@ src/
                  rápido y la lista de atajos
   styles/        tokens.css (temas claro/oscuro) + app.css
 test/            pruebas de integridad contra una base temporal
+  auditoria.test.ts       barrido por dominio contra aritmética independiente
+  auditoria.cruce.test.ts cuadre entre vistas y redondeo (ver AUDITORIA.md)
 data/finply.db   tu libro (gitignored — nunca se versiona)
 data/respaldos/  copias automáticas del día (gitignored)
+AUDITORIA.md     el informe de la auditoría de las cuentas
 ```
 
 ### Migraciones
@@ -607,13 +618,9 @@ donde aparece, que en el tema oscuro es la hoja, no el fondo.
 
 ## Hoja de ruta
 
-**Lo que corrige algo que hoy está mal**
-
-- **Auditoría de las cuentas de Finply** — verificar cada cifra que Finply
-  calcula contra aritmética hecha aparte, dominio por dominio y simulando la
-  vida entera de cada uno. Así salió el defecto que daba una deuda por saldada
-  once pagos antes de tiempo; lo que se hizo con crédito hay que hacerlo con
-  todo lo demás.
+La **auditoría de las cuentas** ya se hizo: está en
+[AUDITORIA.md](AUDITORIA.md), con lo que se revisó, contra qué, lo que se
+encontró y lo que **no** cubre.
 
 **Cómo se usa**
 

@@ -171,13 +171,27 @@ router.post('/:id/cobros', (req, res) => {
   // Y el impuesto trasladado sigue siendo el de la factura completa aunque
   // parte se haya retenido: ese IVA se causó, lo entera el cliente en tu
   // nombre y tú lo declaras igual.
+  //
+  // ⚠ El techo del `Math.min` no es una precaución teórica: lo encontró la
+  // auditoría de la Fase 22. Cada cobro parcial redondea su parte, y varios
+  // que redondeen hacia arriba dejan trasladado **más** impuesto del que la
+  // factura tiene antes de llegar al final. Ahí el ajuste del último cobro
+  // sale negativo, el piso lo vuelve cero y la suma se queda un centavo
+  // arriba. Pasa con cinco cobros de una factura de $11,600 al 16 % y un
+  // residuo de un centavo — nada exótico. Con el techo, ningún cobro puede
+  // trasladar lo que ya no queda por trasladar, y el último siempre cierra
+  // en la cifra exacta.
   const esElUltimo = input.amountCents === factura.saldoCents
   const yaTrasladado: any = db
     .prepare('SELECT COALESCE(SUM(tax_cents), 0) AS n FROM transactions WHERE invoice_id = ?')
     .get(id)
+  const porTrasladar = factura.taxCents - yaTrasladado.n
   const impuesto = esElUltimo
-    ? factura.taxCents - yaTrasladado.n
-    : Math.round((factura.taxCents * input.amountCents) / factura.cobrableCents)
+    ? porTrasladar
+    : Math.min(
+        Math.round((factura.taxCents * input.amountCents) / factura.cobrableCents),
+        porTrasladar,
+      )
 
   const nota =
     input.note ||
