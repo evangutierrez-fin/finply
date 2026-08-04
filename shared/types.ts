@@ -148,9 +148,44 @@ export interface Category {
   profileId: number
   name: string
   kind: 'ingreso' | 'gasto'
+  /**
+   * El papel en el estado de resultados. **Un hijo sin papel toma el de su
+   * padre** (D25): si no, colgar "Restaurante" de "Insumos" sacaría ese gasto
+   * del costo de ventas y movería el punto de equilibrio sin que nadie lo
+   * pidiera. `rolEfectivo` es el que de verdad se aplica.
+   */
   role: RolCategoria | null
+  rolEfectivo: RolCategoria | null
   /** Movimientos que la usan; sirve para avisar antes de borrarla. */
   txCount: number
+  /** La categoría de la que cuelga. Un solo nivel: un padre no tiene padre. */
+  parentId: number | null
+  parentName: string | null
+  /** Cuántas cuelgan de ella. Con hijos, no puede volverse hija de nadie. */
+  hijos: number
+  archived: boolean
+  /**
+   * Archivada de hecho: ella o su padre. Se hereda porque un padre archivado se
+   * lleva su grupo del selector, y desarchivarlo lo devuelve tal cual (R17).
+   */
+  fueraDelSelector: boolean
+}
+
+/**
+ * Una regla que **propone** categoría al importar (Fase 23). Propone, no
+ * asienta (R4): se ve en la vista previa del import y el usuario confirma el
+ * lote como siempre.
+ */
+export interface ReglaImport {
+  id: number
+  profileId: number
+  /** Texto que se busca dentro del concepto, sin acentos ni mayúsculas. */
+  pattern: string
+  categoryId: number
+  categoryName: string
+  categoryKind: 'ingreso' | 'gasto'
+  /** Gana la primera que case, así que la más específica va arriba. */
+  position: number
 }
 
 export interface Tag {
@@ -437,7 +472,8 @@ export interface Summary {
   incomeCents: number
   expenseCents: number
   byDay: { date: string; incomeCents: number; expenseCents: number }[]
-  byCategory: { name: string; expenseCents: number }[]
+  /** Las seis mayores, **plegadas al padre** desde la Fase 23, con su desglose. */
+  byCategory: { name: string; expenseCents: number; hijos: { name: string; expenseCents: number }[] }[]
   recent: Tx[]
   debts: { porCobrarCents: number; porPagarCents: number; abiertas: number }
   investments: { investedCents: number; valueCents: number; count: number }
@@ -478,10 +514,15 @@ export interface ReporteAnual {
   /** Los doce meses, incluidos los vacíos. */
   meses: MesReporte[]
   patrimonio: PuntoPatrimonio[]
-  porCategoria: { name: string; expenseCents: number }[]
+  /**
+   * Gasto por categoría, **agregado al padre** desde la Fase 23 (D25), con el
+   * desglose colgando de cada renglón. `hijos` va vacío cuando la categoría no
+   * tiene subcategorías, que es el caso de cualquier libro anterior.
+   */
+  porCategoria: { name: string; expenseCents: number; hijos: { name: string; expenseCents: number }[] }[]
   porEtiqueta: { name: string; expenseCents: number }[]
   /** De dónde vino el ingreso. Antes solo se desmenuzaba el gasto. */
-  porFuente: { name: string; incomeCents: number }[]
+  porFuente: { name: string; incomeCents: number; hijos: { name: string; incomeCents: number }[] }[]
   totales: {
     incomeCents: number
     expenseCents: number
@@ -1043,6 +1084,13 @@ export interface FilaAnalizada {
   accountName: string
   transferAccountName: string
   categoryName: string
+  /**
+   * La regla que propuso esa categoría, si la propuso una (Fase 23). El archivo
+   * manda: una regla solo habla cuando la fila no trae categoría. Viaja hasta
+   * la vista previa para que se vea **quién** propuso qué antes de escribir
+   * nada (R4).
+   */
+  reglaPattern?: string
   tagNames: string[]
   note: string
 }
@@ -1062,6 +1110,8 @@ export interface InformeImport {
     categoriasPorCrear: string[]
     etiquetasPorCrear: string[]
     cuentasNoEncontradas: string[]
+    /** Cuántas filas recibieron categoría de una regla (Fase 23). */
+    propuestasPorRegla: number
   }
 }
 

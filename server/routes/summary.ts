@@ -11,10 +11,12 @@ import {
 import { listarBienes } from '../bienes.ts'
 import {
   CATEGORIA_OPERATIVA,
+  CON_CATEGORIA,
   DESDE_MOVIMIENTOS,
   MONTO_OPERATIVO,
   TIPO_OPERATIVO,
 } from '../reportes.ts'
+import { agruparPorPadre } from '../../shared/taxonomia.ts'
 import { hoyISO, sumarDias } from '../../shared/fechas.ts'
 import { summaryQuery } from '../validators.ts'
 import type { Account, Summary } from '../../shared/types.ts'
@@ -161,16 +163,24 @@ router.get('/', (req, res) => {
     )
     .all(profileId, month)
 
-  const byCategory: any[] = db
-    .prepare(
-      `SELECT COALESCE(c.name, 'Sin categoría') AS name, SUM(${MONTO_OPERATIVO}) AS expense
-      ${DESDE_MOVIMIENTOS}
-      LEFT JOIN categories c ON c.id = ${CATEGORIA_OPERATIVA}
-      WHERE t.profile_id = ? AND substr(t.date, 1, 7) = ? AND ${TIPO_OPERATIVO} = 'gasto'
-      GROUP BY name HAVING expense <> 0
-      ORDER BY expense DESC LIMIT 6`,
-    )
-    .all(profileId, month)
+  // El desglose del mes, plegado al padre (D25). El `LIMIT 6` se aplica
+  // **después** de plegar y no en SQL: con subcategorías, cortar a seis hojas
+  // podría dejar fuera media "Comida" y enseñar un top que no es el top.
+  const byCategory = agruparPorPadre(
+    (
+      db
+        .prepare(
+          `SELECT COALESCE(c.name, 'Sin categoría') AS name, cp.name AS padre,
+            SUM(${MONTO_OPERATIVO}) AS expense
+          ${DESDE_MOVIMIENTOS}
+          ${CON_CATEGORIA}
+          WHERE t.profile_id = ? AND substr(t.date, 1, 7) = ? AND ${TIPO_OPERATIVO} = 'gasto'
+          GROUP BY 1, 2 HAVING expense <> 0
+          ORDER BY expense DESC`,
+        )
+        .all(profileId, month) as any[]
+    ).map((c) => ({ name: c.name, padre: c.padre, cents: c.expense })),
+  ).slice(0, 6)
 
   const recent: any[] = db
     .prepare(`${TX_SELECT} WHERE t.profile_id = ? ORDER BY t.date DESC, t.id DESC LIMIT 8`)
@@ -208,7 +218,11 @@ router.get('/', (req, res) => {
     incomeCents: totals.income,
     expenseCents: totals.expense,
     byDay: byDay.map((d) => ({ date: d.date, incomeCents: d.income, expenseCents: d.expense })),
-    byCategory: byCategory.map((c) => ({ name: c.name, expenseCents: c.expense })),
+    byCategory: byCategory.map((c) => ({
+      name: c.name,
+      expenseCents: c.cents,
+      hijos: c.hijos.map((h) => ({ name: h.name, expenseCents: h.cents })),
+    })),
     recent: recent.map(mapTx),
     debts: {
       porCobrarCents: debts.por_cobrar,

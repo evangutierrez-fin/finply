@@ -4,6 +4,7 @@ import type {
   TxAttachment, TxType,
 } from '../../shared/types.ts'
 import { libroPide, pideCampo, type CampoTx } from '../../shared/campos.ts'
+import { rotuloCategoria } from '../../shared/taxonomia.ts'
 import { api } from '../api.ts'
 import { fmtDate, parseAmount, todayISO } from '../format.ts'
 import { useApp } from '../context.ts'
@@ -257,9 +258,16 @@ export function TxModal({
   }
 
   const kind = type === 'ingreso' ? 'ingreso' : 'gasto'
+  // Una categoría archivada sale del selector **pero sigue apareciendo si es la
+  // que el movimiento ya traía**: es la misma regla que las cuentas archivadas,
+  // y sin ella corregir la fecha de una partida vieja le cambiaría la categoría
+  // en silencio (el trato de §2 con los PATCH que reemplazan el registro).
   const options = useMemo(
-    () => categories.filter((c) => c.kind === kind),
-    [categories, kind],
+    () =>
+      categories.filter(
+        (c) => c.kind === kind && (!c.fueraDelSelector || c.id === tx?.categoryId),
+      ),
+    [categories, kind, tx],
   )
 
   // Al editar, la cuenta original aparece aunque esté archivada.
@@ -469,7 +477,7 @@ export function TxModal({
                 >
                   <option value={0}>Sin categoría</option>
                   {options.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
+                    <option key={c.id} value={c.id}>{rotuloCategoria(c)}</option>
                   ))}
                   <option value="__nueva">＋ Nueva categoría…</option>
                 </select>
@@ -540,7 +548,7 @@ export function TxModal({
                     >
                       <option value={0}>Sin categoría</option>
                       {options.map((c) => (
-                        <option key={c.id} value={c.id}>{c.name}</option>
+                        <option key={c.id} value={c.id}>{rotuloCategoria(c)}</option>
                       ))}
                     </select>
                     <div className="monto-wrap">

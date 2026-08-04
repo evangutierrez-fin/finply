@@ -596,6 +596,29 @@ input, select { font: inherit; color: inherit; }
   font-size: 13px;
 }
 .cat-nombre { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* El desglose por subcategoría (Fase 23). Cuelga del renglón del padre y se
+   alinea con sus mismas columnas: la sangría del nombre es lo único que dice
+   "esto está debajo de aquello", y el filete de la izquierda lo dibuja como
+   una llave de libro mayor. */
+.cat-row-grupo { display: flex; flex-direction: column; gap: 5px; }
+.cat-hijos {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0 0 0 12px;
+  padding-left: 12px;
+  border-left: 1px solid var(--regla);
+  list-style: none;
+}
+.cat-hijo {
+  display: grid;
+  grid-template-columns: 1fr auto 38px;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--tinta-2);
+}
+.cat-hijo-nombre { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cat-parte {
   font-family: var(--f-mono);
   font-size: 11px;
@@ -1518,6 +1541,38 @@ select.campo-input { cursor: pointer; }
   white-space: nowrap;
 }
 .taxo-editor { flex: 1; }
+/* La jerarquía de un nivel (Fase 23). La sangría y el filete son todo lo que
+   hace falta para leer "esto cuelga de aquello": con un solo nivel no hay
+   árbol que dibujar. */
+.taxo-hija { padding-left: 22px; border-left: 1px solid var(--regla); }
+.taxo-hija .taxo-nombre::before {
+  content: '└ ';
+  color: var(--tinta-3);
+  font-family: var(--f-mono);
+}
+/* Archivada: se ve, se distingue y sigue siendo alcanzable (R17). */
+.taxo-archivada .taxo-nombre { color: var(--tinta-3); font-style: italic; }
+.taxo-archivadas-aviso { margin: 0 0 12px; }
+.taxo-orden {
+  font-family: var(--f-mono);
+  font-size: 11px;
+  color: var(--tinta-3);
+  min-width: 16px;
+}
+.taxo-patron {
+  font-family: var(--f-mono);
+  font-size: 13px;
+  padding: 2px 7px;
+  border: 1px solid var(--regla);
+  border-radius: var(--radio);
+  background: var(--papel);
+}
+.taxo-flecha { color: var(--tinta-3); }
+.taxo-nombre-plano { font-size: 14px; color: var(--tinta); }
+/* La categoría que propuso una regla al importar (Fase 23): se marca para que
+   no se confunda con la que venía en el archivo. */
+.previa-por-regla { border-bottom: 1px dotted var(--regla); }
+.previa-regla { font-size: 11px; color: var(--tinta-3); font-style: italic; }
 .taxo-pendiente {
   margin-bottom: 18px;
   border-color: var(--rojo-borde);

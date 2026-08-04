@@ -46,6 +46,7 @@ function wipe(): void {
     DELETE FROM rentals;
     DELETE FROM asset_valuations;
     DELETE FROM assets;
+    DELETE FROM import_rules;
     DELETE FROM categories;
     DELETE FROM accounts;
     DELETE FROM profiles;
@@ -121,6 +122,28 @@ function categoryId(profileId: number, name: string, kind: 'ingreso' | 'gasto'):
   return row.id
 }
 
+/**
+ * Una subcategoría del demo (Fase 23). Existe para que el libro enseñe la
+ * jerarquía sin que nadie tenga que crearla a mano: con dos hijas colgando de
+ * "Comida", el reporte deja de tener cinco renglones sueltos y el desglose
+ * tiene algo que desglosar.
+ */
+function subcategoria(profileId: number, name: string, padreId: number): number {
+  const r = db
+    .prepare(
+      "INSERT INTO categories (profile_id, name, kind, parent_id) VALUES (?, ?, 'gasto', ?)",
+    )
+    .run(profileId, name, padreId)
+  return Number(r.lastInsertRowid)
+}
+
+/** Una regla que propone categoría al importar. Propone: no asienta nada. */
+function reglaImport(profileId: number, pattern: string, catId: number, position: number): void {
+  db.prepare(
+    'INSERT INTO import_rules (profile_id, pattern, category_id, position) VALUES (?, ?, ?, ?)',
+  ).run(profileId, pattern, catId, position)
+}
+
 /** Asienta la partida y devuelve su id, para poder ligarla a una plantilla. */
 function tx(
   profileId: number,
@@ -178,6 +201,13 @@ inTransaction(() => {
   const cOcio = categoryId(personal, 'Ocio', 'gasto')
   const cSueldo = categoryId(personal, 'Sueldo', 'ingreso')
   const cOtrosIn = categoryId(personal, 'Otros', 'ingreso')
+
+  // Fase 23: dos subcategorías colgando de Comida. Es exactamente el caso que
+  // la jerarquía viene a resolver —antes se escribían "Comida · restaurante" a
+  // mano y ningún reporte las sumaba juntas— y sin ellas el desglose del
+  // reporte no tendría nada que desglosar.
+  const cRestaurante = subcategoria(personal, 'Restaurante', cComida)
+  const cCafe = subcategoria(personal, 'Café', cComida)
 
   // Catorce meses, no tres. El libro demo tenía un trimestre y con eso no se
   // puede enseñar una tendencia (hacen falta tres meses cerrados), ni la
@@ -238,9 +268,19 @@ inTransaction(() => {
       const d = 1 + Math.floor(rnd() * limit)
       tx(personal, efectivo, 'gasto', sube(between(38, 120)), day(m, d), cTransporte, pick(['Metro', 'Gasolina', 'Uber', 'Estacionamiento']))
     }
+    // Comer se reparte entre la categoría y sus dos hijas: así el reporte
+    // enseña "Comida" con su desglose y no tres renglones que nadie suma.
+    const comidas: [number, string][] = [
+      [cComida, 'Tacos'],
+      [cComida, 'Comida corrida'],
+      [cRestaurante, 'Cena fuera'],
+      [cRestaurante, 'Restaurante del centro'],
+      [cCafe, 'Café'],
+    ]
     for (let i = 0; i < 5; i++) {
       const d = 1 + Math.floor(rnd() * limit)
-      tx(personal, pick([efectivo, banco]), 'gasto', sube(between(95, 420)), day(m, d), cComida, pick(['Tacos', 'Café', 'Comida corrida', 'Cena fuera']))
+      const elegida = pick(comidas)
+      tx(personal, pick([efectivo, banco]), 'gasto', sube(between(95, 420)), day(m, d), elegida[0], elegida[1])
     }
     for (let i = 0; i < 2; i++) {
       const d = 1 + Math.floor(rnd() * limit)
@@ -859,12 +899,23 @@ inTransaction(() => {
   insertPlantilla.run(personal, 'Despensa', 'gasto', efectivo, cSuper, null, 'Súper semanal', 1)
   insertPlantilla.run(negocio, 'Harina', 'gasto', bancoNeg, null, null, 'Harina de la semana', 0)
 
+  // Reglas de import (Fase 23). La primera que case gana, así que la más
+  // específica va arriba: "starbucks" antes que "café" no cambiaría nada aquí,
+  // pero el orden **es** el dato y el demo tiene que enseñarlo. Una apunta a
+  // una subcategoría, que es donde la jerarquía y las reglas se encuentran.
+  reglaImport(personal, 'OXXO', cSuper, 0)
+  reglaImport(personal, 'Starbucks', cCafe, 1)
+  reglaImport(personal, 'Uber', cTransporte, 2)
+  reglaImport(personal, 'CFE', cServicios, 3)
+  reglaImport(negocio, 'Harina', nInsumos, 0)
+
   console.log(
     '[finply] Libro demo listo: 2 perfiles, 6 cuentas (una tarjeta con su tasa), ' +
       'quince meses de movimientos, deudas, inversiones, presupuestos, metas, ' +
       'notas —una atada a su partida y otra a su mes—, campos propios y plantillas, ' +
       'facturas con retención, nota de crédito, anticipo y plantilla, ' +
       'cinco cotizaciones que cubren los cuatro estados y una orden de compra, ' +
+      'dos subcategorías de Comida con cinco reglas de import, ' +
       'y los tres módulos de giro: un depto rentado, horas sin facturar y un almacén.',
   )
 })

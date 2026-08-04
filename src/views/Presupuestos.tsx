@@ -5,6 +5,7 @@ import { useFetch } from '../hooks.ts'
 import { currentMonth, fmtMoney, monthLabel, parseAmount, shiftMonth } from '../format.ts'
 import { Money } from '../components/Money.tsx'
 import type { Budget } from '../../shared/types.ts'
+import { rotuloCategoria } from '../../shared/taxonomia.ts'
 
 /**
  * El estado se mide contra `topeCents` —lo escrito **más** lo que arrastró— y
@@ -101,8 +102,11 @@ export function Presupuestos() {
   const anio = month.slice(0, 4)
 
   const usadas = newKind === 'anio' ? anuales : mensuales
+  // Sin las archivadas: ponerle un techo a una categoría que ya no se usa es
+  // presupuestar el pasado. Un tope viejo sobre una archivada sigue en la lista
+  // de arriba, con su historial — archivar oculta, nunca borra (R17).
   const available = (categories ?? []).filter(
-    (c) => c.kind === 'gasto' && !usadas.some((b) => b.categoryId === c.id),
+    (c) => c.kind === 'gasto' && !c.fueraDelSelector && !usadas.some((b) => b.categoryId === c.id),
   )
 
   const totalBudget = mensuales.reduce((s, b) => s + b.topeCents, 0)
@@ -580,7 +584,7 @@ export function Presupuestos() {
             >
               <option value={0} disabled>Categoría de gasto…</option>
               {available.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
+                <option key={c.id} value={c.id}>{rotuloCategoria(c)}</option>
               ))}
             </select>
             <select

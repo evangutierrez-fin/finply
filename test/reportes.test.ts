@@ -117,7 +117,9 @@ describe('lo que solo mueve patrimonio no cuenta (D6)', () => {
     assert.equal(r.totales.tasaAhorro, 1 / 3)
     // El gasto sin categoría del mes son los 20,000 de vivir, no los 80,000
     // que saldrían si el enganche se colara.
-    assert.deepEqual(r.porCategoria, [{ name: 'Sin categoría', expenseCents: 2000000 }])
+    // `hijos` vacío: desde la Fase 23 cada renglón trae su desglose, y una
+    // categoría sin subcategorías lo trae vacío.
+    assert.deepEqual(r.porCategoria, [{ name: 'Sin categoría', expenseCents: 2000000, hijos: [] }])
   })
 
   test('aportar y retirar de una inversión no mueve ingresos ni gastos', async () => {

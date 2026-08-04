@@ -704,8 +704,18 @@ export function Composicion({
   )
 }
 
+/**
+ * Un renglón de la gráfica de categorías. `hijos` es el desglose de la Fase 23
+ * y es opcional: las etiquetas y las fuentes lo mandan vacío o no lo mandan.
+ */
+export interface RenglonCategoria {
+  name: string
+  expenseCents: number
+  hijos?: { name: string; expenseCents: number }[]
+}
+
 /** Barras horizontales: en qué se fue el gasto del mes (una sola serie, tono de acento). */
-export function CategoryBars({ byCategory }: { byCategory: Summary['byCategory'] }) {
+export function CategoryBars({ byCategory }: { byCategory: RenglonCategoria[] }) {
   if (byCategory.length === 0) {
     return <p className="grafica-vacia">Sin gastos este mes.</p>
   }
@@ -716,21 +726,40 @@ export function CategoryBars({ byCategory }: { byCategory: Summary['byCategory']
   return (
     <ul className="cat-bars">
       {byCategory.map((c, i) => (
-        <li key={c.name} className="cat-row">
-          <span className="cat-nombre">{c.name}</span>
-          <span className="cat-riel">
-            <span
-              className="cat-lleno"
-              style={{
-                width: `${Math.max(2, (c.expenseCents / max) * 100)}%`,
-                animationDelay: `${i * 60}ms`,
-              }}
-            />
-          </span>
-          <span className="cifra cifra-chica">{fmtMoney(c.expenseCents)}</span>
-          {/* La barra compara contra la categoría más grande; el porcentaje
-              dice la parte del total, que es otra pregunta. */}
-          <span className="cat-parte">{total > 0 ? Math.round((c.expenseCents / total) * 100) : 0} %</span>
+        <li key={c.name} className="cat-row-grupo">
+          <div className="cat-row">
+            <span className="cat-nombre">{c.name}</span>
+            <span className="cat-riel">
+              <span
+                className="cat-lleno"
+                style={{
+                  width: `${Math.max(2, (c.expenseCents / max) * 100)}%`,
+                  animationDelay: `${i * 60}ms`,
+                }}
+              />
+            </span>
+            <span className="cifra cifra-chica">{fmtMoney(c.expenseCents)}</span>
+            {/* La barra compara contra la categoría más grande; el porcentaje
+                dice la parte del total, que es otra pregunta. */}
+            <span className="cat-parte">{total > 0 ? Math.round((c.expenseCents / total) * 100) : 0} %</span>
+          </div>
+          {/* El desglose (D25). Va siempre a la vista, no detrás de un clic ni
+              de un `hover`: el cierre de año se imprime, y en papel no hay
+              ratón (R19). Si el reporte agrega al padre, el hijo tiene que
+              poder verse o la cifra deja de ser auditable. */}
+          {c.hijos && c.hijos.length > 0 && (
+            <ul className="cat-hijos">
+              {c.hijos.map((h) => (
+                <li key={h.name} className="cat-hijo">
+                  <span className="cat-hijo-nombre">{h.name}</span>
+                  <span className="cifra cifra-chica">{fmtMoney(h.expenseCents)}</span>
+                  <span className="cat-parte">
+                    {c.expenseCents !== 0 ? Math.round((h.expenseCents / c.expenseCents) * 100) : 0} %
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
         </li>
       ))}
     </ul>

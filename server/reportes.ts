@@ -13,6 +13,7 @@ import { db } from './db.ts'
 import { bienesPorMes } from './bienes.ts'
 import { recorrer, type EntradaInversion } from '../shared/inversiones.ts'
 import { mediana } from '../shared/estadistica.ts'
+import { agruparPorPadre } from '../shared/taxonomia.ts'
 import type { Comparativa, ReporteAnual } from '../shared/types.ts'
 
 /** Mueve un 'AAAA-MM' N meses. */
@@ -68,6 +69,34 @@ export const TIPO_OPERATIVO = `
  * —devolver una camisa baja Ropa, no sube "Otros ingresos"—; si no, la suya.
  */
 export const CATEGORIA_OPERATIVA = `COALESCE(s.category_id, o.category_id, t.category_id)`
+
+/**
+ * El `LEFT JOIN` que trae la categoría del renglón **y su padre**, para los
+ * agregados que se desglosan por categoría (Fase 23).
+ *
+ * Va detrás de `DESDE_MOVIMIENTOS`. Son dos joins y no una CTE recursiva
+ * porque la jerarquía es de un nivel (D25): la consulta sigue agrupando por la
+ * hoja —el mismo `GROUP BY` de siempre— y el plegado al padre lo hace
+ * `agruparPorPadre`, ya en JavaScript y sin una consulta de más.
+ */
+export const CON_CATEGORIA = `
+  LEFT JOIN categories c ON c.id = ${CATEGORIA_OPERATIVA}
+  LEFT JOIN categories cp ON cp.id = c.parent_id
+`
+
+/**
+ * Las categorías que un tope cubre: la suya y las que cuelgan de ella.
+ *
+ * Presupuestar "Comida" incluye lo gastado en "Restaurante" — un techo que no
+ * cuenta lo que cuelga de él no es un techo (D25). El hijo puede llevar además
+ * el suyo, y entonces ese gasto se mide contra los dos, que es exactamente lo
+ * que un presupuesto anidado significa.
+ *
+ * Para los libros que no usan subcategorías esto no cambia una sola cifra: sin
+ * hijos, el conjunto es la propia categoría.
+ */
+const CATEGORIAS_DEL_TOPE = `(SELECT cb.id FROM categories cb
+  WHERE cb.id = b.category_id OR cb.parent_id = b.category_id)`
 
 /**
  * El FROM que las tres expresiones de arriba necesitan.
@@ -127,7 +156,7 @@ export const GASTO_DE_PRESUPUESTO = `
   COALESCE((SELECT SUM(${MONTO_OPERATIVO})
     ${DESDE_MOVIMIENTOS}
     WHERE t.profile_id = b.profile_id
-      AND ${CATEGORIA_OPERATIVA} = b.category_id
+      AND ${CATEGORIA_OPERATIVA} IN ${CATEGORIAS_DEL_TOPE}
       AND ${TIPO_OPERATIVO} = 'gasto'
       AND substr(t.date, 1, length(b.period)) = b.period), 0)`
 
@@ -170,21 +199,35 @@ export function ingresoGastoPorMes(profileId: number, desde: string, hasta: stri
   return porMes
 }
 
-/** Gasto operativo por categoría en un rango de meses. */
+/**
+ * Gasto operativo por categoría en un rango de meses, **una fila por hoja** y
+ * con el nombre de su padre al lado. Plegarlo es cosa de `agruparPorPadre`.
+ */
 export function gastoPorCategoria(profileId: number, desde: string, hasta: string) {
   return db
     .prepare(
-      `SELECT COALESCE(c.name, 'Sin categoría') AS name,
+      `SELECT COALESCE(c.name, 'Sin categoría') AS name, cp.name AS padre,
         SUM(${MONTO_OPERATIVO}) AS gasto
        ${DESDE_MOVIMIENTOS}
-       LEFT JOIN categories c ON c.id = ${CATEGORIA_OPERATIVA}
+       ${CON_CATEGORIA}
        WHERE t.profile_id = ? AND ${TIPO_OPERATIVO} = 'gasto'
          AND substr(t.date, 1, 7) BETWEEN ? AND ?
-       GROUP BY name
+       GROUP BY 1, 2
        HAVING gasto <> 0
        ORDER BY gasto DESC`,
     )
-    .all(profileId, desde, hasta) as { name: string; gasto: number }[]
+    .all(profileId, desde, hasta) as { name: string; padre: string | null; gasto: number }[]
+}
+
+/** Las mismas filas, ya plegadas al padre y con su desglose (D25). */
+export function gastoPorCategoriaAgrupado(profileId: number, desde: string, hasta: string) {
+  return agruparPorPadre(
+    gastoPorCategoria(profileId, desde, hasta).map((c) => ({
+      name: c.name,
+      padre: c.padre,
+      cents: c.gasto,
+    })),
+  )
 }
 
 /**
@@ -198,17 +241,28 @@ export function gastoPorCategoria(profileId: number, desde: string, hasta: strin
 export function ingresoPorCategoria(profileId: number, desde: string, hasta: string) {
   return db
     .prepare(
-      `SELECT COALESCE(c.name, 'Sin categoría') AS name,
+      `SELECT COALESCE(c.name, 'Sin categoría') AS name, cp.name AS padre,
         SUM(${MONTO_OPERATIVO}) AS monto
        ${DESDE_MOVIMIENTOS}
-       LEFT JOIN categories c ON c.id = ${CATEGORIA_OPERATIVA}
+       ${CON_CATEGORIA}
        WHERE t.profile_id = ? AND ${TIPO_OPERATIVO} = 'ingreso'
          AND substr(t.date, 1, 7) BETWEEN ? AND ?
-       GROUP BY name
+       GROUP BY 1, 2
        HAVING monto <> 0
        ORDER BY monto DESC`,
     )
-    .all(profileId, desde, hasta) as { name: string; monto: number }[]
+    .all(profileId, desde, hasta) as { name: string; padre: string | null; monto: number }[]
+}
+
+/** Lo mismo, plegado al padre: de dónde vino el dinero, por grupo. */
+export function ingresoPorCategoriaAgrupado(profileId: number, desde: string, hasta: string) {
+  return agruparPorPadre(
+    ingresoPorCategoria(profileId, desde, hasta).map((c) => ({
+      name: c.name,
+      padre: c.padre,
+      cents: c.monto,
+    })),
+  )
 }
 
 /** Gasto operativo por etiqueta. Una partida con dos etiquetas cuenta en las dos. */
@@ -419,17 +473,22 @@ export function reporteAnual(profileId: number, year: number): ReporteAnual {
     year,
     meses: mesesLlenos,
     patrimonio: patrimonioPorMes(profileId, meses),
-    porCategoria: gastoPorCategoria(profileId, desde, hasta).map((c) => ({
+    // Agregado al padre, con el desglose colgando de cada renglón (D25). Hasta
+    // la Fase 23, "Comida" y "Comida · restaurante" eran hermanas y el reporte
+    // no las sumaba junto.
+    porCategoria: gastoPorCategoriaAgrupado(profileId, desde, hasta).map((c) => ({
       name: c.name,
-      expenseCents: c.gasto,
+      expenseCents: c.cents,
+      hijos: c.hijos.map((h) => ({ name: h.name, expenseCents: h.cents })),
     })),
     porEtiqueta: gastoPorEtiqueta(profileId, desde, hasta).map((e) => ({
       name: e.name,
       expenseCents: e.gasto,
     })),
-    porFuente: ingresoPorCategoria(profileId, desde, hasta).map((c) => ({
+    porFuente: ingresoPorCategoriaAgrupado(profileId, desde, hasta).map((c) => ({
       name: c.name,
-      incomeCents: c.monto,
+      incomeCents: c.cents,
+      hijos: c.hijos.map((h) => ({ name: h.name, incomeCents: h.cents })),
     })),
     totales: {
       incomeCents,
@@ -485,13 +544,16 @@ export function comparativa(
     return { incomeCents: ingreso, expenseCents: gasto }
   }
 
-  const catsActual = gastoPorCategoria(profileId, actual.desde, actual.hasta)
-  const catsPrevio = gastoPorCategoria(profileId, contra.desde, contra.hasta)
+  // Los dos periodos, plegados al padre: comparar el hijo contra el hijo
+  // enseñaría cinco renglones diminutos donde el usuario quiere ver que
+  // "Comida" subió. El desglose sigue estando en el reporte anual.
+  const catsActual = gastoPorCategoriaAgrupado(profileId, actual.desde, actual.hasta)
+  const catsPrevio = gastoPorCategoriaAgrupado(profileId, contra.desde, contra.hasta)
   const nombres = new Set([...catsActual, ...catsPrevio].map((c) => c.name))
   const categorias = [...nombres]
     .map((name) => {
-      const a = catsActual.find((c) => c.name === name)?.gasto ?? 0
-      const p = catsPrevio.find((c) => c.name === name)?.gasto ?? 0
+      const a = catsActual.find((c) => c.name === name)?.cents ?? 0
+      const p = catsPrevio.find((c) => c.name === name)?.cents ?? 0
       return { name, actualCents: a, previoCents: p, deltaCents: a - p }
     })
     .sort((x, y) => Math.abs(y.deltaCents) - Math.abs(x.deltaCents))

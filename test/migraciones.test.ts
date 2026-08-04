@@ -770,6 +770,63 @@ describe('migraciones', () => {
     db.close()
   })
 
+  // ── Migración 22 · taxonomía II ─────────────────────────────────────────
+
+  test('las categorías estrenan padre y archivado sin cambiar nada', () => {
+    const db = baseEnVersion(21)
+    db.exec(`
+      INSERT INTO categories (id, profile_id, name, kind) VALUES (2, 1, 'Comida', 'gasto');
+      INSERT INTO transactions (id, profile_id, account_id, type, amount_cents, date, category_id)
+        VALUES (70, 1, 1, 'gasto', 31500, '2026-07-12', 2);
+    `)
+
+    migrate(db)
+
+    assert.equal((db.prepare('PRAGMA user_version').get() as any).user_version, SCHEMA_VERSION)
+
+    // Lo que falta significa "lo de antes": ninguna categoría vieja estrena
+    // padre ni se archiva sola, así que el libro se ve igual que ayer.
+    const categorias = db.prepare('SELECT * FROM categories ORDER BY id').all() as any[]
+    assert.equal(categorias.length, 2)
+    for (const c of categorias) {
+      assert.equal(c.parent_id, null)
+      assert.equal(c.archived, 0)
+    }
+    // Y la tabla de reglas existe aunque nadie tenga ninguna: crear la primera
+    // a media vida del libro no puede exigir otra migración (R1).
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM import_rules').get() as any).n, 0)
+
+    const tx = db.prepare('SELECT * FROM transactions WHERE id = 70').get() as any
+    assert.equal(tx.amount_cents, 31500)
+    assert.equal(tx.category_id, 2)
+    assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0)
+    db.close()
+  })
+
+  test('borrar el padre promueve a la hija; borrar la categoría se lleva su regla', () => {
+    const db = baseEnVersion(21)
+    migrate(db)
+    db.exec(`
+      INSERT INTO categories (id, profile_id, name, kind) VALUES (2, 1, 'Comida', 'gasto');
+      INSERT INTO categories (id, profile_id, name, kind, parent_id)
+        VALUES (3, 1, 'Restaurante', 'gasto', 2);
+      INSERT INTO import_rules (id, profile_id, pattern, category_id) VALUES (1, 1, 'CENA', 3);
+    `)
+
+    // `ON DELETE SET NULL` en el padre: la hija se promueve, no desaparece.
+    db.exec('DELETE FROM categories WHERE id = 2')
+    const hija = db.prepare('SELECT * FROM categories WHERE id = 3').get() as any
+    assert.ok(hija, 'la hija sigue existiendo')
+    assert.equal(hija.parent_id, null)
+
+    // `ON DELETE CASCADE` en la regla: una regla que apunta a una categoría
+    // borrada no propondría nada, y dejarla sería basura silenciosa.
+    db.exec('DELETE FROM categories WHERE id = 3')
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM import_rules').get() as any).n, 0)
+    assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0)
+    db.close()
+  })
+
   test('una base de una versión más nueva no se toca', () => {
     const db = baseVieja()
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`)

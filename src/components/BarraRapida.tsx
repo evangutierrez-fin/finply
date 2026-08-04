@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Account, Category, PlantillaTx, SugerenciaTx, TxType } from '../../shared/types.ts'
 import { camposQueFaltan } from '../../shared/campos.ts'
+import { rotuloCategoria } from '../../shared/taxonomia.ts'
 import { api } from '../api.ts'
 import { useApp } from '../context.ts'
 import { useAtajos } from '../atajos.ts'
@@ -120,7 +121,9 @@ export function BarraRapida() {
   useAtajos({ barra: () => montoRef.current?.focus(), repetir: traerUltima })
 
   const kind = type === 'ingreso' ? 'ingreso' : 'gasto'
-  const opciones = categories.filter((c) => c.kind === kind)
+  // Las archivadas no entran: la barra siempre registra algo nuevo, y una
+  // categoría archivada es una que ya no se usa.
+  const opciones = categories.filter((c) => c.kind === kind && !c.fueraDelSelector)
   const faltan = camposQueFaltan({ modules: profile.modules, type })
 
   /** Lo que hay escrito, para poder pasarlo al formulario completo. */
@@ -224,7 +227,7 @@ export function BarraRapida() {
         >
           <option value={0}>Sin categoría</option>
           {opciones.map((c) => (
-            <option key={c.id} value={c.id}>{c.name}</option>
+            <option key={c.id} value={c.id}>{rotuloCategoria(c)}</option>
           ))}
         </select>
 

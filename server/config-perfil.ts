@@ -42,7 +42,8 @@ export interface ConfigPerfil {
     weekStart: number
     hideCents: boolean
   }
-  categorias: { name: string; kind: string; role: string | null }[]
+  /** `padre` es el nombre de la categoría de la que cuelga (Fase 23), o nulo. */
+  categorias: { name: string; kind: string; role: string | null; padre?: string | null }[]
   campos: { label: string; kind: string; options: string; position: number }[]
   plantillas: {
     name: string
@@ -65,8 +66,15 @@ function perfilFila(profileId: number): any {
 export function exportarConfig(profileId: number): ConfigPerfil {
   const fila = perfilFila(profileId)
   const perfil = mapProfile(fila)
+  // Los padres primero: al aplicar se resuelve el padre **por nombre**, así que
+  // un hijo que llegara antes que su padre se quedaría suelto. Es el mismo
+  // cuidado que pide el respaldo desde que `categories` se referencia a sí misma.
   const categorias = db
-    .prepare('SELECT name, kind, role FROM categories WHERE profile_id = ? ORDER BY kind, name')
+    .prepare(
+      `SELECT c.name, c.kind, c.role, p.name AS padre
+       FROM categories c LEFT JOIN categories p ON p.id = c.parent_id
+       WHERE c.profile_id = ? ORDER BY c.parent_id IS NOT NULL, c.kind, c.name`,
+    )
     .all(profileId) as any[]
 
   return {
@@ -86,7 +94,12 @@ export function exportarConfig(profileId: number): ConfigPerfil {
       weekStart: perfil.weekStart,
       hideCents: perfil.hideCents,
     },
-    categorias: categorias.map((c) => ({ name: c.name, kind: c.kind, role: c.role ?? null })),
+    categorias: categorias.map((c) => ({
+      name: c.name,
+      kind: c.kind,
+      role: c.role ?? null,
+      padre: c.padre ?? null,
+    })),
     campos: listarCampos(profileId).map((c) => ({
       label: c.label,
       kind: c.kind,
@@ -178,14 +191,31 @@ export function aplicarConfig(profileId: number, raw: unknown): ResultadoConfig 
     // 2. Categorías: se crea la que falte y **no se toca** la que ya está. El
     //    UNIQUE de (perfil, nombre, tipo) hace el trabajo; contarlas antes y
     //    después sería la segunda versión de la misma verdad.
+    //
+    //    El padre viaja por **nombre**, como todo lo demás. Se resuelve contra
+    //    lo que ya hay más lo que se acaba de crear, y por eso el archivo llega
+    //    con los padres delante. Si el padre no aparece —un archivo a medias, o
+    //    editado a mano—, la categoría entra igual como principal: perder la
+    //    jerarquía es molesto, perder la categoría sería destructivo.
     const insertarCategoria = db.prepare(
-      `INSERT INTO categories (profile_id, name, kind, role) VALUES (?, ?, ?, ?)
+      `INSERT INTO categories (profile_id, name, kind, role, parent_id) VALUES (?, ?, ?, ?, ?)
        ON CONFLICT (profile_id, name, kind) DO NOTHING`,
+    )
+    const buscarCategoria = db.prepare(
+      'SELECT id, parent_id FROM categories WHERE profile_id = ? AND name = ? AND kind = ?',
     )
     let categoriasNuevas = 0
     let categoriasRespetadas = 0
     for (const c of config.categorias ?? []) {
-      const r = insertarCategoria.run(profileId, c.name, c.kind, c.role ?? null)
+      // Un solo nivel (D25): si el padre que llega es a su vez hijo de alguien,
+      // esta cuelga de la raíz en vez de abrir un segundo nivel por la puerta
+      // de atrás.
+      let padreId: number | null = null
+      if (c.padre) {
+        const padre: any = buscarCategoria.get(profileId, c.padre, c.kind)
+        padreId = padre ? (padre.parent_id ?? padre.id) : null
+      }
+      const r = insertarCategoria.run(profileId, c.name, c.kind, c.role ?? null, padreId)
       if (Number(r.changes) > 0) categoriasNuevas += 1
       else categoriasRespetadas += 1
     }

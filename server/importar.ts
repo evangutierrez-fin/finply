@@ -18,6 +18,7 @@ import type {
 import { normalizar, parseFecha, parseMonto } from './valores.ts'
 import { db, httpError, inTransaction } from './db.ts'
 import { detectarSeparador, parseCsv } from './csv.ts'
+import { reglaQueCasa, reglasListas } from './taxonomia.ts'
 
 export const MAX_FILAS = 5000
 
@@ -99,6 +100,11 @@ export function analizar(opciones: OpcionesImport): Informe {
     .all(opciones.profileId) as { id: number; name: string }[]
   const etiquetaExiste = new Set(etiquetas.map((t) => normalizar(t.name)))
 
+  // Las reglas que **proponen** categoría (Fase 23). Se piden y se normalizan
+  // una sola vez: hacerlo dentro del bucle sería normalizar el mismo puñado de
+  // patrones hasta cinco mil veces (R11).
+  const reglas = reglasListas(opciones.profileId)
+
   const celda = (fila: string[], campo: Campo): string => {
     const indice = mapeo[campo]
     return indice === undefined ? '' : (fila[indice] ?? '').trim()
@@ -129,6 +135,7 @@ export function analizar(opciones: OpcionesImport): Informe {
       accountName: '',
       transferAccountName: '',
       categoryName: '',
+      reglaPattern: undefined as string | undefined,
       tagNames: [] as string[],
       note: celda(cruda, 'concepto'),
     }
@@ -193,6 +200,9 @@ export function analizar(opciones: OpcionesImport): Informe {
       }
       base.transferAccountName = destino.name
     } else {
+      // El archivo manda. Una regla solo habla cuando la fila **no trae**
+      // categoría: proponer encima de lo que el usuario ya escribió sería
+      // corregirle el archivo, y eso ya no es proponer (R4).
       const nombreCategoria = celda(cruda, 'categoria')
       if (nombreCategoria) {
         base.categoryName = nombreCategoria
@@ -203,6 +213,12 @@ export function analizar(opciones: OpcionesImport): Informe {
             continue
           }
           categoriasPorCrear.add(`${type}|${nombreCategoria}`)
+        }
+      } else {
+        const regla = reglaQueCasa(reglas, base.note, type)
+        if (regla) {
+          base.categoryName = regla.categoryName
+          base.reglaPattern = regla.pattern
         }
       }
       const crudasEtiquetas = celda(cruda, 'etiquetas')
@@ -238,10 +254,17 @@ export function analizar(opciones: OpcionesImport): Informe {
     filas.push({ ...base, estado: duplicada ? 'duplicada' : 'nueva' })
   }
 
+  // La categoría entra en la huella desde la Fase 23, y hacía falta: ahora
+  // puede venir de una regla, y una regla que cambie entre la vista previa y el
+  // "importar" escribiría una clasificación que el usuario no aprobó. Antes la
+  // huella no la miraba y el hueco estaba abierto igual para la columna del
+  // archivo.
   const huella = createHash('sha256')
     .update(
       JSON.stringify(
-        filas.map((f) => [f.linea, f.estado, f.date, f.type, f.amountCents, f.accountName, f.note]),
+        filas.map((f) => [
+          f.linea, f.estado, f.date, f.type, f.amountCents, f.accountName, f.note, f.categoryName,
+        ]),
       ),
     )
     .digest('hex')
@@ -261,6 +284,7 @@ export function analizar(opciones: OpcionesImport): Informe {
       categoriasPorCrear: [...categoriasPorCrear].map((c) => c.split('|')[1]!),
       etiquetasPorCrear: [...etiquetasPorCrear],
       cuentasNoEncontradas: [...cuentasNoEncontradas],
+      propuestasPorRegla: filas.filter((f) => f.reglaPattern).length,
     },
   }
 }

@@ -26,9 +26,10 @@ import {
   MONTO_DEL_MOVIMIENTO,
   MONTO_OPERATIVO,
   TIPO_OPERATIVO,
-  gastoPorCategoria,
+  CON_CATEGORIA,
+  gastoPorCategoriaAgrupado,
   ingresoGastoPorMes,
-  ingresoPorCategoria,
+  ingresoPorCategoriaAgrupado,
   tasaDeAhorro,
 } from './reportes.ts'
 import { hoyISO } from '../shared/fechas.ts'
@@ -176,13 +177,16 @@ const DIFERENCIA_MINIMA_CENTS = 50_000
 function disparadas(profileId: number, desde: string, hasta: string) {
   const filas: any[] = db
     .prepare(
-      `SELECT COALESCE(c.name, 'Sin categoría') AS name, substr(t.date, 1, 7) AS mes,
+      // Por la categoría **raíz** (D25): si "Comida" se parte en cinco hijas,
+      // un mes en que las cinco suben un poco no dispara ninguna y sí dispara a
+      // Comida, que es lo que el usuario nota en su cuenta.
+      `SELECT COALESCE(cp.name, c.name, 'Sin categoría') AS name, substr(t.date, 1, 7) AS mes,
         SUM(${MONTO_OPERATIVO}) AS gasto
        ${DESDE_MOVIMIENTOS}
-       LEFT JOIN categories c ON c.id = ${CATEGORIA_OPERATIVA}
+       ${CON_CATEGORIA}
        WHERE t.profile_id = ? AND ${TIPO_OPERATIVO} = 'gasto'
          AND substr(t.date, 1, 7) BETWEEN ? AND ?
-       GROUP BY name, mes
+       GROUP BY 1, 2
        HAVING gasto > 0`,
     )
     .all(profileId, desde, hasta)
@@ -301,8 +305,11 @@ export function analisis(
   }
 
   const { recurrente, discrecional } = gastoPorOrigen(profileId, desde, hasta)
-  const categorias = gastoPorCategoria(profileId, desde, hasta)
-  const totalCategorias = categorias.reduce((s, c) => s + c.gasto, 0)
+  // Plegadas al padre (D25): la concentración pregunta "¿en qué se me va el
+  // dinero?", y partir "Comida" en cinco hijas es la manera más segura de que
+  // ninguna se vea concentrada.
+  const categorias = gastoPorCategoriaAgrupado(profileId, desde, hasta)
+  const totalCategorias = categorias.reduce((s, c) => s + c.cents, 0)
   const gastoPromedioCents = Math.round(expenseCents / cerrados)
 
   // La serie mes a mes, con los huecos en cero: un mes sin movimiento existió
@@ -313,8 +320,8 @@ export function analisis(
     serie.push({ month: m, incomeCents: ingreso, expenseCents: gasto })
   }
 
-  const fuentes = ingresoPorCategoria(profileId, desde, hasta)
-  const totalFuentes = fuentes.reduce((s, f) => s + f.monto, 0)
+  const fuentes = ingresoPorCategoriaAgrupado(profileId, desde, hasta)
+  const totalFuentes = fuentes.reduce((s, f) => s + f.cents, 0)
 
   const chica = hormiga(profileId, desde, hasta, umbralHormigaCents)
 
@@ -334,13 +341,13 @@ export function analisis(
     mesesColchon: gastoPromedioCents > 0 ? liquidoCents / gastoPromedioCents : null,
     concentracion: categorias.map((c) => ({
       name: c.name,
-      expenseCents: c.gasto,
-      parte: totalCategorias > 0 ? c.gasto / totalCategorias : 0,
+      expenseCents: c.cents,
+      parte: totalCategorias > 0 ? c.cents / totalCategorias : 0,
     })),
     fuentes: fuentes.map((f) => ({
       name: f.name,
-      incomeCents: f.monto,
-      parte: totalFuentes > 0 ? f.monto / totalFuentes : 0,
+      incomeCents: f.cents,
+      parte: totalFuentes > 0 ? f.cents / totalFuentes : 0,
     })),
     serie,
     tendenciaGasto: tendencia(serie.map((m) => m.expenseCents)),

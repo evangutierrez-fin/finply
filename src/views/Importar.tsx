@@ -44,7 +44,17 @@ function FilaPrevia({ fila }: { fila: FilaAnalizada }) {
         ) : (
           <>
             <span className="mov-concepto">{fila.note || 'Sin concepto'}</span>
-            {fila.categoryName && <span className="mov-cat">{fila.categoryName}</span>}
+            {fila.categoryName && (
+              <span className={`mov-cat${fila.reglaPattern ? ' previa-por-regla' : ''}`}>
+                {fila.categoryName}
+                {/* Quién la propuso, a la vista antes de escribir nada (R4):
+                    una categoría que aparece sin explicación se lee como si
+                    Finply hubiera decidido por su cuenta. */}
+                {fila.reglaPattern && (
+                  <span className="previa-regla"> · regla «{fila.reglaPattern}»</span>
+                )}
+              </span>
+            )}
             {fila.tagNames.length > 0 && (
               <span className="mov-etiquetas">
                 {fila.tagNames.map((t) => <span className="chip chip-etiqueta" key={t}>{t}</span>)}
@@ -270,6 +280,13 @@ export function Importar({ onVerMovimientos }: { onVerMovimientos: () => void })
               <p className="ajustes-nota">
                 Las filas con error no se importan; el resto sí. Corrige el archivo y vuelve a
                 cargarlo si las necesitas.
+              </p>
+            )}
+            {resumen!.propuestasPorRegla > 0 && (
+              <p className="ajustes-nota">
+                {resumen!.propuestasPorRegla} fila(s) recibieron categoría de una de tus reglas.
+                Proponen, no asientan: revísalas arriba antes de importar, y edítalas en
+                Categorías si alguna no acierta.
               </p>
             )}
             {resumen!.cuentasNoEncontradas.length > 0 && (

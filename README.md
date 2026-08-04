@@ -93,6 +93,22 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
 - **Categorías y etiquetas** — renombra o borra categorías reasignando sus
   movimientos (ningún monto cambia nunca al reclasificar). Las etiquetas cruzan
   categorías: un mismo viaje lleva comida, transporte y hospedaje.
+- **Subcategorías de un nivel** — "Restaurante" y "Café" cuelgan de "Comida", y
+  **todos los reportes suman al padre** con el desglose a la vista debajo. Antes
+  se escribía "Comida · restaurante" a mano y ningún reporte las juntaba. Tres
+  cosas se heredan, y las tres para que crear una subcategoría no mueva una
+  cifra en silencio: el **papel** del estado de resultados, el **tope** del
+  presupuesto —que cuenta lo gastado en las hijas— y el **archivado**. Borrar un
+  padre **promueve** a sus hijas en vez de llevárselas.
+- **Archivar una categoría** — sale del selector y su historial queda intacto,
+  igual que una cuenta archivada. Y sigue aceptándose al corregir un movimiento
+  viejo, porque si no, archivar sería una forma silenciosa de perder datos.
+- **Reglas que proponen categoría al importar** — "si el concepto trae OXXO,
+  propón Súper". **Proponen, no asientan**: la categoría llega rellenada en la
+  vista previa del import, con el nombre de la regla que la propuso al lado, y
+  tú confirmas el lote como siempre. El archivo manda —una regla solo habla
+  cuando la fila no trae categoría— y gana la primera que case, así que el orden
+  lo pones tú.
 - **Partida dividida** — un ticket con despensa, farmacia y ropa es **un solo
   movimiento** con varias categorías, no tres movimientos que ya no se parecen
   al ticket. Los renglones tienen que sumar exactamente el total y Finply te
@@ -446,6 +462,7 @@ server/          Express + node:sqlite
   negocio.ts     estado de resultados, rentabilidad y punto de equilibrio
   flujo.ts       la caja proyectada día a día, auditable (solo lectura)
   personalizacion.ts campos propios (llave-valor, D24) y plantillas de movimiento
+  taxonomia.ts   jerarquía de categorías (un nivel, D25) y reglas de import
   config-perfil.ts   la configuración de un perfil, por nombre y sin sus cifras
   routes/        profiles · accounts · categories · tags · transactions · debts
                  · tarjetas · investments · budgets · goals · notes · summary
@@ -474,6 +491,7 @@ shared/
   campos.ts      qué campos pide un movimiento: el único lugar que lo decide (puro)
   atajos.ts      catálogo de atajos y cuándo una tecla lo es (puro)
   formato.ts     cómo se leen las fechas y las cifras de este libro (puro)
+  taxonomia.ts   plegar un desglose por categoría a su padre, sin SQL (puro)
 src/
   views/         Resumen · Movimientos · Cuentas · Categorías · Reportes
                  · Análisis · Tarjetas · Deudas · Inversiones · Simulador
@@ -509,7 +527,8 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 |---|---|
 | `GET/POST /api/profiles` · `PATCH/DELETE /:id` | Perfiles (libros), con sus secciones activas en `modules` |
 | `GET/POST /api/accounts` · `PATCH/DELETE /:id` | Cuentas con saldo calculado |
-| `GET/POST /api/categories` · `PATCH/DELETE /:id` | Categorías (borrar acepta `?reassignTo=` o `?force=true`) |
+| `GET/POST /api/categories` · `PATCH/DELETE /:id` | Categorías con su jerarquía de un nivel (`parentId`) y su archivado. El PATCH es parcial: lo que no mandes se queda. Borrar acepta `?reassignTo=` o `?force=true` y **promueve** a las subcategorías |
+| `GET/POST /api/categories/reglas` · `PATCH/DELETE /reglas/:id` | Las reglas que proponen categoría al importar, en el orden en que se evalúan |
 | `GET/POST /api/tags` · `PATCH/DELETE /:id` | Etiquetas por perfil |
 | `GET/POST /api/transactions` · `PATCH/DELETE /:id` | Movimientos (filtros: mes, `from`/`to`, cuenta, tipo, etiqueta, `minCents`/`maxCents`, búsqueda, `conciliado`, `limit`/`offset`). `splits` reparte por categoría; `refundOfId` liga una devolución |
 | `GET /api/transactions/export.csv` | Export CSV del filtro completo, sin paginar |
@@ -624,7 +643,6 @@ encontró y lo que **no** cubre.
 
 **Cómo se usa**
 
-- Subcategorías y reglas que proponen categoría al importar
 - Bola de nieve contra avalancha con varias deudas, y qué te ahorras abonando
   de más
 - Export completo del perfil, no solo movimientos

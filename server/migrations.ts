@@ -1276,6 +1276,60 @@ export const MIGRATIONS: Migration[] = [
       `)
     },
   },
+  {
+    id: 22,
+    name: 'taxonomía II: subcategorías, archivar y reglas de import',
+    up: (db) => {
+      // **D25 resuelta: un solo nivel.** `parent_id` apunta a otra categoría
+      // del mismo perfil y del mismo tipo, y la regla que lo hace barato es
+      // que un padre no puede tener padre: el gasto por categoría sigue siendo
+      // un `GROUP BY` sobre una fila por hoja y el plegado ocurre arriba. Un
+      // árbol libre habría obligado a una CTE recursiva en cada reporte.
+      //
+      // No se toca el `UNIQUE (profile_id, name, kind)`: un nombre sigue siendo
+      // único en todo el libro. El import casa categorías por nombre, la
+      // configuración exportable de la Fase 21 viaja por nombre y los reportes
+      // agrupan por nombre — dos "Frutas" en dos padres distintos se sumarían
+      // solas.
+      //
+      // `ON DELETE SET NULL` y no `CASCADE`: borrar "Comida" **promueve** a
+      // "Restaurante" en vez de llevárselo con su historial por delante. Es lo
+      // mismo que ya hace `transactions.category_id`, y por lo mismo.
+      if (!hasColumn(db, 'categories', 'parent_id')) {
+        db.exec(`
+          ALTER TABLE categories ADD COLUMN parent_id INTEGER
+            REFERENCES categories(id) ON DELETE SET NULL;
+          -- Archivar en vez de borrar, como ya hacen cuentas, plantillas y
+          -- campos propios: sale del selector y el pasado queda intacto (R17).
+          -- Se hereda: un padre archivado se lleva a sus hijos del selector, y
+          -- desarchivarlo los devuelve tal cual.
+          ALTER TABLE categories ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
+          CREATE INDEX IF NOT EXISTS idx_categorias_padre
+            ON categories(profile_id, parent_id);
+        `)
+      }
+
+      // Reglas que **proponen** categoría al importar (R4: proponen, no
+      // asientan; se ven en la vista previa antes de escribir nada). El patrón
+      // se compara normalizado —sin acentos ni mayúsculas— contra el concepto.
+      //
+      // `ON DELETE CASCADE` a la categoría: una regla que apunta a una
+      // categoría borrada no propondría nada, y dejarla sería basura silenciosa.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS import_rules (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          pattern TEXT NOT NULL,
+          category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+          -- El orden importa: gana la primera que case, así que la regla más
+          -- específica va arriba.
+          position INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_reglas_perfil ON import_rules(profile_id, position);
+      `)
+    },
+  },
 ]
 
 /** Versión de esquema que espera este código. */

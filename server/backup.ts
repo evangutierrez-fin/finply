@@ -30,6 +30,9 @@ export const TABLES = [
   'profile_modules',
   'accounts',
   'categories',
+  // Las reglas de import apuntan a la categoría que proponen (Fase 23), así
+  // que van justo detrás de ella.
+  'import_rules',
   'tags',
   'debts',
   'debt_payments',
@@ -114,12 +117,31 @@ export interface Snapshot {
   tables: Record<string, Record<string, unknown>[]>
 }
 
+/**
+ * Tablas que **se referencian a sí mismas** y por eso no pueden volcarse por
+ * `rowid` a secas: una fila tiene que salir después de aquella a la que apunta.
+ *
+ * `categories` estrenó `parent_id` en la Fase 23, y el orden de creación no
+ * basta: si alguien crea "Restaurante", después crea "Comida" y **luego** cuelga
+ * la primera de la segunda, el hijo tiene `rowid` menor que su padre. Volcarlo
+ * en ese orden produce un respaldo que revienta al restaurarse, con una llave
+ * foránea rota y sin que nadie lo note hasta que hace falta.
+ *
+ * Se ordena por dependencia y no se difiere la comprobación de llaves: así el
+ * archivo queda bien ordenado **para cualquiera que lo lea**, no solo para la
+ * restauración de Finply.
+ */
+const ORDEN_DE_VOLCADO: Record<string, string> = {
+  categories: 'parent_id IS NOT NULL, rowid ASC',
+}
+
 /** Vuelca todas las tablas —todos los perfiles— a un objeto plano. */
 export function exportSnapshot(): Snapshot {
   const tables: Snapshot['tables'] = {}
   for (const table of TABLES) {
     // Por rowid, no por id: las tablas puente no tienen columna `id`.
-    tables[table] = db.prepare(`SELECT * FROM ${table} ORDER BY rowid ASC`).all() as Record<
+    const orden = ORDEN_DE_VOLCADO[table] ?? 'rowid ASC'
+    tables[table] = db.prepare(`SELECT * FROM ${table} ORDER BY ${orden}`).all() as Record<
       string,
       unknown
     >[]

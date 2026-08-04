@@ -14,6 +14,7 @@
 import { db } from './db.ts'
 import {
   CATEGORIA_OPERATIVA,
+  CON_CATEGORIA,
   DESDE_MOVIMIENTOS,
   MONTO_OPERATIVO,
   TIPO_OPERATIVO,
@@ -31,10 +32,15 @@ import type {
 function gastoPorRol(profileId: number, desde: string, hasta: string) {
   return db
     .prepare(
-      `SELECT c.id AS category_id, c.name, c.role,
+      // ⚠ `COALESCE(c.role, cp.role)`: **un hijo sin papel toma el de su padre**
+      // (D25). Sin esto, colgar "Restaurante" de "Insumos" sacaría ese gasto
+      // del costo de ventas y movería el punto de equilibrio sin que nadie lo
+      // pidiera — que es exactamente lo que R18 prohíbe. El hijo puede llevar
+      // el suyo y entonces manda el suyo.
+      `SELECT c.id AS category_id, c.name, COALESCE(c.role, cp.role) AS role,
         COALESCE(SUM(${MONTO_OPERATIVO}), 0) AS monto
        ${DESDE_MOVIMIENTOS}
-       LEFT JOIN categories c ON c.id = ${CATEGORIA_OPERATIVA}
+       ${CON_CATEGORIA}
        WHERE t.profile_id = ? AND ${TIPO_OPERATIVO} = 'gasto' AND t.date BETWEEN ? AND ?
        GROUP BY c.id
        HAVING monto <> 0

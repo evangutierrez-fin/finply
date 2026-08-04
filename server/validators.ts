@@ -140,15 +140,44 @@ export const categoryInput = z.object({
   profileId: z.number().int().positive(),
   name: z.string().trim().min(1).max(40),
   kind: z.enum(['ingreso', 'gasto']),
+  /** De qué categoría cuelga. Un solo nivel: el padre no puede tener padre. */
+  parentId: z.number().int().positive().nullish(),
 })
 
 // El tipo de una categoría no se cambia: sus movimientos ya están clasificados
 // como ingreso o gasto y cambiarlo los dejaría mal etiquetados en masa.
+//
+// Todo lo demás es opcional, y desde la Fase 23 **también el nombre**: hasta la
+// auditoría de la 22, cambiar solo el papel exigía mandar el nombre y sin él
+// respondía 400 — un PATCH que pide un campo que no está cambiando. Era el
+// hallazgo 3 del informe, y esta es su fase.
 export const categoryPatch = z.object({
-  name: z.string().trim().min(1, 'La categoría necesita un nombre').max(40),
+  name: z.string().trim().min(1, 'La categoría necesita un nombre').max(40).optional(),
   // El papel en el estado de resultados. `null` explícito la deja sin
   // clasificar, que es distinto de no mandarlo (deja lo que tenía).
   role: z.enum(['costo_venta', 'gasto_fijo', 'gasto_variable']).nullish(),
+  /** `null` explícito la saca de su padre y la deja como principal. */
+  parentId: z.number().int().positive().nullish(),
+  archived: z.boolean().optional(),
+})
+
+/**
+ * Una regla de import: qué texto buscar en el concepto y qué categoría
+ * proponer. El patrón se guarda como lo escribió el usuario y se compara
+ * normalizado, así que "oxxo", "OXXO" y "Oxxo" son la misma regla.
+ */
+export const reglaInput = z.object({
+  profileId: z.number().int().positive(),
+  pattern: z.string().trim().min(2, 'El patrón necesita al menos dos letras').max(60),
+  categoryId: z.number().int().positive(),
+})
+
+export const reglaPatch = reglaInput.omit({ profileId: true }).partial().extend({
+  position: z.number().int().min(0).optional(),
+})
+
+export const reglaQuery = z.object({
+  profileId: z.coerce.number().int().positive(),
 })
 
 export const categoryDeleteQuery = z.object({

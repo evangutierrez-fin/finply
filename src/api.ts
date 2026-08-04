@@ -8,7 +8,7 @@ import type {
   Anticipo, BandejaFacturas, Cobranza, FacturaRecurrente,
   Almacen, Arrendamiento, Hora, MovimientoStock, Producto, ResumenHoras,
   Cotizacion, ResumenCotizaciones, TableroContraparte, SugerenciaTx,
-  CampoPropio, PlantillaTx,
+  CampoPropio, PlantillaTx, ReglaImport,
 } from '../shared/types.ts'
 
 /** Error de la API que conserva el código y el cuerpo, para poder reaccionar. */
@@ -341,16 +341,27 @@ export const api = {
   },
   categories: {
     list: (profileId: number) => req<Category[]>(`/api/categories?profileId=${profileId}`),
-    create: (data: { profileId: number; name: string; kind: 'ingreso' | 'gasto' }) =>
-      req<Category>('/api/categories', { method: 'POST', body: JSON.stringify(data) }),
-    rename: (id: number, name: string) =>
-      req<Category>(`/api/categories/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
-    /** El papel en el estado de resultados. `null` la deja sin clasificar. */
-    setRole: (id: number, name: string, role: RolCategoria | null) =>
-      req<Category>(`/api/categories/${id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ name, role }),
-      }),
+    create: (data: {
+      profileId: number
+      name: string
+      kind: 'ingreso' | 'gasto'
+      parentId?: number | null
+    }) => req<Category>('/api/categories', { method: 'POST', body: JSON.stringify(data) }),
+    /**
+     * Un PATCH parcial de verdad: lo que no se manda se queda como estaba.
+     * Hasta la Fase 23 el nombre era obligatorio aunque no cambiara — el
+     * hallazgo 3 de la auditoría.
+     */
+    update: (
+      id: number,
+      cambios: {
+        name?: string
+        role?: RolCategoria | null
+        parentId?: number | null
+        archived?: boolean
+      },
+    ) =>
+      req<Category>(`/api/categories/${id}`, { method: 'PATCH', body: JSON.stringify(cambios) }),
     /** Sin `reassignTo` ni `force`, una categoría en uso responde 409 con txCount. */
     remove: (id: number, options: { reassignTo?: number; force?: boolean } = {}) => {
       const search = new URLSearchParams()
@@ -362,7 +373,23 @@ export const api = {
         movimientosReasignados: number
         movimientosSinCategoria: number
         presupuestosBorrados: number
+        hijosPromovidos: number
+        reglasBorradas: number
       }>(`/api/categories/${id}${qs ? `?${qs}` : ''}`, { method: 'DELETE' })
+    },
+    /** Las reglas que proponen categoría al importar (Fase 23). */
+    reglas: {
+      list: (profileId: number) =>
+        req<ReglaImport[]>(`/api/categories/reglas?profileId=${profileId}`),
+      create: (data: { profileId: number; pattern: string; categoryId: number }) =>
+        req<ReglaImport>('/api/categories/reglas', { method: 'POST', body: JSON.stringify(data) }),
+      update: (id: number, cambios: { pattern?: string; categoryId?: number; position?: number }) =>
+        req<ReglaImport>(`/api/categories/reglas/${id}`, {
+          method: 'PATCH',
+          body: JSON.stringify(cambios),
+        }),
+      remove: (id: number) =>
+        req<{ ok: true }>(`/api/categories/reglas/${id}`, { method: 'DELETE' }),
     },
   },
   tags: {
