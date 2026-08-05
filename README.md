@@ -165,6 +165,20 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   movimiento opcional en la cuenta de la que salió. No es principal (no se
   financia), pero sí es parte de lo que te costó: Finply te dice qué costó el
   bien y qué te cuesta el crédito con intereses.
+- **Comisión de apertura y la tasa que de verdad pagas** — a diferencia del
+  enganche, la comisión **nunca entra a tu cuenta**: debes $240,000 y el banco
+  te deposita $235,200. Finply asienta el desembolso por lo que llegó de verdad
+  y calcula la **tasa efectiva** de lo recibido contra lo que vas a pagar. Ese
+  crédito «al 13.5 %» cuesta 15.62 %, y no hay forma de verlo en el contrato.
+- **Bola de nieve contra avalancha** — con varias deudas, el mismo dinero
+  puesto en distinto orden. Finply corre los dos métodos —primero la más chica
+  o primero la más cara— sobre tus saldos y tus cuotas, y te enseña **los dos**:
+  cuándo quedas libre y cuánto interés paga cada camino. Los dos ruedan la cuota
+  liberada, así que la única diferencia es el orden. Cuál elegir es tuyo:
+  la avalancha suele costar menos y la bola de nieve suele sentirse mejor.
+- **«Si abono $X extra»** — sobre el saldo de hoy y con tu cuota, cuántos meses
+  te ahorras y cuánto interés. Dos mil pesos más al mes en un crédito de auto
+  lo acortan un año y ahorran $17,000 de intereses.
 - **Tarjetas de crédito** — límite, día de corte y día de pago. Finply calcula
   el **saldo al corte** (lo de después del corte no cuenta) y el **pago para no
   generar intereses**, descontando lo que ya abonaste y con la fecha límite a
@@ -208,6 +222,19 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   CSV de precios y valuar varias de un jalón: ves fila por fila lo que
   pasaría antes de asentar nada. **Sin cotizaciones en línea**, nunca —
   pedirlas le contaría a otro servidor qué tienes.
+- **Cómo está repartida tu cartera** — cuánto pesa cada tipo sobre el total, de
+  la tajada más grande a la más chica. Es la misma pregunta que le haces a tu
+  gasto por categoría, hecha a tu dinero: si esa clase se mueve, se mueve esa
+  parte de lo que tienes.
+- **Ganancia cobrada contra ganancia en papel** — al retirar, parte de lo que
+  sacas era tu costo y parte era ganancia. Finply las separa: lo que ya cobraste
+  es tuyo, lo que sigue en papel todavía puede irse. El costo se consume a
+  prorrata, no fingiendo un orden de venta que Finply nunca te pidió.
+- **Aportar sin acordarte** — una plantilla de recurrencia puede aportar a una
+  inversión. Al confirmarla se registra el aporte y queda ligado al movimiento,
+  así que sale de tu cuenta pero **no cuenta como gasto**: pasar dinero de un
+  bolsillo tuyo a otro no es gastarlo. Si anulas el movimiento, el aporte se va
+  con él.
 - **Perfil de negocio** — clientes y proveedores reutilizables, facturas
   emitidas y recibidas con su vencimiento, y antigüedad de saldos para ver no
   solo cuánto te deben sino desde hace cuánto. Registrar una factura **no mueve
@@ -463,6 +490,7 @@ server/          Express + node:sqlite
   flujo.ts       la caja proyectada día a día, auditable (solo lectura)
   personalizacion.ts campos propios (llave-valor, D24) y plantillas de movimiento
   taxonomia.ts   jerarquía de categorías (un nivel, D25) y reglas de import
+  estrategia.ts  las deudas del perfil corridas por los dos métodos (solo lectura)
   config-perfil.ts   la configuración de un perfil, por nombre y sin sus cifras
   routes/        profiles · accounts · categories · tags · transactions · debts
                  · tarjetas · investments · budgets · goals · notes · summary
@@ -492,6 +520,8 @@ shared/
   atajos.ts      catálogo de atajos y cuándo una tecla lo es (puro)
   formato.ts     cómo se leen las fechas y las cifras de este libro (puro)
   taxonomia.ts   plegar un desglose por categoría a su padre, sin SQL (puro)
+  estrategia.ts  bola de nieve contra avalancha, abonar de más y la tasa
+                 efectiva de un crédito con comisión (puro)
 src/
   views/         Resumen · Movimientos · Cuentas · Categorías · Reportes
                  · Análisis · Tarjetas · Deudas · Inversiones · Simulador
@@ -538,8 +568,9 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 | `GET/POST /api/conciliacion` · `DELETE /:id` | Cortes: el saldo que declaró el banco, con la diferencia contra lo palomeado |
 | `POST /api/importaciones/previsualizar` | Analiza un CSV y devuelve el informe. No escribe nada |
 | `GET/POST /api/importaciones` · `DELETE /:id` | Lotes de importación y deshacer |
-| `GET/POST /api/debts` · `PATCH/DELETE /:id` | Deudas por cobrar / por pagar, con tasa, plazo y enganche (`accountId` y `downPaymentAccountId` asientan sus movimientos) |
-| `GET /api/debts/:id/amortizacion` | Tabla de pagos: capital contra interés mes a mes |
+| `GET/POST /api/debts` · `PATCH/DELETE /:id` | Deudas por cobrar / por pagar, con tasa, plazo, enganche y comisión de apertura (`accountId` y `downPaymentAccountId` asientan sus movimientos; el desembolso vale `principal − comisión`) |
+| `GET /api/debts/:id/amortizacion` | Tabla de pagos: capital contra interés mes a mes, más lo recibido y la tasa efectiva |
+| `GET /api/debts/estrategia?profileId&extraCents` | Bola de nieve y avalancha sobre las mismas deudas y el mismo dinero extra, con la diferencia entre las dos |
 | `POST /api/debts/:id/payments` · `DELETE /api/debts/payments/:id` | Abonos (con movimiento ligado opcional; `interestCents` fija el desglose, si no se propone) |
 | `GET /api/tarjetas?profileId` | Estado de cada tarjeta: corte, pago para no generar intereses y línea disponible |
 | `GET/POST /api/tarjetas/msi` · `DELETE /msi/:id` | Compras a meses sin intereses y sus parcialidades |
@@ -605,13 +636,19 @@ su tipo no puede cambiar; el desembolso y el enganche de una deuda son la
 excepción a la cascada —anularlos no borra la deuda, porque una deuda con
 abonos no puede evaporarse por anular un movimiento—; el estado de una deuda
 siempre se deriva del **capital** abonado contra el principal, nunca del total
-pagado; las parcialidades de una compra a meses suman
+pagado; corregir el desembolso de una deuda con comisión devuelve el principal
+con la comisión adentro, porque el movimiento vale `principal − comisión` y las
+dos direcciones tienen que ser la misma igualdad;
+las parcialidades de una compra a meses suman
 exactamente su total y la amortización cuadra al centavo contra el monto
-original; y un movimiento nunca cruza de perfil, ni toma la cuenta o la
+original; la ganancia cobrada y la ganancia en papel de una inversión suman
+siempre la ganancia total, al centavo, redondee como redondee la prorrata;
+y un movimiento nunca cruza de perfil, ni toma la cuenta o la
 categoría de otro libro —ni una categoría de ingreso para un gasto—; y una
 recurrencia no puede asentar dos veces el mismo periodo, porque la clave
 `(plantilla, periodo)` es única en la base y no una comprobación del código
-—si anulas el movimiento que asentaste, ese periodo vuelve solo a la bandeja—.
+—si anulas el movimiento que asentaste, ese periodo vuelve solo a la bandeja, y
+si esa plantilla aportaba a una inversión, el aporte se va con el movimiento—.
 El libro siempre cuadra.
 
 ## Sistema de diseño
@@ -643,8 +680,8 @@ encontró y lo que **no** cubre.
 
 **Cómo se usa**
 
-- Bola de nieve contra avalancha con varias deudas, y qué te ahorras abonando
-  de más
+- Recurrencias de monto variable, pausar sin archivar y rejilla mensual en el
+  calendario
 - Export completo del perfil, no solo movimientos
 - Móvil/PWA e internacionalización
 

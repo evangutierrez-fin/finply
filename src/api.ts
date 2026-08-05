@@ -8,7 +8,7 @@ import type {
   Anticipo, BandejaFacturas, Cobranza, FacturaRecurrente,
   Almacen, Arrendamiento, Hora, MovimientoStock, Producto, ResumenHoras,
   Cotizacion, ResumenCotizaciones, TableroContraparte, SugerenciaTx,
-  CampoPropio, PlantillaTx, ReglaImport,
+  CampoPropio, PlantillaTx, ReglaImport, ComparacionEstrategia,
 } from '../shared/types.ts'
 
 /** Error de la API que conserva el código y el cuerpo, para poder reaccionar. */
@@ -158,6 +158,11 @@ export interface DebtDraft {
   downPaymentCents?: number
   /** Solo al crear: cuenta de la que sale (o a la que entra) el enganche. */
   downPaymentAccountId?: number | null
+  /**
+   * Comisión de apertura: la debes, pero se descuenta de lo que te depositan,
+   * así que el desembolso asienta `principal − comisión` (D30).
+   */
+  originationFeeCents?: number
 }
 
 /** Lo que la Fase 11 le agregó a una cuenta. `null` en el mínimo quita el aviso. */
@@ -201,6 +206,8 @@ export interface RecurrenciaDraft {
   endDate?: string | null
   tagIds?: number[]
   archived?: boolean
+  /** Inversión a la que aporta. Solo en un gasto; `null` suelta la liga. */
+  investmentId?: number | null
 }
 
 /** Cambios de **esta** partida al asentarla. No tocan la plantilla. */
@@ -513,6 +520,14 @@ export const api = {
     remove: (id: number) => req<{ ok: true }>(`/api/debts/${id}`, { method: 'DELETE' }),
     /** El plan de pagos: capital contra interés mes por mes. Exige plazo. */
     amortizacion: (id: number) => req<Amortizacion>(`/api/debts/${id}/amortizacion`),
+    /**
+     * Los dos métodos —bola de nieve y avalancha— sobre las mismas deudas y el
+     * mismo dinero extra. Devuelve los dos: cuál conviene es del usuario (R9).
+     */
+    estrategia: (profileId: number, extraCents: number) =>
+      req<ComparacionEstrategia>(
+        `/api/debts/estrategia?profileId=${profileId}&extraCents=${extraCents}`,
+      ),
     addPayment: (
       debtId: number,
       data: {

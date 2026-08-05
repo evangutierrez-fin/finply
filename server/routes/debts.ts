@@ -3,6 +3,8 @@ import {
   db, debtBalance, ensureAccount, inTransaction, mapDebt, refreshDebtStatus,
 } from '../db.ts'
 import { interesDevengado, tablaAmortizacion } from '../../shared/credito.ts'
+import { tasaEfectivaCredito } from '../../shared/estrategia.ts'
+import { compararEstrategias } from '../estrategia.ts'
 import { debtInput, debtPatch, paymentInput } from '../validators.ts'
 
 const router = Router()
@@ -72,6 +74,24 @@ router.get('/', (req, res) => {
   res.json(debts)
 })
 
+/**
+ * Los dos métodos de pago de deuda, lado a lado, con el mismo dinero extra.
+ *
+ * Va **antes** de `/:id` a propósito: Express casa en orden de declaración, y
+ * puesta después, `estrategia` entraría como si fuera el id de una deuda.
+ */
+router.get('/estrategia', (req, res) => {
+  const profileId = Number(req.query.profileId)
+  if (!Number.isInteger(profileId) || profileId <= 0) {
+    return res.status(400).json({ error: 'Falta profileId' })
+  }
+  const extra = Number(req.query.extraCents ?? 0)
+  if (!Number.isInteger(extra) || extra < 0) {
+    return res.status(400).json({ error: 'El abono extra tiene que ser un entero de centavos' })
+  }
+  res.json(compararEstrategias(profileId, extra))
+})
+
 // Apuntar una deuda. Si trae cuenta, también se asienta el desembolso: entra
 // dinero si te prestaron (por_pagar), sale si prestaste tú (por_cobrar). Sin
 // cuenta, la deuda queda como pura obligación y el libro no se mueve — que es
@@ -83,13 +103,19 @@ router.post('/', (req, res) => {
   if (input.downPaymentAccountId && input.downPaymentCents === 0) {
     return res.status(400).json({ error: 'Elegiste cuenta para el enganche pero no su monto' })
   }
+  if (input.originationFeeCents >= input.principalCents) {
+    return res
+      .status(400)
+      .json({ error: 'La comisión de apertura no puede llegar al monto del crédito' })
+  }
 
   const id = inTransaction(() => {
     const result = db
       .prepare(
         `INSERT INTO debts (profile_id, direction, counterparty, concept, principal_cents,
-          start_date, due_date, annual_rate_bp, term_months, down_payment_cents)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          start_date, due_date, annual_rate_bp, term_months, down_payment_cents,
+          origination_fee_cents)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.profileId,
@@ -102,6 +128,7 @@ router.post('/', (req, res) => {
         input.annualRateBp,
         input.termMonths ?? null,
         input.downPaymentCents,
+        input.originationFeeCents,
       )
     const debtId = Number(result.lastInsertRowid)
 
@@ -125,10 +152,13 @@ router.post('/', (req, res) => {
 
     const entraElPrestamo = input.direction === 'por_pagar'
     if (input.accountId) {
+      // El desembolso asienta lo que de verdad llegó a la cuenta: el principal
+      // **menos la comisión de apertura** (D30). Debes los $240,000 y te
+      // depositaron $235,200; el libro tiene que decir lo segundo.
       asentar(
         input.accountId,
         entraElPrestamo ? 'ingreso' : 'gasto',
-        input.principalCents,
+        input.principalCents - input.originationFeeCents,
         input.concept || `Préstamo · ${input.counterparty}`,
         'desembolso',
       )
@@ -169,7 +199,17 @@ router.get('/:id/amortizacion', (req, res) => {
     termMonths: debt.term_months,
     startDate: debt.start_date,
   })
-  res.json({ debtId: id, ...tabla })
+  // Lo que recibiste contra lo que vas a pagar. La comisión de apertura no
+  // aparece en la tasa del contrato y sí encarece el crédito: esta es la única
+  // cifra donde se ve (D30).
+  const recibidoCents = debt.principal_cents - (debt.origination_fee_cents ?? 0)
+  const tasa = tasaEfectivaCredito({ recibidoCents, pagos: tabla.filas })
+  res.json({
+    debtId: id,
+    ...tabla,
+    recibidoCents,
+    tasaEfectivaBp: tasa === null ? null : Math.round(tasa * 10_000),
+  })
 })
 
 router.patch('/:id', (req, res) => {
@@ -177,11 +217,18 @@ router.patch('/:id', (req, res) => {
   const existing: any = db.prepare('SELECT * FROM debts WHERE id = ?').get(id)
   if (!existing) return res.status(404).json({ error: 'Deuda no encontrada' })
   const input = debtPatch.parse(req.body)
+  const comision = input.originationFeeCents ?? existing.origination_fee_cents ?? 0
+  const principal = input.principalCents ?? existing.principal_cents
+  if (comision >= principal) {
+    return res
+      .status(400)
+      .json({ error: 'La comisión de apertura no puede llegar al monto del crédito' })
+  }
   inTransaction(() => {
     db.prepare(
       `UPDATE debts SET direction = ?, counterparty = ?, concept = ?, principal_cents = ?,
         start_date = ?, due_date = ?, annual_rate_bp = ?, term_months = ?,
-        down_payment_cents = ? WHERE id = ?`,
+        down_payment_cents = ?, origination_fee_cents = ? WHERE id = ?`,
     ).run(
       input.direction ?? existing.direction,
       input.counterparty ?? existing.counterparty,
@@ -193,6 +240,7 @@ router.patch('/:id', (req, res) => {
       // Ausente lo deja como estaba; `null` explícito quita el plazo.
       input.termMonths === undefined ? existing.term_months : input.termMonths,
       input.downPaymentCents ?? existing.down_payment_cents,
+      comision,
       id,
     )
     // El estado siempre se deriva de los abonos: cambiar el principal puede

@@ -516,6 +516,10 @@ export function mapDebt(row: any) {
     annualRateBp: row.annual_rate_bp ?? 0,
     termMonths: row.term_months ?? null,
     downPaymentCents: row.down_payment_cents ?? 0,
+    // Comisión de apertura (D30): la debes, pero nunca te la depositaron. No
+    // es principal ni es enganche — es lo que encarece el crédito sin que se
+    // vea en la tasa del contrato.
+    originationFeeCents: row.origination_fee_cents ?? 0,
     interestPaidCents: row.interest_paid_cents ?? 0,
     capitalPaidCents: row.capital_paid_cents ?? 0,
     // Lo que de verdad debes: solo el capital abonado baja el principal. Con
@@ -656,6 +660,11 @@ export function investmentsWithTotals(profileId: number) {
       aportadoCents: paso.aportadoCents,
       retiradoCents: paso.retiradoCents,
       gananciaCents: paso.gananciaCents,
+      // Las dos mitades de esa misma ganancia (D31): lo ya cobrado y lo que
+      // sigue en papel. Suman la de arriba al centavo.
+      costoCents: paso.costoCents,
+      gananciaRealizadaCents: paso.gananciaRealizadaCents,
+      gananciaEnPapelCents: paso.gananciaEnPapelCents,
       valueCents: paso.valueCents,
       unitsE8: paso.unitsE8,
       rendimientoAnual: rendimientoDe(entries, paso.valueCents),

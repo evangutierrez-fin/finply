@@ -660,26 +660,67 @@ inTransaction(() => {
 
   // ── Deudas y retornos ─────────────────────────────────────────────────
   const insertDebt = db.prepare(
-    `INSERT INTO debts (profile_id, direction, counterparty, concept, principal_cents, start_date, due_date)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO debts (profile_id, direction, counterparty, concept, principal_cents, start_date,
+      due_date, annual_rate_bp, term_months, origination_fee_cents)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
+  const deuda = (
+    profileId: number,
+    direction: 'por_cobrar' | 'por_pagar',
+    counterparty: string,
+    concept: string,
+    principalCents: number,
+    startDate: string,
+    dueDate: string | null,
+    extra: { tasaBp?: number; meses?: number; comisionCents?: number } = {},
+  ) =>
+    Number(
+      insertDebt.run(
+        profileId, direction, counterparty, concept, principalCents, startDate, dueDate,
+        extra.tasaBp ?? 0, extra.meses ?? null, extra.comisionCents ?? 0,
+      ).lastInsertRowid,
+    )
   const insertPayment = db.prepare(
     'INSERT INTO debt_payments (debt_id, amount_cents, date, note) VALUES (?, ?, ?, ?)',
   )
 
-  const luis = Number(
-    insertDebt.run(personal, 'por_cobrar', 'Luis', 'Préstamo personal', 250000, '2026-05-10', '2026-09-30').lastInsertRowid,
-  )
+  const luis = deuda(personal, 'por_cobrar', 'Luis', 'Préstamo personal', 250000, '2026-05-10', '2026-09-30')
   insertPayment.run(luis, 50000, '2026-06-12', 'Primer abono')
   insertPayment.run(luis, 50000, '2026-07-14', 'Segundo abono')
 
-  const nu = Number(
-    insertDebt.run(personal, 'por_pagar', 'Tarjeta Nu', 'Corte de junio', 380000, '2026-07-02', '2026-08-05').lastInsertRowid,
-  )
-  insertPayment.run(nu, 100000, '2026-07-18', 'Pago parcial')
+  // Tres deudas por pagar con tasa y plazo, elegidas para que bola de nieve y
+  // avalancha **no den lo mismo**: la más chica (la lavadora, a meses sin
+  // intereses) es la más barata, y la más cara (la tarjeta, al 45 %) tiene el
+  // saldo de en medio. Si la chica fuera también la cara, las dos rutas la
+  // atacarían primero, darían la misma cifra y el demo no enseñaría nada.
+  const nu = deuda(personal, 'por_pagar', 'Tarjeta Nu', 'Corte de junio', 3800000, '2026-07-02', '2026-08-05', {
+    tasaBp: 4500,
+    meses: 12,
+  })
+  insertPayment.run(nu, 1000000, '2026-07-18', 'Pago parcial')
 
-  insertDebt.run(negocio, 'por_pagar', 'Proveedor La Espiga', 'Harina y empaques', 520000, '2026-07-05', '2026-07-30')
-  insertDebt.run(negocio, 'por_cobrar', 'Oficinas Mérida', 'Pedido corporativo', 240000, '2026-07-10', '2026-08-15')
+  // El auto trae **comisión de apertura**: se deben $240,000 y el banco
+  // depositó $235,200. Su movimiento lo dice, que es de lo que trata D30.
+  const auto = deuda(personal, 'por_pagar', 'Banco Azteca', 'Crédito de auto', 24000000, '2026-03-05', null, {
+    tasaBp: 1350,
+    meses: 48,
+    comisionCents: 480000,
+  })
+  insertPayment.run(auto, 649832, '2026-04-05', 'Mensualidad')
+  insertPayment.run(auto, 649832, '2026-05-05', 'Mensualidad')
+  insertPayment.run(auto, 649832, '2026-06-05', 'Mensualidad')
+  db.prepare(
+    `INSERT INTO transactions (profile_id, account_id, type, amount_cents, date, note, debt_id, debt_role)
+     VALUES (?, ?, 'ingreso', ?, ?, ?, ?, 'desembolso')`,
+  ).run(personal, banco, 24000000 - 480000, '2026-03-05', 'Crédito de auto', auto)
+
+  deuda(personal, 'por_pagar', 'Mueblería', 'Sala a 18 meses sin intereses', 1800000, '2026-05-20', null, {
+    tasaBp: 0,
+    meses: 18,
+  })
+
+  deuda(negocio, 'por_pagar', 'Proveedor La Espiga', 'Harina y empaques', 520000, '2026-07-05', '2026-07-30')
+  deuda(negocio, 'por_cobrar', 'Oficinas Mérida', 'Pedido corporativo', 240000, '2026-07-10', '2026-08-15')
 
   // ── Inversiones ───────────────────────────────────────────────────────
   const insertInvestment = db.prepare(
@@ -703,6 +744,27 @@ inTransaction(() => {
   const btc = Number(insertInvestment.run(personal, 'Bitcoin', 'cripto', '').lastInsertRowid)
   insertEntry.run(btc, 'aporte', 300000, '2026-06-10', '')
   insertEntry.run(btc, 'valuacion', 274500, '2026-07-18', '')
+
+  // Acciones con un **retiro con ganancia**: es lo único que parte la ganancia
+  // en dos —lo ya cobrado y lo que sigue en papel—, y sin un caso así la
+  // distinción de la Fase 24 no se ve en ningún lado del libro demo.
+  const acciones = Number(
+    insertInvestment.run(personal, 'Acciones GAP', 'acciones', 'Casa de bolsa').lastInsertRowid,
+  )
+  insertEntry.run(acciones, 'aporte', 800000, '2026-04-08', 'Compra inicial')
+  insertEntry.run(acciones, 'valuacion', 1000000, '2026-06-20', '')
+  insertEntry.run(acciones, 'retiro', 400000, '2026-06-22', 'Venta parcial')
+  insertEntry.run(acciones, 'valuacion', 655000, '2026-07-20', '')
+
+  // Y una plantilla que **aporta** a una inversión: el aporte mensual al fondo
+  // indexado, que propone y espera como cualquier otra (R4). Va aquí y no con
+  // las demás porque necesita que la inversión ya exista.
+  db.prepare(
+    `INSERT INTO recurrences
+      (profile_id, account_id, type, amount_cents, note, frequency, day_of_month, start_date,
+       investment_id)
+     VALUES (?, ?, 'gasto', ?, ?, 'mensual', ?, ?, ?)`,
+  ).run(personal, banco, 200000, 'Aporte al fondo indexado', 10, '2026-07-01', fondo)
 
   // ── Presupuestos ──────────────────────────────────────────────────────
   // Un tope por categoría y por mes: julio afloja en Ocio y aprieta en Súper,
@@ -911,7 +973,9 @@ inTransaction(() => {
 
   console.log(
     '[finply] Libro demo listo: 2 perfiles, 6 cuentas (una tarjeta con su tasa), ' +
-      'quince meses de movimientos, deudas, inversiones, presupuestos, metas, ' +
+      'quince meses de movimientos, tres deudas con tasa y plazo —una con comisión ' +
+      'de apertura—, cuatro inversiones (una con retiro y ganancia ya cobrada) y una ' +
+      'plantilla que aporta a un fondo, presupuestos, metas, ' +
       'notas —una atada a su partida y otra a su mes—, campos propios y plantillas, ' +
       'facturas con retención, nota de crédito, anticipo y plantilla, ' +
       'cinco cotizaciones que cubren los cuatro estados y una orden de compra, ' +

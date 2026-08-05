@@ -65,6 +65,16 @@ export interface Recorrido {
    * correcta cuando ya retiraste más de lo aportado.
    */
   gananciaCents: number
+  /**
+   * Lo que te costó **lo que todavía tienes**: los aportes menos la parte que
+   * se llevó cada retiro. No es "aportado menos retirado": si sacaste con
+   * ganancia, parte de lo que sacaste era ganancia y no costo.
+   */
+  costoCents: number
+  /** Ganancia ya cobrada: de cada retiro, lo que iba por encima de su costo. */
+  gananciaRealizadaCents: number
+  /** Ganancia en papel: lo que vale hoy menos lo que costó. Todavía no es tuya. */
+  gananciaEnPapelCents: number
   /** El valor después de cada registro, en orden. Es la serie de la gráfica. */
   puntos: PuntoValor[]
 }
@@ -99,6 +109,14 @@ export function valorDeUnidades(unitsE8: number, unitPriceCents: number): number
  * unidades que había en ese momento. Así, si mañana aparece un aporte con
  * fecha vieja, la valuación no se queda con el número de ayer: el precio es el
  * dato, el valor es la consecuencia.
+ *
+ * **El costo se consume a prorrata** (D31), no por PEPS: un retiro se lleva la
+ * misma fracción del costo que se llevó del valor. Es la misma elección que
+ * D29 hizo para el inventario —promedio ponderado— y por lo mismo: Finply no
+ * guarda qué unidad concreta vendiste, así que fingir un orden sería inventar
+ * un dato. De ahí salen las dos mitades de la ganancia, y suman **exactamente**
+ * la de siempre sin importar cómo redondee la prorrata: lo que se le resta al
+ * costo es lo mismo que se le suma a la realizada.
  */
 export function recorrer(entradas: EntradaInversion[]): Recorrido {
   const orden = [...entradas].sort((a, b) =>
@@ -109,15 +127,29 @@ export function recorrer(entradas: EntradaInversion[]): Recorrido {
   let retiradoCents = 0
   let valueCents = 0
   let unitsE8 = 0
+  let costoCents = 0
+  let realizadaCents = 0
   const puntos: PuntoValor[] = []
 
   for (const e of orden) {
     if (e.type === 'aporte') {
       aportadoCents += e.amountCents
       valueCents += e.amountCents
+      costoCents += e.amountCents
       unitsE8 += e.unitsE8 ?? 0
     } else if (e.type === 'retiro') {
       retiradoCents += e.amountCents
+      // La parte del costo que se va con este retiro: la misma proporción del
+      // valor que se está sacando, nunca más de lo que queda de costo. Sin
+      // valor que repartir no hay costo que consumir, y entonces el retiro
+      // entero es ganancia cobrada — que es lo que significa sacar dinero de
+      // algo que ya no vale nada en libros.
+      const costoRetirado =
+        valueCents > 0
+          ? Math.min(costoCents, Math.round((costoCents * e.amountCents) / valueCents))
+          : 0
+      costoCents -= costoRetirado
+      realizadaCents += e.amountCents - costoRetirado
       valueCents = Math.max(0, valueCents - e.amountCents)
       unitsE8 = Math.max(0, unitsE8 - (e.unitsE8 ?? 0))
     } else if (e.unitPriceCents !== null) {
@@ -135,8 +167,54 @@ export function recorrer(entradas: EntradaInversion[]): Recorrido {
     valueCents,
     unitsE8,
     gananciaCents: valueCents + retiradoCents - aportadoCents,
+    costoCents,
+    gananciaRealizadaCents: realizadaCents,
+    gananciaEnPapelCents: valueCents - costoCents,
     puntos,
   }
+}
+
+/** Un renglón del reparto de la cartera: un tipo y lo que pesa. */
+export interface RenglonCartera {
+  kind: string
+  valueCents: number
+  /** Su parte del total, en puntos base enteros: 2500 = 25 %. */
+  parteBp: number
+}
+
+/**
+ * Cómo está repartida la cartera por tipo, de la tajada más grande a la más
+ * chica. Es el mismo ángulo que la concentración del gasto por categoría, con
+ * la misma respuesta útil: la primera línea dice de qué depende tu dinero.
+ *
+ * La parte va en **puntos base enteros** y la más grande absorbe el residuo,
+ * así que las tajadas suman 10 000 exactos y la vista nunca enseña un reparto
+ * que dé 99 %. Los tipos sin valor no aparecen: un renglón en cero no es
+ * información, es ruido. Nada de esto recomienda un reparto (R9): dice el que
+ * hay.
+ */
+export function repartoPorTipo(
+  inversiones: { kind: string; valueCents: number }[],
+): RenglonCartera[] {
+  const porTipo = new Map<string, number>()
+  for (const i of inversiones) {
+    porTipo.set(i.kind, (porTipo.get(i.kind) ?? 0) + i.valueCents)
+  }
+  const filas = [...porTipo.entries()]
+    .filter(([, cents]) => cents > 0)
+    .map(([kind, valueCents]) => ({ kind, valueCents, parteBp: 0 }))
+    .sort((a, b) => b.valueCents - a.valueCents || a.kind.localeCompare(b.kind))
+
+  const total = filas.reduce((s, f) => s + f.valueCents, 0)
+  if (total <= 0) return filas
+  let repartido = 0
+  filas.forEach((f, i) => {
+    f.parteBp =
+      i === 0 ? 0 : Math.round((f.valueCents * 10_000) / total)
+    if (i > 0) repartido += f.parteBp
+  })
+  if (filas[0]) filas[0].parteBp = 10_000 - repartido
+  return filas
 }
 
 /**

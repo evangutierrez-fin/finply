@@ -39,11 +39,13 @@ import type { Bandeja, Propuesta, Recurrencia, Tx } from '../shared/types.ts'
 const HORIZONTE_DIAS = 400
 
 const REC_SELECT = `
-  SELECT r.*, a.name AS account_name, c.name AS category_name, ta.name AS transfer_account_name
+  SELECT r.*, a.name AS account_name, c.name AS category_name, ta.name AS transfer_account_name,
+    inv.name AS investment_name
   FROM recurrences r
   JOIN accounts a ON a.id = r.account_id
   LEFT JOIN categories c ON c.id = r.category_id
   LEFT JOIN accounts ta ON ta.id = r.transfer_account_id
+  LEFT JOIN investments inv ON inv.id = r.investment_id
 `
 
 export function reglaDe(row: any): ReglaRecurrencia {
@@ -79,6 +81,8 @@ function mapRecurrencia(row: any): Recurrencia {
     startDate: row.start_date,
     endDate: row.end_date ?? null,
     archived: row.archived === 1,
+    investmentId: row.investment_id ?? null,
+    investmentName: row.investment_name ?? null,
     tags: [],
     descripcion: describirRecurrencia(reglaDe(row)),
     proximaFecha: null,
@@ -230,6 +234,11 @@ export function bandeja(
         note: rec.note,
         tags: rec.tags,
         descripcion: rec.descripcion,
+        // Viaja para que la bandeja pueda decir que esto **no** es gasto: un
+        // aporte sale de la cuenta pero no consume patrimonio (D6), y sumarlo
+        // con los gastos daría un total que la portada nunca va a confirmar.
+        investmentId: rec.investmentId,
+        investmentName: rec.investmentName,
         atraso: diasEntre(o.fecha, hoy),
       })
     }
@@ -262,9 +271,11 @@ export interface EntradaRecurrencia {
   endDate?: string | null
   tagIds?: number[]
   archived?: boolean
+  /** Inversión a la que aporta. Solo en un gasto. */
+  investmentId?: number | null
 }
 
-/** Cuentas, categoría y etiquetas tienen que ser todas del mismo perfil. */
+/** Cuentas, categoría, etiquetas e inversión, todas del mismo perfil. */
 function validarReferencias(input: EntradaRecurrencia): void {
   ensureAccount(input.profileId, input.accountId)
   if (input.type === 'transferencia') {
@@ -277,6 +288,13 @@ function validarReferencias(input: EntradaRecurrencia): void {
     ensureCategory(input.profileId, input.categoryId, input.type)
   }
   if (input.tagIds) ensureTags(input.profileId, input.tagIds)
+  if (input.investmentId) {
+    if (input.type !== 'gasto') throw httpError(400, 'Solo un gasto puede aportar a una inversión')
+    const inv = db
+      .prepare('SELECT id FROM investments WHERE id = ? AND profile_id = ?')
+      .get(input.investmentId, input.profileId)
+    if (!inv) throw httpError(400, 'La inversión no pertenece a este perfil')
+  }
 }
 
 /** Reemplaza las etiquetas de una plantilla. Llamar dentro de una transacción. */
@@ -292,6 +310,9 @@ function fijarEtiquetas(recurrenceId: number, tagIds: number[]): void {
 function camposDeFrecuencia(input: EntradaRecurrencia) {
   const esTransferencia = input.type === 'transferencia'
   return {
+    // Aportar es un gasto de la cuenta hacia la inversión: cambiar el tipo de
+    // la plantilla suelta la liga en vez de dejar una que ya no aplica.
+    investmentId: input.type === 'gasto' ? (input.investmentId ?? null) : null,
     categoryId: esTransferencia ? null : (input.categoryId ?? null),
     transferAccountId: esTransferencia ? (input.transferAccountId ?? null) : null,
     dayOfMonth: input.frequency === 'semanal' ? null : (input.dayOfMonth ?? null),
@@ -309,8 +330,9 @@ export function crear(input: EntradaRecurrencia): Recurrencia {
       .prepare(
         `INSERT INTO recurrences
           (profile_id, account_id, type, amount_cents, category_id, transfer_account_id, note,
-           frequency, day_of_month, day_of_month_2, month_of_year, weekday, start_date, end_date)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           frequency, day_of_month, day_of_month_2, month_of_year, weekday, start_date, end_date,
+           investment_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.profileId,
@@ -327,6 +349,7 @@ export function crear(input: EntradaRecurrencia): Recurrencia {
         c.weekday,
         input.startDate,
         input.endDate ?? null,
+        c.investmentId,
       )
     const nuevo = Number(result.lastInsertRowid)
     if (input.tagIds) fijarEtiquetas(nuevo, input.tagIds)
@@ -349,7 +372,8 @@ export function actualizar(id: number, input: EntradaRecurrencia): Recurrencia {
     db.prepare(
       `UPDATE recurrences SET account_id = ?, type = ?, amount_cents = ?, category_id = ?,
         transfer_account_id = ?, note = ?, frequency = ?, day_of_month = ?, day_of_month_2 = ?,
-        month_of_year = ?, weekday = ?, start_date = ?, end_date = ?, archived = ?
+        month_of_year = ?, weekday = ?, start_date = ?, end_date = ?, archived = ?,
+        investment_id = ?
        WHERE id = ?`,
     ).run(
       input.accountId,
@@ -366,6 +390,7 @@ export function actualizar(id: number, input: EntradaRecurrencia): Recurrencia {
       input.startDate,
       input.endDate ?? null,
       input.archived ? 1 : 0,
+      c.investmentId,
       id,
     )
     if (input.tagIds) fijarEtiquetas(id, input.tagIds)
@@ -431,6 +456,12 @@ function fechaDelPeriodo(row: any, periodo: string): string {
  *
  * Los ajustes son de esta partida, no de la plantilla: pagar la renta de julio
  * con $200 de más no reescribe la renta de todos los meses.
+ *
+ * Si la plantilla aporta a una inversión, en la misma transacción se registra
+ * el aporte y el movimiento queda ligado a él. Eso es lo que hace que D6 lo
+ * saque del gasto del mes —pasar dinero de tu cuenta a tu inversión no es
+ * gastar— y que anular el movimiento se lleve también el aporte, dejando el
+ * periodo otra vez en la bandeja. El libro manda, aquí como en todo.
  */
 export function asentar(
   profileId: number,
@@ -467,25 +498,43 @@ export function asentar(
     frequency: row.frequency,
     startDate: row.start_date,
     tagIds: etiquetas,
+    investmentId: row.investment_id ?? null,
   })
+
+  const fechaMov = ajustes.date ?? fecha
+  const nota = ajustes.note ?? row.note
 
   const txId = comoConflicto(() =>
     inTransaction(() => {
+      // El aporte primero: el movimiento necesita su id para quedar ligado, y
+      // esa liga es la que saca la partida del gasto del mes (D6).
+      let entryId: number | null = null
+      if (row.investment_id) {
+        const entry = db
+          .prepare(
+            `INSERT INTO investment_entries (investment_id, type, amount_cents, date, note)
+             VALUES (?, 'aporte', ?, ?, ?)`,
+          )
+          .run(row.investment_id, amountCents, fechaMov, nota)
+        entryId = Number(entry.lastInsertRowid)
+      }
       const result = db
         .prepare(
           `INSERT INTO transactions
-            (profile_id, account_id, type, amount_cents, date, category_id, note, transfer_account_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            (profile_id, account_id, type, amount_cents, date, category_id, note,
+             transfer_account_id, investment_entry_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           profileId,
           accountId,
           tipo,
           amountCents,
-          ajustes.date ?? fecha,
+          fechaMov,
           categoryId,
-          ajustes.note ?? row.note,
+          nota,
           transferAccountId,
+          entryId,
         )
       const nuevo = Number(result.lastInsertRowid)
       setTxTags(nuevo, etiquetas)

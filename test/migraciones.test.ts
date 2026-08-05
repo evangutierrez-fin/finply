@@ -827,6 +827,63 @@ describe('migraciones', () => {
     db.close()
   })
 
+  test('las deudas estrenan comisión en cero y las plantillas no aportan a nada', () => {
+    const db = baseEnVersion(22)
+    db.exec(`
+      INSERT INTO debts (id, profile_id, direction, counterparty, concept, principal_cents,
+        start_date, annual_rate_bp, term_months)
+        VALUES (1, 1, 'por_pagar', 'Banco', 'Auto', 24000000, '2026-02-01', 1350, 48);
+      INSERT INTO transactions (id, profile_id, account_id, type, amount_cents, date, debt_id, debt_role)
+        VALUES (80, 1, 1, 'ingreso', 24000000, '2026-02-01', 1, 'desembolso');
+      INSERT INTO recurrences (id, profile_id, account_id, type, amount_cents, frequency,
+        day_of_month, start_date)
+        VALUES (1, 1, 1, 'gasto', 200000, 'mensual', 5, '2026-01-05');
+    `)
+
+    migrate(db)
+
+    assert.equal((db.prepare('PRAGMA user_version').get() as any).user_version, SCHEMA_VERSION)
+
+    // Lo que falta significa "lo de antes" (D30): una deuda sin comisión debe
+    // lo mismo que ayer y su desembolso vale lo mismo que ayer, que es lo que
+    // hace inofensiva la resta nueva.
+    const deuda = db.prepare('SELECT * FROM debts WHERE id = 1').get() as any
+    assert.equal(deuda.origination_fee_cents, 0)
+    assert.equal(deuda.principal_cents, 24000000)
+    const desembolso = db.prepare('SELECT * FROM transactions WHERE id = 80').get() as any
+    assert.equal(desembolso.amount_cents, 24000000)
+
+    // Y ninguna plantilla vieja estrena inversión: sigue siendo un gasto.
+    const plantilla = db.prepare('SELECT * FROM recurrences WHERE id = 1').get() as any
+    assert.equal(plantilla.investment_id, null)
+    assert.equal(plantilla.amount_cents, 200000)
+    assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0)
+    db.close()
+  })
+
+  test('borrar la inversión suelta la plantilla en vez de llevársela', () => {
+    const db = baseEnVersion(22)
+    migrate(db)
+    db.exec(`
+      INSERT INTO investments (id, profile_id, name, kind) VALUES (1, 1, 'Fondo', 'fondo');
+      INSERT INTO recurrences (id, profile_id, account_id, type, amount_cents, frequency,
+        day_of_month, start_date, investment_id)
+        VALUES (1, 1, 1, 'gasto', 200000, 'mensual', 5, '2026-01-05', 1);
+      INSERT INTO recurrence_runs (id, recurrence_id, period, status)
+        VALUES (1, 1, '2026-01', 'asentado');
+    `)
+
+    // `ON DELETE SET NULL`: la plantilla y su bitácora de periodos ya resueltos
+    // sobreviven. Un CASCADE aquí borraría historia por cerrar una inversión.
+    db.exec('DELETE FROM investments WHERE id = 1')
+    const plantilla = db.prepare('SELECT * FROM recurrences WHERE id = 1').get() as any
+    assert.ok(plantilla, 'la plantilla sigue existiendo')
+    assert.equal(plantilla.investment_id, null)
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM recurrence_runs').get() as any).n, 1)
+    assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0)
+    db.close()
+  })
+
   test('una base de una versión más nueva no se toca', () => {
     const db = baseVieja()
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`)

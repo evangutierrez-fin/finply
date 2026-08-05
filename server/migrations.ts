@@ -1330,6 +1330,50 @@ export const MIGRATIONS: Migration[] = [
       `)
     },
   },
+  {
+    id: 23,
+    name: 'comisión de apertura y aporte recurrente a una inversión',
+    up: (db) => {
+      // **D30 resuelta: la comisión es una columna, no un movimiento.** A
+      // diferencia del enganche —que sale de tu bolsillo el día que firmas—,
+      // la comisión de apertura se descuenta de lo que te depositan: debes
+      // $240,000 y te llegan $235,200. Ese dinero nunca estuvo en tu cuenta,
+      // así que asentarle un movimiento propio lo haría pasar dos veces por el
+      // libro.
+      //
+      // Por eso no hace falta un `debt_role` nuevo, que habría exigido
+      // reconstruir `transactions` entera —26 columnas, 11 índices, siete
+      // tablas hijas y una liga a sí misma— para ensanchar un CHECK.
+      //
+      // El desembolso pasa a asentar `principal − comisión`, y al corregirlo
+      // el principal vuelve a ser `monto + comisión`: la resta y la suma son
+      // la misma igualdad leída por sus dos lados. Con la comisión en cero
+      // —todas las deudas que ya existen— las dos se cancelan y el
+      // comportamiento es exactamente el de ayer.
+      if (!hasColumn(db, 'debts', 'origination_fee_cents')) {
+        db.exec(
+          `ALTER TABLE debts ADD COLUMN origination_fee_cents INTEGER NOT NULL DEFAULT 0`,
+        )
+      }
+
+      // Una plantilla puede aportar a una inversión. Es la misma plantilla de
+      // siempre —propone y espera (R4)—; al asentarla, además del movimiento
+      // se registra el aporte y los dos quedan ligados por
+      // `transactions.investment_entry_id`, que es lo que hace que D6 lo saque
+      // del gasto del mes: pasar dinero de tu cuenta a tu inversión no es
+      // gastar.
+      //
+      // `ON DELETE SET NULL` y no CASCADE: borrar la inversión no puede
+      // llevarse la plantilla —ni su bitácora de periodos ya asentados— por
+      // delante. Se queda como una plantilla normal, que es lo que era.
+      if (!hasColumn(db, 'recurrences', 'investment_id')) {
+        db.exec(
+          `ALTER TABLE recurrences ADD COLUMN investment_id INTEGER
+             REFERENCES investments(id) ON DELETE SET NULL`,
+        )
+      }
+    },
+  },
 ]
 
 /** Versión de esquema que espera este código. */

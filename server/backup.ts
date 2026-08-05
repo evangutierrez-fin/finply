@@ -55,6 +55,9 @@ export const TABLES = [
   // y antes de los movimientos, como todo lo demás.
   'tx_templates',
   'import_batches',
+  // Una plantilla puede aportar a una inversión (Fase 24), que ya venía
+  // arriba: la liga nueva no movió a nadie de lugar, pero es la tercera vez
+  // que una columna nueva podía haberlo hecho.
   'recurrences',
   'recurrence_tags',
   // Las compras a meses van antes que los movimientos: el cargo que las ancla

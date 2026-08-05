@@ -474,11 +474,14 @@ router.patch('/:id', (req, res) => {
         existing.debt_id,
       )
     } else if (existing.debt_id) {
-      db.prepare('UPDATE debts SET principal_cents = ?, start_date = ? WHERE id = ?').run(
-        input.amountCents,
-        input.date,
-        existing.debt_id,
-      )
+      // El desembolso vale `principal − comisión` (D30), así que el principal
+      // vuelve a ser `monto + comisión`: la resta que asentó el movimiento y
+      // la suma que lo lee son la misma igualdad por sus dos lados. Sin
+      // comisión —todas las deudas de antes— esto es lo de siempre.
+      db.prepare(
+        `UPDATE debts SET principal_cents = ? + origination_fee_cents, start_date = ?
+         WHERE id = ?`,
+      ).run(input.amountCents, input.date, existing.debt_id)
       refreshDebtStatus(existing.debt_id)
     }
     // Cambiar el cargo de una compra a meses rehace su calendario: si no, las

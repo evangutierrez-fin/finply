@@ -358,6 +358,12 @@ export interface Debt {
   termMonths: number | null
   /** Lo que se puso de contado al contratar. No es principal. */
   downPaymentCents: number
+  /**
+   * Comisión de apertura: la debes, pero nunca te la depositaron (D30). El
+   * desembolso asienta `principal − comisión`, que es lo que de verdad llegó
+   * a la cuenta.
+   */
+  originationFeeCents: number
   /** De lo abonado, cuánto se fue en intereses. */
   interestPaidCents: number
   /** De lo abonado, cuánto bajó el principal. */
@@ -386,6 +392,48 @@ export interface Amortizacion {
   totalPagadoCents: number
   totalInteresCents: number
   filas: FilaAmortizacion[]
+  /** Lo que te depositaron: principal menos la comisión de apertura. */
+  recibidoCents: number
+  /**
+   * La anual **efectiva** que anula lo recibido contra lo que vas a pagar, en
+   * puntos base. Con comisión, sube; sin ella sigue siendo más alta que la del
+   * contrato, porque la nominal no capitaliza. `null` si no se puede afirmar.
+   */
+  tasaEfectivaBp: number | null
+}
+
+// ── Estrategia de deuda: bola de nieve contra avalancha ───────────────────
+
+export type OrdenEstrategia = 'bola_de_nieve' | 'avalancha'
+
+export interface PlanEstrategia {
+  orden: OrdenEstrategia
+  /** Meses hasta no deber nada. `null` si con ese dinero esto no termina. */
+  meses: number | null
+  totalPagadoCents: number
+  totalInteresCents: number
+  /**
+   * En el orden en que se **atacan**. No siempre es el orden en que terminan:
+   * una barata al final de la fila puede acabarse antes por su propia cuota.
+   */
+  deudas: { id: number; nombre: string; mes: number | null; interesCents: number; pagadoCents: number }[]
+  /** Saldo total al cierre de cada mes. El primero es el de hoy. */
+  saldos: number[]
+  nuncaTermina: boolean
+}
+
+/** Los dos métodos sobre las mismas deudas y el mismo dinero extra. */
+export interface ComparacionEstrategia {
+  extraMensualCents: number
+  saldoTotalCents: number
+  /** Lo que ya pagas al mes en cuotas, sin contar el extra. */
+  cuotasCents: number
+  deudas: { id: number; nombre: string; saldoCents: number; annualRateBp: number; pagoMensualCents: number }[]
+  bolaDeNieve: PlanEstrategia
+  avalancha: PlanEstrategia
+  /** Lo que la avalancha ahorra frente a la bola de nieve. `null` si alguna no termina. */
+  interesAhorradoCents: number | null
+  mesesAhorrados: number | null
 }
 
 // ── Tarjetas de crédito y meses sin intereses ─────────────────────────────
@@ -583,6 +631,12 @@ export interface Recurrencia {
   startDate: string
   endDate: string | null
   archived: boolean
+  /**
+   * Inversión a la que aporta esta plantilla. Al asentar se registra también
+   * el aporte y los dos quedan ligados, así que D6 lo saca del gasto del mes.
+   */
+  investmentId: number | null
+  investmentName: string | null
   tags: { id: number; name: string }[]
   /** Cómo se lee la periodicidad, ya en español. */
   descripcion: string
@@ -612,6 +666,12 @@ export interface Propuesta {
   note: string
   tags: { id: number; name: string }[]
   descripcion: string
+  /**
+   * Inversión a la que aportaría. Sale de la cuenta, pero **no es gasto**
+   * (D6), y por eso la bandeja lo cuenta aparte de los gastos.
+   */
+  investmentId: number | null
+  investmentName: string | null
   /** Días de atraso respecto a hoy. Cero el mismo día. */
   atraso: number
 }
@@ -821,6 +881,12 @@ export interface Investment {
   retiradoCents: number
   /** Valor de hoy más lo retirado, menos lo aportado. No depende del piso. */
   gananciaCents: number
+  /** Lo que costó lo que todavía tienes, con el costo consumido a prorrata (D31). */
+  costoCents: number
+  /** De la ganancia, la que ya cobraste al retirar. */
+  gananciaRealizadaCents: number
+  /** De la ganancia, la que sigue en papel. Las dos suman `gananciaCents`. */
+  gananciaEnPapelCents: number
   valueCents: number
   /** Unidades en mano ×10⁸. Cero si nunca se registraron. */
   unitsE8: number

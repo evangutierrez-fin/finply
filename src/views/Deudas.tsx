@@ -2,12 +2,22 @@ import { useState } from 'react'
 import { api } from '../api.ts'
 import { useApp } from '../context.ts'
 import { useFetch } from '../hooks.ts'
-import { fmtDate, fmtDateAnio, fmtMoney, fmtTasa, isPastDue, todayISO } from '../format.ts'
+import { fmtDate, fmtDateAnio, fmtMoney, fmtTasa, isPastDue, parseAmount, todayISO } from '../format.ts'
 import { tablaAmortizacion } from '../../shared/credito.ts'
+import { conAbonoExtra } from '../../shared/estrategia.ts'
 import { Money } from '../components/Money.tsx'
 import { DebtModal } from '../components/DebtModal.tsx'
 import { AbonoModal } from '../components/AbonoModal.tsx'
-import type { Debt } from '../../shared/types.ts'
+import type { Debt, PlanEstrategia } from '../../shared/types.ts'
+
+/** "3 años y 4 meses" se lee; "40 meses" hay que dividirlo con la cabeza. */
+function enMeses(meses: number): string {
+  if (meses < 12) return `${meses} ${meses === 1 ? 'mes' : 'meses'}`
+  const anios = Math.floor(meses / 12)
+  const resto = meses % 12
+  const a = `${anios} ${anios === 1 ? 'año' : 'años'}`
+  return resto === 0 ? a : `${a} y ${resto} ${resto === 1 ? 'mes' : 'meses'}`
+}
 
 /** El plan de pagos, tal como lo calcula el servidor. */
 function TablaAmortizacion({ debt }: { debt: Debt }) {
@@ -57,6 +67,85 @@ function TablaAmortizacion({ debt }: { debt: Debt }) {
         Es el plan sobre el monto original desde la fecha de inicio. Tus abonos reales van por
         su cuenta, arriba.
       </p>
+      {data.tasaEfectivaBp !== null && (
+        <p className="amort-nota">
+          Recibiste <strong className="cifra-chica">{fmtMoney(data.recibidoCents)}</strong> y vas a
+          pagar <strong className="cifra-chica">{fmtMoney(data.totalPagadoCents)}</strong>: eso es
+          una tasa efectiva de{' '}
+          <strong className="cifra-chica">{fmtTasa(data.tasaEfectivaBp)}</strong> anual.
+          {debt.originationFeeCents > 0 ? (
+            <> La comisión de {fmtMoney(debt.originationFeeCents)} no aparece en la tasa del contrato y sí la sube.</>
+          ) : (
+            <> Sale arriba de la del contrato porque la nominal no capitaliza y esta sí.</>
+          )}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * "Si abono $X extra cada mes, ¿cuánto me ahorro?" — sobre el saldo de hoy y
+ * con la cuota del plan.
+ *
+ * Se calcula **aquí mismo**: `shared/estrategia.ts` es puro y lo usan las dos
+ * mitades, así que mover el deslizador no cuesta una petición. Es lo mismo que
+ * ya hace la previa del pago mensual.
+ */
+function AbonoExtra({ debt, pagoMensualCents }: { debt: Debt; pagoMensualCents: number }) {
+  const [extra, setExtra] = useState('')
+  const extraCents = extra.trim() === '' ? 0 : parseAmount(extra)
+  const plan =
+    extraCents !== null && extraCents > 0
+      ? conAbonoExtra({
+          saldoCents: debt.balanceCents,
+          annualRateBp: debt.annualRateBp,
+          pagoMensualCents,
+          extraCents,
+        })
+      : null
+
+  return (
+    <div className="extra-caja">
+      <label className="campo">
+        <span className="campo-label">Si abono de más cada mes</span>
+        <div className="monto-wrap">
+          <span className="monto-signo" aria-hidden="true">$</span>
+          <input
+            className="campo-input"
+            inputMode="decimal"
+            placeholder="0.00"
+            value={extra}
+            onChange={(e) => setExtra(e.target.value)}
+          />
+        </div>
+      </label>
+      {extra.trim() !== '' && extraCents === null && (
+        <p className="amort-nota">Ese monto no se entiende.</p>
+      )}
+      {plan && (
+        <p className="amort-nota">
+          {plan.base.meses === null ? (
+            <>
+              Con la cuota de {fmtMoney(pagoMensualCents)} esta deuda no se acaba: no alcanza ni
+              para el interés del mes.
+            </>
+          ) : plan.con.meses === null ? (
+            <>Ni con el abono extra alcanza para el interés del mes.</>
+          ) : (
+            <>
+              Terminas en <strong className="cifra-chica">{enMeses(plan.con.meses)}</strong> en vez
+              de {enMeses(plan.base.meses)} —{' '}
+              <strong className="cifra-chica">{enMeses(plan.mesesAhorrados ?? 0)}</strong> menos — y
+              te ahorras{' '}
+              <strong className="cifra-chica">
+                {fmtMoney(plan.interesAhorradoCents ?? 0)}
+              </strong>{' '}
+              de intereses. Supone que abonas ese extra todos los meses hasta liquidarla.
+            </>
+          )}
+        </p>
+      )}
     </div>
   )
 }
@@ -164,6 +253,17 @@ function DebtCard({ debt, index }: { debt: Debt; index: number }) {
         )}
       </p>
 
+      {debt.originationFeeCents > 0 && (
+        <p className="deuda-detalle">
+          Comisión de apertura <Money cents={debt.originationFeeCents} className="cifra-chica" />
+          {' · '}te depositaron{' '}
+          <strong className="cifra-chica">
+            {fmtMoney(debt.principalCents - debt.originationFeeCents)}
+          </strong>{' '}
+          de los {fmtMoney(debt.principalCents)} que debes
+        </p>
+      )}
+
       {(debt.downPaymentCents > 0 || proximo) && (
         <p className="deuda-detalle">
           {debt.downPaymentCents > 0 && (
@@ -247,10 +347,183 @@ function DebtCard({ debt, index }: { debt: Debt; index: number }) {
         </ul>
       )}
 
-      {showPlan && plan && <TablaAmortizacion debt={debt} />}
+      {showPlan && plan && (
+        <>
+          <TablaAmortizacion debt={debt} />
+          {debt.status === 'abierta' && debt.direction === 'por_pagar' && (
+            <AbonoExtra debt={debt} pagoMensualCents={plan.pagoMensualCents} />
+          )}
+        </>
+      )}
 
       {abono && <AbonoModal debt={debt} onClose={() => setAbono(false)} onSaved={bump} />}
     </article>
+  )
+}
+
+/** Una de las dos columnas de la comparación. */
+function ColumnaEstrategia({
+  plan,
+  titulo,
+  explica,
+  gana,
+}: {
+  plan: PlanEstrategia
+  titulo: string
+  explica: string
+  gana: boolean
+}) {
+  return (
+    <div className={`estrategia-col${gana ? ' estrategia-gana' : ''}`}>
+      <h3 className="rotulo">
+        {titulo}
+        {gana && <span className="chip"> menos intereses</span>}
+      </h3>
+      <p className="estrategia-explica">{explica}</p>
+      {plan.nuncaTermina || plan.meses === null ? (
+        <p className="estrategia-cifra">
+          Con ese dinero no se acaba: no alcanza ni para los intereses del mes.
+        </p>
+      ) : (
+        <>
+          <p className="estrategia-cifra">
+            Libre en <strong>{enMeses(plan.meses)}</strong>
+          </p>
+          <p className="deuda-cifras">
+            Intereses: <Money cents={plan.totalInteresCents} className="cifra-chica" /> · pagas{' '}
+            <Money cents={plan.totalPagadoCents} className="cifra-chica" /> en total
+          </p>
+          {/* El orden es el de **ataque**, que es el plan. Los meses pueden no
+              ir en orden, y no es un defecto: una deuda barata al final de la
+              fila se acaba sola con su cuota mientras el sobrante ataca a
+              otra. Por eso el encabezado dice cuál de las dos cosas ordena. */}
+          <p className="estrategia-orden-titulo">En este orden les pegas · termina</p>
+          <ol className="estrategia-orden">
+            {plan.deudas.map((d) => (
+              <li key={d.id}>
+                <span className="estrategia-nombre">{d.nombre}</span>
+                <span className="cifra-chica">
+                  {d.mes === null ? 'sigue viva' : `mes ${d.mes}`}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Bola de nieve contra avalancha, sobre las mismas deudas y el mismo dinero.
+ *
+ * Se enseñan **las dos** y la diferencia entre ellas. Cuál conviene no lo dice
+ * Finply (R9): la avalancha casi siempre cuesta menos y la bola de nieve casi
+ * siempre se siente mejor, porque liquidas una deuda pronto. Esa es una
+ * decisión del usuario y aquí solo está la aritmética.
+ */
+function Estrategia({ profileId }: { profileId: number }) {
+  const [extra, setExtra] = useState('')
+  const extraCents = extra.trim() === '' ? 0 : (parseAmount(extra) ?? 0)
+  const { data, error } = useFetch(
+    () => api.debts.estrategia(profileId, extraCents),
+    [profileId, extraCents],
+  )
+
+  if (error) return <p className="aviso" role="alert">{error}</p>
+  if (!data || data.deudas.length < 2) return null
+
+  const ahorro = data.interesAhorradoCents
+  // Cuándo cae la primera deuda por cada ruta. Es el argumento entero de la
+  // bola de nieve, así que no se afirma sin comprobarlo: cuando la más chica
+  // ya se acababa sola con su cuota, atacarla primero no adelanta nada.
+  const primera = (plan: PlanEstrategia) => {
+    const meses = plan.deudas.map((d) => d.mes).filter((m): m is number => m !== null && m > 0)
+    return meses.length > 0 ? Math.min(...meses) : null
+  }
+  const primeraNieve = primera(data.bolaDeNieve)
+  const primeraAvalancha = primera(data.avalancha)
+  const tachaAntes =
+    primeraNieve !== null && primeraAvalancha !== null && primeraNieve < primeraAvalancha
+
+  return (
+    <section className="hoja estrategia">
+      <header className="deudas-col-head">
+        <h2 className="rotulo">Con qué orden las pagas</h2>
+        <span className="cifra-chica">
+          {data.deudas.length} deudas · {fmtMoney(data.saldoTotalCents)}
+        </span>
+      </header>
+      <p className="estrategia-intro">
+        Ya pagas <strong className="cifra-chica">{fmtMoney(data.cuotasCents)}</strong> al mes en
+        cuotas. Las dos rutas usan ese mismo dinero y, cuando una deuda se acaba, su cuota pasa a
+        la siguiente. Lo único que cambia es a quién le pegas primero.
+      </p>
+      <label className="campo estrategia-extra">
+        <span className="campo-label">Y si además apartas cada mes</span>
+        <div className="monto-wrap">
+          <span className="monto-signo" aria-hidden="true">$</span>
+          <input
+            className="campo-input"
+            inputMode="decimal"
+            placeholder="0.00"
+            value={extra}
+            onChange={(e) => setExtra(e.target.value)}
+          />
+        </div>
+      </label>
+      <div className="estrategia-cols">
+        <ColumnaEstrategia
+          plan={data.bolaDeNieve}
+          titulo="Bola de nieve"
+          explica="Primero la de saldo más chico. Tachas una deuda pronto, y eso se siente."
+          gana={ahorro !== null && ahorro < 0}
+        />
+        <ColumnaEstrategia
+          plan={data.avalancha}
+          titulo="Avalancha"
+          explica="Primero la de tasa más alta. Es la que más cuesta tener viva."
+          gana={ahorro !== null && ahorro > 0}
+        />
+      </div>
+      {ahorro !== null && (
+        <p className="estrategia-veredicto">
+          {ahorro === 0 ? (
+            <>
+              Las dos cuestan lo mismo con estas deudas. Elige la que vayas a sostener: la que se
+              sigue es la que sirve.
+            </>
+          ) : ahorro > 0 ? (
+            <>
+              La avalancha te ahorra <strong className="cifra-chica">{fmtMoney(ahorro)}</strong> de
+              intereses
+              {data.mesesAhorrados !== null && data.mesesAhorrados > 0 && (
+                <> y {enMeses(data.mesesAhorrados)}</>
+              )}
+              .{' '}
+              {tachaAntes ? (
+                <>
+                  La bola de nieve tacha la primera deuda en el mes {primeraNieve} en vez del{' '}
+                  {primeraAvalancha}: es lo que compras con esa diferencia.
+                </>
+              ) : (
+                <>
+                  Y aquí ni siquiera compras nada a cambio: con estas deudas la primera cae en el
+                  mismo mes por las dos rutas.
+                </>
+              )}{' '}
+              Los dos números son tuyos; la decisión también.
+            </>
+          ) : (
+            <>
+              Con estas deudas la bola de nieve sale{' '}
+              <strong className="cifra-chica">{fmtMoney(-ahorro)}</strong> más barata
+              {tachaAntes && <>, y además tacha la primera deuda en el mes {primeraNieve}</>}.
+            </>
+          )}
+        </p>
+      )}
+    </section>
   )
 }
 
@@ -288,6 +561,8 @@ export function Deudas() {
           </button>
         </div>
       ) : (
+        <>
+        <Estrategia profileId={profile.id} />
         <div className="deudas-cols">
           <section>
             <header className="deudas-col-head">
@@ -310,6 +585,7 @@ export function Deudas() {
             ))}
           </section>
         </div>
+        </>
       )}
 
       {creating && <DebtModal onClose={() => setCreating(false)} onSaved={bump} />}

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { Account, Category, Frecuencia, Recurrencia, Tag, TxType } from '../../shared/types.ts'
+import type {
+  Account, Category, Frecuencia, Investment, Recurrencia, Tag, TxType,
+} from '../../shared/types.ts'
 import { api } from '../api.ts'
 import { fmtDateAnio, fmtMoney, parseAmount, todayISO } from '../format.ts'
 import { ocurrencias } from '../../shared/recurrencias.ts'
@@ -43,6 +45,8 @@ export function RecurrenciaModal({
   const [weekday, setWeekday] = useState(recurrencia?.weekday ?? 1)
   const [startDate, setStartDate] = useState(recurrencia?.startDate ?? todayISO())
   const [endDate, setEndDate] = useState(recurrencia?.endDate ?? '')
+  const [investments, setInvestments] = useState<Investment[]>([])
+  const [investmentId, setInvestmentId] = useState(recurrencia?.investmentId ?? 0)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
@@ -51,11 +55,13 @@ export function RecurrenciaModal({
       api.accounts.list(profile.id),
       api.categories.list(profile.id),
       api.tags.list(profile.id),
+      api.investments.list(profile.id),
     ]).then(
-      ([accs, cats, tgs]) => {
+      ([accs, cats, tgs, invs]) => {
         setAccounts(accs)
         setCategories(cats)
         setTags(tgs)
+        setInvestments(invs.filter((i) => !i.archived || i.id === recurrencia?.investmentId))
         const activas = accs.filter((a) => !a.archived)
         if (!recurrencia && activas.length > 0) setAccountId((id) => id || activas[0]!.id)
       },
@@ -115,6 +121,7 @@ export function RecurrenciaModal({
         note,
         ...regla,
         tagIds,
+        investmentId: type === 'gasto' ? investmentId || null : null,
         archived: recurrencia?.archived ?? false,
       }
       if (recurrencia) await api.recurrencias.update(recurrencia.id, draft)
@@ -222,6 +229,35 @@ export function RecurrenciaModal({
             onChange={(e) => setNote(e.target.value)}
           />
         </label>
+
+        {/* Aportar a una inversión es un gasto de la cuenta hacia ella, así que
+            solo aparece en un gasto. Al asentar se registra también el aporte y
+            los dos quedan ligados. */}
+        {type === 'gasto' && investments.length > 0 && (
+          <>
+            <label className="campo">
+              <span className="campo-label">¿Es un aporte a una inversión? (opcional)</span>
+              <select
+                className="campo-input"
+                value={investmentId}
+                onChange={(e) => setInvestmentId(Number(e.target.value))}
+              >
+                <option value={0}>No, es un gasto normal</option>
+                {investments.map((i) => (
+                  <option key={i.id} value={i.id}>{i.name}</option>
+                ))}
+              </select>
+            </label>
+            {investmentId > 0 && (
+              <p className="forma-nota">
+                Al confirmar cada propuesta se registra además el aporte, y la partida queda ligada
+                a él: no cuenta como gasto del mes, porque pasar dinero de tu cuenta a tu inversión
+                no es gastarlo. Si anulas el movimiento, el aporte se va con él y el periodo vuelve
+                a la bandeja.
+              </p>
+            )}
+          </>
+        )}
 
         <Cadencia valores={cadencia} onChange={cambiarCadencia} />
 

@@ -625,6 +625,10 @@ input, select { font: inherit; color: inherit; }
   color: var(--tinta-3);
   text-align: right;
 }
+/* El reparto de la cartera (Fase 24) usa las mismas barras, pero su parte va
+   con un decimal —"46.1 %" no cabe en los 38px del gasto por categoría— y su
+   nombre es corto: cabe de sobra en menos. */
+.reparto-bars .cat-row { grid-template-columns: 84px 1fr auto 52px; }
 .cat-riel {
   height: 8px;
   background: var(--papel);
@@ -1882,6 +1886,75 @@ select.campo-input { cursor: pointer; }
   color: var(--tinta);
 }
 .amort-nota { font-size: 12px; color: var(--tinta-2); padding: 10px 12px; }
+.amort-nota strong { color: var(--tinta); }
+
+/* "Si abono de más": el campo y su respuesta, pegados a la tabla del plan. */
+.extra-caja {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px dashed var(--regla);
+  border-radius: var(--radio);
+}
+.extra-caja .campo { margin: 0; }
+.extra-caja .amort-nota { padding: 10px 0 0; }
+
+/* Bola de nieve contra avalancha. Las dos columnas pesan lo mismo a propósito:
+   la que gana se marca, pero ninguna se ve como "la recomendada" (R9). */
+.estrategia { margin-bottom: 24px; }
+.estrategia-intro,
+.estrategia-explica,
+.estrategia-veredicto {
+  font-size: 12.5px;
+  color: var(--tinta-2);
+  line-height: 1.7;
+}
+.estrategia-intro { margin: 8px 0 12px; }
+.estrategia-intro strong,
+.estrategia-veredicto strong { color: var(--tinta); }
+.estrategia-extra { max-width: 220px; margin-bottom: 16px; }
+.estrategia-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+.estrategia-col {
+  border: 1px solid var(--regla);
+  border-radius: var(--radio);
+  padding: 14px;
+}
+.estrategia-gana { border-color: var(--acento); }
+.estrategia-col .rotulo { display: flex; align-items: center; gap: 8px; }
+.estrategia-explica { margin: 6px 0 10px; min-height: 2.6em; }
+.estrategia-cifra { font-size: 14px; margin-bottom: 4px; }
+.estrategia-cifra strong { font-family: var(--f-mono); color: var(--tinta); }
+.estrategia-orden-titulo {
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--tinta-3);
+  margin: 14px 0 0;
+}
+.estrategia-orden {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  border-top: 1px solid var(--regla);
+}
+.estrategia-orden li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  font-size: 12.5px;
+  border-bottom: 1px solid var(--regla);
+}
+.estrategia-nombre { color: var(--tinta-2); }
+.estrategia-veredicto {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--regla);
+}
 
 @media (max-width: 960px) {
   .lomo {
@@ -1911,6 +1984,8 @@ select.campo-input { cursor: pointer; }
   .pagina { margin-left: 0; padding: 22px 18px 80px; }
   .app::before { display: none; }
   .dos-columnas, .dos-columnas-desigual, .deudas-cols { grid-template-columns: 1fr; }
+  .estrategia-cols { grid-template-columns: 1fr; }
+  .estrategia-explica { min-height: 0; }
   .hero { flex-direction: column; align-items: stretch; }
   .campos-2, .campos-3 { grid-template-columns: 1fr; }
   .tarjetas-grid { grid-template-columns: 1fr; }

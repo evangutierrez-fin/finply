@@ -359,6 +359,15 @@ export const debtInput = z.object({
   accountId: z.number().int().positive().nullish(),
   /** Enganche: lo que se puso de contado al contratar. No es principal. */
   downPaymentCents: z.number().int().nonnegative('El enganche no puede ser negativo').default(0),
+  /**
+   * Comisión de apertura (D30). Se descuenta de lo que te depositan, así que
+   * no puede pasar del principal: nadie firma un crédito para recibir cero.
+   */
+  originationFeeCents: z
+    .number()
+    .int()
+    .nonnegative('La comisión no puede ser negativa')
+    .default(0),
   /** Cuenta de la que sale (o a la que entra) el enganche. */
   downPaymentAccountId: z.number().int().positive().nullish(),
 })
@@ -435,8 +444,19 @@ export const recurrenceInput = z
     endDate: isoDate.nullish(),
     tagIds: z.array(z.number().int().positive()).max(20).optional(),
     archived: z.boolean().default(false),
+    /**
+     * Inversión a la que aporta la plantilla. Solo tiene sentido en un gasto:
+     * aportar es dinero que sale de la cuenta hacia la inversión.
+     */
+    investmentId: z.number().int().positive().nullish(),
   })
   .superRefine((r, ctx) => {
+    if (r.investmentId && r.type !== 'gasto') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Solo un gasto puede aportar a una inversión',
+      })
+    }
     if (r.type === 'transferencia') {
       if (!r.transferAccountId) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Elige la cuenta destino' })

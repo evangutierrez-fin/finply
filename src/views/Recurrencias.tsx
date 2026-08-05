@@ -41,6 +41,9 @@ function FilaPropuesta({
         <p className="propuesta-meta">
           {propuesta.accountName}
           {propuesta.categoryName && ` · ${propuesta.categoryName}`}
+          {/* Se dice a dónde va: el dinero sale de la cuenta y no se pierde,
+              cambia de bolsillo. Es lo que el total de arriba cuenta aparte. */}
+          {propuesta.investmentName && ` · aporte a ${propuesta.investmentName}`}
           {propuesta.tags.length > 0 && ` · ${propuesta.tags.map((t) => t.name).join(' · ')}`}
         </p>
       </div>
@@ -196,8 +199,15 @@ export function Recurrencias() {
   }
 
   const total = bandeja?.total ?? 0
+  // Un aporte a una inversión sale de la cuenta pero **no es gasto** (D6):
+  // sumarlo aquí daría un total que ni el Resumen ni los reportes confirman
+  // nunca. Va contado aparte, con su nombre.
   const sumaPendiente = (bandeja?.items ?? []).reduce(
-    (s, p) => s + (p.type === 'gasto' ? p.amountCents : 0),
+    (s, p) => s + (p.type === 'gasto' && !p.investmentId ? p.amountCents : 0),
+    0,
+  )
+  const sumaAporte = (bandeja?.items ?? []).reduce(
+    (s, p) => s + (p.investmentId ? p.amountCents : 0),
     0,
   )
 
@@ -233,6 +243,7 @@ export function Recurrencias() {
                 <span className="rec-bandeja-total">
                   {total} {total === 1 ? 'partida' : 'partidas'}
                   {sumaPendiente > 0 && <> · {fmtMoney(sumaPendiente)} de gasto</>}
+                  {sumaAporte > 0 && <> · {fmtMoney(sumaAporte)} a inversión</>}
                 </span>
               )}
             </div>
