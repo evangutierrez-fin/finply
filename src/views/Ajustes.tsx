@@ -75,7 +75,39 @@ function AjustesDelPerfil() {
       <CamposPropios />
       <PlantillasTx />
       <Configuracion />
+      <TusDatos />
     </>
+  )
+}
+
+/**
+ * Bajarse los datos, que es lo contrario del respaldo de la otra pestaña.
+ *
+ * Va aquí y no allá porque **es de este libro**: el respaldo se lleva todos
+ * los perfiles y sirve para volver a entrar a Finply; esto sirve para salir,
+ * y por eso sale en hojas que abre cualquiera en vez de en el JSON que solo
+ * Finply sabe restaurar.
+ */
+function TusDatos() {
+  const { profile } = useApp()
+  return (
+    <section className="hoja ajustes-bloque">
+      <h2 className="hoja-titulo">Llevarte tus datos</h2>
+      <p className="ajustes-texto">
+        Todo lo de <strong>{profile.name}</strong> en un .zip con una hoja de cálculo por tabla:
+        movimientos, cuentas, categorías, deudas, inversiones, facturas y lo demás, más tus
+        recibos como archivos. Se abre en Excel, LibreOffice o Sheets{' '}
+        <strong>sin pasar por Finply</strong>.
+      </p>
+      <a className="btn btn-primario btn-chico" href={api.exportar.libroUrl(profile.id)} download>
+        Descargar mis datos
+      </a>
+      <p className="ajustes-nota">
+        El dinero sale en pesos y las tasas en por ciento, no en la escala interna. Los ids se
+        conservan: son lo que liga una hoja con otra. Para <em>volver a entrar</em> a Finply lo
+        que sirve es el respaldo de <strong>La app</strong>, no esto.
+      </p>
+    </section>
   )
 }
 

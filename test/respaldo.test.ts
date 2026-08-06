@@ -304,4 +304,52 @@ describe('respaldo', () => {
     assert.equal(res.status, 200)
     assert.match(res.body.dbPath, /prueba\.db$/)
   })
+
+  // ── El respaldo que no se podía restaurar ───────────────────────────────
+  //
+  // Hallazgo de la Fase 26. Los recibos viajan en base64 dentro del JSON, así
+  // que un libro con dos docenas de recibos grandes producía un archivo por
+  // encima del tope del cuerpo: Finply exportaba un respaldo y luego se negaba
+  // a restaurarlo, con un 413 en inglés que no decía por qué.
+
+  test('el tope del cuerpo cabe lo que Finply mismo puede generar', async () => {
+    const { LIMITE_CUERPO_BYTES } = await import('../server/app.ts')
+    const { MAX_ADJUNTO_BYTES } = await import('../server/validators.ts')
+    // Un libro con cien recibos del tamaño máximo no es un caso raro, y su
+    // respaldo tiene que poder volver. El 4/3 es lo que engorda el base64.
+    const libroReal = MAX_ADJUNTO_BYTES * 100 * (4 / 3)
+    assert.ok(
+      LIMITE_CUERPO_BYTES >= libroReal,
+      `el tope (${LIMITE_CUERPO_BYTES}) no cabe un libro de cien recibos (${libroReal})`,
+    )
+  })
+
+  test('y si aun así no cabe, lo dice en español y enseña la otra puerta', async () => {
+    // Se prueba la traducción y no la petición: para provocar el 413 de verdad
+    // hay que mandar cientos de megabytes —Node no contesta a un cuerpo
+    // anunciado y no enviado— y eso no cabe en una suite.
+    const { traducirError, LIMITE_CUERPO_BYTES } = await import('../server/app.ts')
+    const grande = Object.assign(new Error('request entity too large'), {
+      type: 'entity.too.large',
+      status: 413,
+    })
+
+    const r = traducirError(grande)
+    assert.equal(r.status, 413)
+    assert.ok(!/entity/.test(r.error), 'el mensaje sigue llegando en inglés')
+    assert.match(r.error, new RegExp(`tope de ${Math.round(LIMITE_CUERPO_BYTES / 1024 / 1024)} MB`))
+    assert.match(r.error, /recibos/)
+    assert.match(r.error, /data\/respaldos\//)
+  })
+
+  test('los demás errores siguen traduciéndose como siempre', async () => {
+    const { traducirError } = await import('../server/app.ts')
+    const roto = Object.assign(new SyntaxError('Unexpected token'), { status: 400 })
+    assert.deepEqual(traducirError(roto), {
+      status: 400,
+      error: 'El cuerpo de la petición no es JSON válido',
+    })
+    // Lo que no se reconoce sigue saliendo como 500 con su mensaje.
+    assert.deepEqual(traducirError(new Error('tronó')), { status: 500, error: 'tronó' })
+  })
 })

@@ -398,6 +398,15 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
 - **Respaldo y restauración** — descarga todo tu libro en un JSON legible y
   vuelve a cargarlo cuando quieras. Además, Finply deja una copia `.db` del día
   en `data/respaldos/` cada vez que arranca y conserva las últimas siete.
+- **Llevarte tus datos** — el respaldo sirve para *volver a entrar*; esto sirve
+  para **salir**. Un `.zip` con una hoja CSV por tabla —movimientos, cuentas,
+  categorías, deudas, inversiones, facturas y lo demás— más tus recibos como
+  archivos de verdad. Se abre en Excel, LibreOffice o Sheets sin pasar por
+  Finply. El dinero sale en pesos y las tasas en por ciento, no en la escala
+  interna con la que Finply cuida los centavos, y **los ids se conservan**:
+  son lo que liga una hoja con otra. Los reportes también se bajan, con las
+  mismas cifras que se ven en pantalla y con todas sus categorías, no solo las
+  diez que caben en una gráfica.
 - **Modo claro / oscuro / auto** — el tema oscuro es una superficie propia
   ("lámpara de banquero"), no una inversión automática de colores.
 - **Tinta propia, con el contraste medido** — además de los cuatro presets,
@@ -475,6 +484,10 @@ Desde **Ajustes** puedes descargar un respaldo completo en JSON o restaurar uno
 anterior; la ruta exacta del archivo también aparece ahí, por si prefieres
 respaldarlo por fuera. `FINPLY_DB=/otra/ruta.db` cambia dónde vive.
 
+Y puedes **irte con todo**: en *Ajustes → Este libro*, "Llevarte tus datos"
+baja el perfil completo en hojas CSV que abre cualquier programa. Que el libro
+sea local no sirve de nada si los datos solo se pueden leer desde aquí.
+
 ## Estructura
 
 ```
@@ -506,13 +519,17 @@ server/          Express + node:sqlite
   taxonomia.ts   jerarquía de categorías (un nivel, D25) y reglas de import
   estrategia.ts  las deudas del perfil corridas por los dos métodos (solo lectura)
   config-perfil.ts   la configuración de un perfil, por nombre y sin sus cifras
+  exportar.ts    el libro de un perfil en hojas CSV y los reportes en CSV, con
+                 la escala de los enteros deshecha (solo lectura)
+  zip.ts         el contenedor .zip, escrito a mano y sin dependencia
   routes/        profiles · accounts · categories · tags · transactions · debts
                  · tarjetas · investments · budgets · goals · notes · summary
                  · reportes · alertas · analisis · precios · simulador
                  · cotizaciones
                  · contrapartes · centros · facturas · facturas-recurrentes
                  · negocio
-                 · recurrencias · calendario · flujo · backup · importaciones
+                 · recurrencias · calendario · flujo · backup · exportar
+                 · importaciones
                  · personalizacion
   seed.ts        datos demo deterministas
 shared/
@@ -609,6 +626,7 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 | `GET /api/summary?profileId&month&hoy` | Resumen del mes + patrimonio, con el cambio contra el cierre del mes pasado y 30 días de saldo por cuenta. Ingreso, gasto y categorías con la regla de D6 y el reparto de las partidas divididas |
 | `GET /api/reportes?profileId&year` | El año: patrimonio mes a mes, ingresos vs gastos, categorías, etiquetas, de dónde vino, tasa de ahorro y mediana |
 | `GET /api/reportes/comparativa?profileId&desde&hasta` | Dos periodos cualesquiera, categoría por categoría. Sin el segundo rango, el bloque anterior del mismo largo |
+| `GET /api/reportes/export.csv?profileId&year` · `GET /comparativa.csv` | Los mismos dos reportes en CSV, hechos por las mismas funciones: el archivo no puede decir otra cifra que la pantalla |
 | `GET/POST /api/recurrencias` · `PATCH/DELETE /:id` | Plantillas de lo que se repite (mensual, quincenal, semanal, anual), con monto fijo o promediado (`amountMode`), ventana de pausa (`pausedFrom`/`pausedUntil`) y tope de ocurrencias (`maxOccurrences`) |
 | `GET /api/recurrencias/pendientes?profileId` | La bandeja por confirmar. **Derivada**: no escribe ni guarda propuestas |
 | `POST /api/recurrencias/:id/asentar` | Crea el movimiento y marca el periodo, en una transacción. 409 si ya se resolvió |
@@ -641,6 +659,7 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 | `POST /api/inventario/movimientos` · `DELETE /movimientos/:id` | Entradas, salidas y ajustes. No mueven dinero |
 | `GET /api/flujo?profileId&dias&hoy` | La caja proyectada día a día: puntos, eventos que la mueven y primer día en rojo |
 | `GET /api/respaldo` · `GET /info` · `POST /restaurar` | Respaldo completo en JSON |
+| `GET /api/exportar/libro.zip?profileId` | Todo un perfil: una hoja CSV por tabla y los recibos como archivos, con la escala de los enteros deshecha |
 
 Reglas de integridad que cuida el backend, todas cubiertas por `npm test`:
 una cuenta con movimientos solo se archiva (no se borra); anular un movimiento
@@ -667,7 +686,9 @@ si esa plantilla aportaba a una inversión, el aporte se va con el movimiento—
 un periodo que cae dentro de una pausa no se puede asentar, porque no es una
 propuesta de esa plantilla; y lo que la bandeja enseña, lo que el calendario
 anuncia y lo que se escribe al confirmar son siempre el mismo monto, también
-cuando sale de un promedio.
+cuando sale de un promedio; y lo que te llevas es todo lo que hay, porque la
+lista de tablas del export y la del respaldo son el mismo conjunto y hay prueba
+de las dos direcciones.
 El libro siempre cuadra.
 
 ## Sistema de diseño
@@ -699,7 +720,6 @@ encontró y lo que **no** cubre.
 
 **Cómo se usa**
 
-- Export completo del perfil, no solo movimientos
 - Móvil/PWA e internacionalización
 
 Las contribuciones son bienvenidas: abre un issue o un PR. `npm test` corre en

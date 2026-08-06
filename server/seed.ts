@@ -875,6 +875,33 @@ inTransaction(() => {
   etiquetarPor(negocio, 'Nómina', tDeducible)
   etiquetarPor(negocio, 'Renta local', tDeducible)
 
+  // ── Recibos ───────────────────────────────────────────────────────────
+  // El adjunto existe desde la Fase 10 y el demo no traía ni uno, así que no
+  // se veía ni en la partida ni en el respaldo. Lo pide sobre todo la Fase 26:
+  // el export saca los recibos como archivos de verdad dentro del .zip, y sin
+  // uno solo esa carpeta no aparecía nunca. Un PNG de un píxel basta —lo que
+  // se enseña es el camino, no la foto— y así el libro demo no engorda.
+  const PIXEL_PNG =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+  const insertAdjunto = db.prepare(
+    `INSERT INTO tx_attachments (tx_id, filename, mime, size_bytes, data_b64)
+     VALUES (?, ?, 'image/png', ?, ?)`,
+  )
+  const adjuntarA = (profileId: number, like: string, nombre: string) => {
+    const fila = db
+      .prepare(
+        'SELECT id FROM transactions WHERE profile_id = ? AND note LIKE ? ORDER BY date DESC LIMIT 1',
+      )
+      .get(profileId, `%${like}%`) as { id: number } | undefined
+    // El tamaño se deduce del base64 igual que en el validador, relleno
+    // incluido: 72 en vez de 70 dejaría al demo mintiendo por dos bytes.
+    const relleno = PIXEL_PNG.endsWith('==') ? 2 : PIXEL_PNG.endsWith('=') ? 1 : 0
+    const bytes = Math.floor((PIXEL_PNG.length * 3) / 4) - relleno
+    if (fila) insertAdjunto.run(fila.id, nombre, bytes, PIXEL_PNG)
+  }
+  adjuntarA(personal, 'Súper', 'ticket-super.png')
+  adjuntarA(negocio, 'Insumos cocina', 'factura-insumos.png')
+
   // ── Metas ─────────────────────────────────────────────────────────────
   const insertGoal = db.prepare(
     'INSERT INTO goals (profile_id, name, target_cents, due_date, note) VALUES (?, ?, ?, ?, ?)',
@@ -1019,7 +1046,8 @@ inTransaction(() => {
       'quince meses de movimientos, tres deudas con tasa y plazo —una con comisión ' +
       'de apertura—, cuatro inversiones (una con retiro y ganancia ya cobrada) y una ' +
       'plantilla que aporta a un fondo, presupuestos, metas, ' +
-      'notas —una atada a su partida y otra a su mes—, campos propios y plantillas, ' +
+      'notas —una atada a su partida y otra a su mes—, un recibo adjunto en cada libro, ' +
+      'campos propios y plantillas, ' +
       'facturas con retención, nota de crédito, anticipo y plantilla, ' +
       'cinco cotizaciones que cubren los cuatro estados y una orden de compra, ' +
       'dos subcategorías de Comida con cinco reglas de import, ' +

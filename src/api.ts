@@ -1093,6 +1093,22 @@ export const api = {
           `&desde=${periodo.desde}&hasta=${periodo.hasta}` +
           (contra ? `&contraDesde=${contra.desde}&contraHasta=${contra.hasta}` : ''),
       ),
+    // Los mismos dos reportes en CSV, hechos por las mismas funciones del
+    // servidor: el archivo no puede decir una cifra distinta de la pantalla.
+    anualCsvUrl: (profileId: number, year: number) =>
+      `/api/reportes/export.csv?profileId=${profileId}&year=${year}`,
+    comparativaCsvUrl: (
+      profileId: number,
+      periodo: { desde: string; hasta: string },
+      contra?: { desde: string; hasta: string },
+    ) =>
+      `/api/reportes/comparativa.csv?profileId=${profileId}` +
+      `&desde=${periodo.desde}&hasta=${periodo.hasta}` +
+      (contra ? `&contraDesde=${contra.desde}&contraHasta=${contra.hasta}` : ''),
+  },
+  /** Sacar los datos de un perfil: una hoja por tabla dentro de un .zip. */
+  exportar: {
+    libroUrl: (profileId: number) => `/api/exportar/libro.zip?profileId=${profileId}`,
   },
   backup: {
     /** El navegador descarga el archivo directo desde esta ruta. */

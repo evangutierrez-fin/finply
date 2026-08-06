@@ -111,6 +111,19 @@ export function Reportes() {
             <span className="vista-mes">{year}</span>
             <button type="button" className="mes-flecha" onClick={() => setYear((y) => y + 1)} aria-label="Año siguiente">›</button>
           </div>
+          {/*
+            El mismo año que se está viendo, en CSV. Lo arma el servidor con la
+            función que llena esta pantalla, así que no puede decir otra cifra;
+            lo único que cambia es que se lleva **todas** las categorías y no
+            las diez que caben en una gráfica.
+          */}
+          <a
+            className="btn btn-fantasma btn-chico no-imprimir"
+            href={api.reportes.anualCsvUrl(profile.id, year)}
+            download
+          >
+            Bajar CSV
+          </a>
           <button type="button" className="btn btn-fantasma btn-chico no-imprimir" onClick={() => window.print()}>
             Imprimir
           </button>
@@ -263,6 +276,15 @@ export function Reportes() {
                     <button type="button" className="mes-flecha" onClick={() => setMes(shiftMonth(mes, 1))} aria-label="Periodo siguiente">›</button>
                   </div>
                 )}
+                {/* Los dos periodos que se estén comparando, con sus fechas y
+                    todas sus categorías: la tabla de abajo enseña diez. */}
+                <a
+                  className="btn btn-fantasma btn-chico"
+                  href={api.reportes.comparativaCsvUrl(profile.id, periodo, contra)}
+                  download
+                >
+                  Bajar CSV
+                </a>
               </div>
             </header>
 
