@@ -714,13 +714,24 @@ donde aparece, que en el tema oscuro es la hoja, no el fondo.
 
 ## Hoja de ruta
 
+**El plan está terminado.** Lo que Finply se propuso construir está construido:
+el libro, los reportes, el crédito y la deuda con su aritmética real, las
+recurrencias, el flujo, los presupuestos, el patrimonio completo, los módulos
+por perfil y de giro, la personalización y la salida de tus datos. De aquí en
+adelante lo que se haga sale del uso, no de una lista.
+
 La **auditoría de las cuentas** ya se hizo: está en
 [AUDITORIA.md](AUDITORIA.md), con lo que se revisó, contra qué, lo que se
 encontró y lo que **no** cubre.
 
-**Cómo se usa**
+**Lo que Finply no hace, y no es una promesa pendiente**
 
-- Móvil/PWA e internacionalización
+- **No se traduce.** Es una app en español: los textos están escritos a mano en
+  cada vista, y el formato de fechas y cifras va con ellos.
+- **No está pensado para pantalla chica.** Las tablas de movimientos,
+  antigüedad de saldos y amortización quieren un escritorio.
+- **No sale a la red.** Nunca, ni para cotizaciones: valuación manual o import
+  CSV de precios. Eso sí es una decisión permanente y no una limitación.
 
 Las contribuciones son bienvenidas: abre un issue o un PR. `npm test` corre en
 cada PR junto con la verificación de tipos y la compilación.
