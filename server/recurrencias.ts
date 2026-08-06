@@ -30,6 +30,7 @@ import { diasEntre, hoyISO, sumarDias } from '../shared/fechas.ts'
 import {
   describirRecurrencia,
   fechaDeOcurrencia,
+  finEfectivo,
   ocurrencias,
   type ReglaRecurrencia,
 } from '../shared/recurrencias.ts'
@@ -57,7 +58,69 @@ export function reglaDe(row: any): ReglaRecurrencia {
     weekday: row.weekday ?? null,
     startDate: row.start_date,
     endDate: row.end_date ?? null,
+    pausadaDesde: row.paused_from ?? null,
+    pausadaHasta: row.paused_until ?? null,
+    maxOcurrencias: row.max_occurrences ?? null,
   }
+}
+
+/**
+ * Cuántas asentadas se promedian cuando la plantilla es de monto variable.
+ *
+ * Tres es lo suficientemente corto para seguir la temporada —el recibo de luz
+ * de verano no se parece al de invierno— y lo suficientemente largo para que un
+ * mes raro no mande. No es una cifra sagrada: es la que se dice en la vista,
+ * para que el número propuesto se pueda reconstruir a mano.
+ */
+export const MUESTRAS_PROMEDIO = 3
+
+/**
+ * El promedio de las últimas asentadas de cada plantilla, en **una sola
+ * consulta** para todas (R11). Sale del movimiento, no de la plantilla: lo que
+ * se promedia es lo que de verdad se pagó, incluidos los ajustes que el usuario
+ * hizo al confirmar.
+ */
+export function promediosDe(ids: number[]): Map<number, { cents: number; muestras: number }> {
+  const mapa = new Map<number, { cents: number; muestras: number }>()
+  if (ids.length === 0) return mapa
+  const filas = db
+    .prepare(
+      `SELECT recurrence_id, CAST(ROUND(AVG(amount_cents)) AS INTEGER) AS cents,
+              COUNT(*) AS muestras
+       FROM (
+         SELECT rr.recurrence_id, t.amount_cents,
+           ROW_NUMBER() OVER (
+             PARTITION BY rr.recurrence_id ORDER BY t.date DESC, t.id DESC
+           ) AS n
+         FROM recurrence_runs rr
+         JOIN transactions t ON t.id = rr.tx_id
+         WHERE rr.recurrence_id IN (${ids.map(() => '?').join(',')})
+           AND rr.status = 'asentado'
+       )
+       WHERE n <= ${MUESTRAS_PROMEDIO}
+       GROUP BY recurrence_id`,
+    )
+    .all(...ids) as { recurrence_id: number; cents: number; muestras: number }[]
+  for (const f of filas) mapa.set(f.recurrence_id, { cents: f.cents, muestras: f.muestras })
+  return mapa
+}
+
+/**
+ * El monto que esta plantilla va a proponer hoy.
+ *
+ * Con monto fijo es el de siempre. Con monto variable es el promedio de lo
+ * asentado — y mientras no haya nada asentado, **el monto de la plantilla**:
+ * el promedio de nada no es cero, es "todavía no sé", y proponer cero sería
+ * pedirle al usuario que corrija un dato inventado.
+ */
+export function montoPropuesto(
+  row: any,
+  promedio?: { cents: number; muestras: number },
+): number {
+  if (row.amount_mode !== 'promedio' || !promedio || promedio.muestras === 0) {
+    return row.amount_cents
+  }
+  return promedio.cents
 }
 
 function mapRecurrencia(row: any): Recurrencia {
@@ -83,6 +146,14 @@ function mapRecurrencia(row: any): Recurrencia {
     archived: row.archived === 1,
     investmentId: row.investment_id ?? null,
     investmentName: row.investment_name ?? null,
+    amountMode: row.amount_mode ?? 'fijo',
+    pausedFrom: row.paused_from ?? null,
+    pausedUntil: row.paused_until ?? null,
+    maxOccurrences: row.max_occurrences ?? null,
+    // Se rellenan en `listar`, que es donde se sabe el historial y el calendario.
+    montoPropuestoCents: row.amount_cents,
+    muestrasPromedio: 0,
+    ultimaFecha: null,
     tags: [],
     descripcion: describirRecurrencia(reglaDe(row)),
     proximaFecha: null,
@@ -148,15 +219,27 @@ export function listar(
 ): Recurrencia[] {
   const rows = filas(profileId)
   const recs = rows.map(mapRecurrencia)
-  // Las alertas del Resumen no enseñan etiquetas, así que no las piden: una
-  // consulta menos por carga, que es de lo que trata R11.
-  if (opciones.etiquetas !== false) adjuntarEtiquetas(recs)
-  const resueltos = resueltosDe(recs.map((r) => r.id))
+  // Las alertas del Resumen no enseñan etiquetas ni montos propuestos, así que
+  // no los piden: dos consultas menos por carga, que es de lo que trata R11.
+  // La misma bandera cubre las dos porque las dos las pide la misma vista.
+  const completo = opciones.etiquetas !== false
+  if (completo) adjuntarEtiquetas(recs)
+  const ids = recs.map((r) => r.id)
+  const resueltos = resueltosDe(ids)
+  const promedios = completo ? promediosDe(ids) : new Map()
   const horizonte = sumarDias(hoy, HORIZONTE_DIAS)
 
   recs.forEach((rec, i) => {
+    const row = rows[i]!
+    const promedio = promedios.get(rec.id)
+    rec.montoPropuestoCents = montoPropuesto(row, promedio)
+    rec.muestrasPromedio = promedio?.muestras ?? 0
+    // Hasta cuándo propone de verdad: con tope de ocurrencias, el día de la
+    // última. Es lo que deja decir "termina el 5 dic 26" en vez de "12 veces",
+    // que no dice cuándo.
+    rec.ultimaFecha = finEfectivo(reglaDe(row))
     if (rec.archived) return
-    const regla = reglaDe(rows[i]!)
+    const regla = reglaDe(row)
     const hechos = resueltos.get(rec.id) ?? new Set<string>()
     rec.pendientes = ocurrencias(regla, { hasta: hoy }).lista.filter(
       (o) => !hechos.has(o.periodo),
@@ -205,12 +288,16 @@ export function bandeja(
   const rows = filas(profileId).filter((r) => r.archived === 0)
   const recs = rows.map(mapRecurrencia)
   adjuntarEtiquetas(recs)
-  const resueltos = resueltosDe(recs.map((r) => r.id))
+  const ids = recs.map((r) => r.id)
+  const resueltos = resueltosDe(ids)
+  const promedios = promediosDe(ids)
 
   const todas: Propuesta[] = []
   let truncado = false
   rows.forEach((row, i) => {
     const rec = recs[i]!
+    const promedio = promedios.get(rec.id)
+    const propuesto = montoPropuesto(row, promedio)
     const hechos = resueltos.get(rec.id) ?? new Set<string>()
     const { lista, truncado: cortado } = ocurrencias(reglaDe(row), { hasta: hoy })
     if (cortado) truncado = true
@@ -225,8 +312,11 @@ export function bandeja(
         type: rec.type,
         // El monto sale de la plantilla **hoy**: una propuesta se deriva, no
         // se guardó nunca, así que si subió la renta la propuesta ya trae el
-        // monto nuevo. Lo ya asentado no se toca.
-        amountCents: rec.amountCents,
+        // monto nuevo. Lo ya asentado no se toca. Con monto variable el "hoy"
+        // incluye el historial: es el promedio de las últimas asentadas.
+        amountCents: propuesto,
+        amountMode: rec.amountMode,
+        muestrasPromedio: promedio?.muestras ?? 0,
         categoryId: rec.categoryId,
         categoryName: rec.categoryName,
         transferAccountId: rec.transferAccountId,
@@ -273,6 +363,13 @@ export interface EntradaRecurrencia {
   archived?: boolean
   /** Inversión a la que aporta. Solo en un gasto. */
   investmentId?: number | null
+  /** De dónde sale el monto que propone: el fijo o el promedio de lo asentado. */
+  amountMode?: 'fijo' | 'promedio'
+  /** Ventana de pausa, inclusiva. Las dos o ninguna. */
+  pausedFrom?: string | null
+  pausedUntil?: string | null
+  /** Termina tras tantas ocurrencias. */
+  maxOccurrences?: number | null
 }
 
 /** Cuentas, categoría, etiquetas e inversión, todas del mismo perfil. */
@@ -288,6 +385,14 @@ function validarReferencias(input: EntradaRecurrencia): void {
     ensureCategory(input.profileId, input.categoryId, input.type)
   }
   if (input.tagIds) ensureTags(input.profileId, input.tagIds)
+  // Una pausa a medias no significa nada, y una al revés se comería el
+  // histórico entero sin decirlo.
+  if ((input.pausedFrom ? 1 : 0) + (input.pausedUntil ? 1 : 0) === 1) {
+    throw httpError(400, 'La pausa necesita sus dos fechas: desde cuándo y hasta cuándo')
+  }
+  if (input.pausedFrom && input.pausedUntil && input.pausedUntil < input.pausedFrom) {
+    throw httpError(400, 'La pausa termina antes de empezar')
+  }
   if (input.investmentId) {
     if (input.type !== 'gasto') throw httpError(400, 'Solo un gasto puede aportar a una inversión')
     const inv = db
@@ -313,6 +418,9 @@ function camposDeFrecuencia(input: EntradaRecurrencia) {
     // Aportar es un gasto de la cuenta hacia la inversión: cambiar el tipo de
     // la plantilla suelta la liga en vez de dejar una que ya no aplica.
     investmentId: input.type === 'gasto' ? (input.investmentId ?? null) : null,
+    // Las dos fechas de la pausa van juntas o no va ninguna.
+    pausedFrom: input.pausedFrom && input.pausedUntil ? input.pausedFrom : null,
+    pausedUntil: input.pausedFrom && input.pausedUntil ? input.pausedUntil : null,
     categoryId: esTransferencia ? null : (input.categoryId ?? null),
     transferAccountId: esTransferencia ? (input.transferAccountId ?? null) : null,
     dayOfMonth: input.frequency === 'semanal' ? null : (input.dayOfMonth ?? null),
@@ -331,8 +439,8 @@ export function crear(input: EntradaRecurrencia): Recurrencia {
         `INSERT INTO recurrences
           (profile_id, account_id, type, amount_cents, category_id, transfer_account_id, note,
            frequency, day_of_month, day_of_month_2, month_of_year, weekday, start_date, end_date,
-           investment_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           investment_id, amount_mode, paused_from, paused_until, max_occurrences)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.profileId,
@@ -350,6 +458,10 @@ export function crear(input: EntradaRecurrencia): Recurrencia {
         input.startDate,
         input.endDate ?? null,
         c.investmentId,
+        input.amountMode ?? 'fijo',
+        c.pausedFrom,
+        c.pausedUntil,
+        input.maxOccurrences ?? null,
       )
     const nuevo = Number(result.lastInsertRowid)
     if (input.tagIds) fijarEtiquetas(nuevo, input.tagIds)
@@ -373,7 +485,8 @@ export function actualizar(id: number, input: EntradaRecurrencia): Recurrencia {
       `UPDATE recurrences SET account_id = ?, type = ?, amount_cents = ?, category_id = ?,
         transfer_account_id = ?, note = ?, frequency = ?, day_of_month = ?, day_of_month_2 = ?,
         month_of_year = ?, weekday = ?, start_date = ?, end_date = ?, archived = ?,
-        investment_id = ?
+        investment_id = ?, amount_mode = ?, paused_from = ?, paused_until = ?,
+        max_occurrences = ?
        WHERE id = ?`,
     ).run(
       input.accountId,
@@ -391,6 +504,10 @@ export function actualizar(id: number, input: EntradaRecurrencia): Recurrencia {
       input.endDate ?? null,
       input.archived ? 1 : 0,
       c.investmentId,
+      input.amountMode ?? 'fijo',
+      c.pausedFrom,
+      c.pausedUntil,
+      input.maxOccurrences ?? null,
       id,
     )
     if (input.tagIds) fijarEtiquetas(id, input.tagIds)
@@ -478,7 +595,10 @@ export function asentar(
   const transferAccountId =
     tipo === 'transferencia' ? (ajustes.transferAccountId ?? row.transfer_account_id) : null
   const categoryId = tipo === 'transferencia' ? null : (ajustes.categoryId ?? row.category_id)
-  const amountCents = ajustes.amountCents ?? row.amount_cents
+  // Sin ajuste manda lo que la bandeja propuso, que con monto variable **no**
+  // es `amount_cents`. Si aquí se leyera la columna, la vista enseñaría el
+  // promedio y el libro guardaría el fijo: dos cifras para la misma partida.
+  const amountCents = ajustes.amountCents ?? montoPropuesto(row, promediosDe([id]).get(id))
   const etiquetas =
     ajustes.tagIds ??
     (

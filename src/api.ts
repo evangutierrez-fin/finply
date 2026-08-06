@@ -8,7 +8,7 @@ import type {
   Anticipo, BandejaFacturas, Cobranza, FacturaRecurrente,
   Almacen, Arrendamiento, Hora, MovimientoStock, Producto, ResumenHoras,
   Cotizacion, ResumenCotizaciones, TableroContraparte, SugerenciaTx,
-  CampoPropio, PlantillaTx, ReglaImport, ComparacionEstrategia,
+  CampoPropio, PlantillaTx, ReglaImport, ComparacionEstrategia, ModoMonto,
 } from '../shared/types.ts'
 
 /** Error de la API que conserva el código y el cuerpo, para poder reaccionar. */
@@ -208,6 +208,13 @@ export interface RecurrenciaDraft {
   archived?: boolean
   /** Inversión a la que aporta. Solo en un gasto; `null` suelta la liga. */
   investmentId?: number | null
+  /** 'promedio' propone el promedio de las últimas asentadas. */
+  amountMode?: ModoMonto
+  /** Ventana de pausa, inclusiva. Las dos o ninguna. */
+  pausedFrom?: string | null
+  pausedUntil?: string | null
+  /** Termina tras tantas ocurrencias, contando las que de verdad caen. */
+  maxOccurrences?: number | null
 }
 
 /** Cambios de **esta** partida al asentarla. No tocan la plantilla. */

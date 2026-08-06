@@ -255,7 +255,15 @@ inTransaction(() => {
     }
     const internet = tx(personal, banco, 'gasto', 49900, day(m, 8), cServicios, 'Internet')
     asentado.push({ plantilla: 'internet', periodo: m, txId: internet })
-    if (m !== '2026-06') tx(personal, banco, 'gasto', sube(between(320, 460)), day(m, 5), cServicios, 'Luz CFE')
+    // El recibo de luz **nunca llega igual**, y por eso lleva quince meses
+    // registrado a mano. Es el caso que la Fase 25 viene a resolver: su
+    // plantilla propone el promedio de las últimas tres, no un fijo que
+    // siempre hay que corregir. Junio falta a propósito: un hueco en el
+    // historial no puede romper el promedio.
+    if (m !== '2026-06') {
+      const luz = tx(personal, banco, 'gasto', sube(between(320, 460)), day(m, 5), cServicios, 'Luz CFE')
+      asentado.push({ plantilla: 'luz', periodo: m, txId: luz })
+    }
     if (limit >= 16) tx(personal, banco, 'transferencia', 150000, day(m, 16), null, 'Apartado mensual', ahorro)
     // retiros de cajero: el efectivo sale del banco, nunca de la nada
     tx(personal, banco, 'transferencia', 200000, day(m, 2), null, 'Retiro de cajero', efectivo)
@@ -406,9 +414,37 @@ inTransaction(() => {
   const insertRec = db.prepare(
     `INSERT INTO recurrences
       (profile_id, account_id, type, amount_cents, category_id, note, frequency,
-       day_of_month, day_of_month_2, start_date)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       day_of_month, day_of_month_2, start_date, amount_mode, paused_from, paused_until,
+       max_occurrences)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
+  /** Los cuatro campos de la Fase 25, en su orden, con lo de siempre por omisión. */
+  type ExtraRec = {
+    modo?: 'fijo' | 'promedio'
+    pausaDesde?: string
+    pausaHasta?: string
+    veces?: number
+  }
+  const rec = (
+    profileId: number,
+    accountId: number,
+    tipo: 'ingreso' | 'gasto',
+    cents: number,
+    catId: number | null,
+    nota: string,
+    frecuencia: 'mensual' | 'quincenal' | 'semanal' | 'anual',
+    dia: number,
+    dia2: number | null,
+    desde: string,
+    extra: ExtraRec = {},
+  ) =>
+    Number(
+      insertRec.run(
+        profileId, accountId, tipo, cents, catId, nota, frecuencia, dia, dia2, desde,
+        extra.modo ?? 'fijo', extra.pausaDesde ?? null, extra.pausaHasta ?? null,
+        extra.veces ?? null,
+      ).lastInsertRowid,
+    )
   const insertRun = db.prepare(
     `INSERT INTO recurrence_runs (recurrence_id, period, status, tx_id)
      VALUES (?, ?, 'asentado', ?)`,
@@ -421,31 +457,38 @@ inTransaction(() => {
     for (const f of filas) if (f.plantilla === plantilla) insertRun.run(recId, f.periodo, f.txId)
   }
 
-  const recRenta = Number(
-    insertRec.run(personal, banco, 'gasto', 470000, cRenta, 'Renta depto', 'mensual', 1, null, `${months[0]}-01`)
-      .lastInsertRowid,
-  )
-  ligar(recRenta, 'renta', asentado)
+  ligar(rec(personal, banco, 'gasto', 470000, cRenta, 'Renta depto', 'mensual', 1, null, `${months[0]}-01`), 'renta', asentado)
+  ligar(rec(personal, banco, 'ingreso', 890000, cSueldo, 'Quincena', 'quincenal', 15, 30, `${months[0]}-01`), 'quincena', asentado)
+  ligar(rec(personal, banco, 'gasto', 49900, cServicios, 'Internet', 'mensual', 8, null, `${months[0]}-01`), 'internet', asentado)
 
-  const recQuincena = Number(
-    insertRec.run(personal, banco, 'ingreso', 890000, cSueldo, 'Quincena', 'quincenal', 15, 30, `${months[0]}-01`)
-      .lastInsertRowid,
+  // La luz, **de monto variable** (Fase 25): propone el promedio de las tres
+  // últimas asentadas en vez de un fijo que nunca acierta. Su historial es el
+  // que ya estaba en el libro, mes a mes y siempre distinto.
+  ligar(
+    rec(personal, banco, 'gasto', 40000, cServicios, 'Luz CFE', 'mensual', 5, null, `${months[0]}-05`, {
+      modo: 'promedio',
+    }),
+    'luz',
+    asentado,
   )
-  ligar(recQuincena, 'quincena', asentado)
 
-  const recInternet = Number(
-    insertRec.run(personal, banco, 'gasto', 49900, cServicios, 'Internet', 'mensual', 8, null, `${months[0]}-01`)
-      .lastInsertRowid,
-  )
-  ligar(recInternet, 'internet', asentado)
+  insertRec.run(personal, banco, 'gasto', 29900, cOcio, 'Suscripción de música', 'mensual', 20, null, '2026-07-01', 'fijo', null, null, null)
 
-  insertRec.run(personal, banco, 'gasto', 29900, cOcio, 'Suscripción de música', 'mensual', 20, null, '2026-07-01')
+  // La colegiatura **en pausa el verano** (Fase 25). No es que se archive: en
+  // julio y agosto no hay clases, y esos dos meses no son dos colegiaturas
+  // atrasadas. Al volver septiembre propone otra vez, sin arrastrar el hueco.
+  rec(personal, banco, 'gasto', 320000, null, 'Colegiatura', 'mensual', 5, null, '2026-06-05', {
+    pausaDesde: '2026-07-01',
+    pausaHasta: '2026-08-31',
+  })
 
-  const recRentaNeg = Number(
-    insertRec.run(negocio, bancoNeg, 'gasto', 350000, nRenta, 'Renta local', 'mensual', 1, null, '2026-06-01')
-      .lastInsertRowid,
-  )
-  ligar(recRentaNeg, 'renta', asentadoNeg)
+  // Un curso que **son doce y ya**: el tope existe para que el número trece no
+  // aparezca nunca en la bandeja.
+  rec(personal, banco, 'gasto', 145000, cOcio, 'Curso de inglés', 'mensual', 12, null, '2026-08-12', {
+    veces: 12,
+  })
+
+  ligar(rec(negocio, bancoNeg, 'gasto', 350000, nRenta, 'Renta local', 'mensual', 1, null, '2026-06-01'), 'renta', asentadoNeg)
 
   // ── Contrapartes y facturas ───────────────────────────────────────────
   // Cada una está para enseñar una cosa distinta de la Fase 14:

@@ -637,6 +637,25 @@ export interface Recurrencia {
    */
   investmentId: number | null
   investmentName: string | null
+  /**
+   * De dónde sale el monto que propone. `promedio` usa las últimas asentadas y
+   * deja `amountCents` como monto de arranque, para cuando no hay historial.
+   */
+  amountMode: ModoMonto
+  /**
+   * Ventana de pausa, inclusiva por los dos lados. Lo que cae dentro no
+   * propone **nunca**: no es atraso, es un hueco declarado.
+   */
+  pausedFrom: string | null
+  pausedUntil: string | null
+  /** Termina tras tantas ocurrencias, contando las que de verdad caen. */
+  maxOccurrences: number | null
+  /** Lo que propondría hoy: el fijo, o el promedio si es de monto variable. */
+  montoPropuestoCents: number
+  /** Cuántas asentadas entraron en ese promedio. Cero si no hay historial. */
+  muestrasPromedio: number
+  /** El día de su última ocurrencia. `null` si no termina. */
+  ultimaFecha: string | null
   tags: { id: number; name: string }[]
   /** Cómo se lee la periodicidad, ya en español. */
   descripcion: string
@@ -645,6 +664,8 @@ export interface Recurrencia {
   /** Periodos vencidos sin resolver. Es lo que la bandeja va a proponer. */
   pendientes: number
 }
+
+export type ModoMonto = 'fijo' | 'promedio'
 
 /**
  * Una propuesta. No existe en la base: se calcula al vuelo y desaparece en
@@ -672,6 +693,10 @@ export interface Propuesta {
    */
   investmentId: number | null
   investmentName: string | null
+  /** Cómo se calculó el monto de arriba, para poder decirlo en la bandeja. */
+  amountMode: ModoMonto
+  /** Asentadas que entraron en el promedio. Cero cuando el monto es el fijo. */
+  muestrasPromedio: number
   /** Días de atraso respecto a hoy. Cero el mismo día. */
   atraso: number
 }

@@ -201,10 +201,24 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
   se guardan —se derivan de la plantilla cada vez—, así que si le subes a la
   renta, lo pendiente sube y lo ya asentado no se toca. Y un periodo no puede
   asentarse dos veces, ni con dos pestañas abiertas.
+- **El recibo de luz nunca llega igual** — una plantilla puede proponer el
+  **promedio de las últimas tres que asentaste** en vez de un fijo que siempre
+  hay que corregir. Se dice de cuántas sale, para que puedas rehacer la cuenta.
+  El promedio se toma de lo que de verdad pagaste: si anulas un movimiento, esa
+  cifra sale del promedio.
+- **Pausar sin archivar** — dos meses sin colegiatura no son dos colegiaturas
+  atrasadas. Declaras la ventana y lo que cae dentro **no se propone nunca**,
+  ni ahora ni cuando la pausa termine. Archivar y desarchivar hacía volver el
+  histórico entero; esto no.
+- **Terminar tras N veces** — doce mensualidades de un curso son doce. Finply
+  te dice en qué fecha cae la última, y una pausa en medio corre el final en vez
+  de comerte dos.
 - **Calendario de vencimientos** — 30, 60 o 90 días con todo lo que ya sabe tu
   libro: recurrencias por confirmar, cortes de tarjeta con su fecha límite de
   pago, la mensualidad que sigue de cada deuda con plazo y las parcialidades de
-  tus compras a meses. Es un recordatorio, no un cargo.
+  tus compras a meses. En lista por día o en **rejilla mensual**, que a 90 días
+  es la que se lee — con la semana empezando el día que tú digas. Es un
+  recordatorio, no un cargo.
 - **¿Llego a fin de mes?** — la caja líquida de hoy movida **día a día** por
   todo lo que ya vence, a 30, 60 o 90 días: el primer día en rojo con su fecha
   y su cifra, o la confirmación de que no lo hay, y el punto más bajo del
@@ -505,7 +519,8 @@ shared/
   types.ts       tipos compartidos cliente/servidor
   fechas.ts      aritmética de fechas: recorte de día, meses y semana ISO (puro)
   credito.ts     amortización, parcialidades e interés devengado (puro)
-  recurrencias.ts periodos de una plantilla y su clave estable (puro)
+  recurrencias.ts periodos de una plantilla y su clave estable, con la pausa y
+                 el tope de ocurrencias resueltos antes de generar (puro)
   color.ts       contraste WCAG y veredicto por tema (puro)
   inversiones.ts recorrido del historial y unidades en enteros ×10⁸ (puro)
   rendimiento.ts la tasa que anula unos flujos, por bisección, y XIRR encima
@@ -594,7 +609,7 @@ REST sobre `/api`. Todas las cantidades en centavos enteros.
 | `GET /api/summary?profileId&month&hoy` | Resumen del mes + patrimonio, con el cambio contra el cierre del mes pasado y 30 días de saldo por cuenta. Ingreso, gasto y categorías con la regla de D6 y el reparto de las partidas divididas |
 | `GET /api/reportes?profileId&year` | El año: patrimonio mes a mes, ingresos vs gastos, categorías, etiquetas, de dónde vino, tasa de ahorro y mediana |
 | `GET /api/reportes/comparativa?profileId&desde&hasta` | Dos periodos cualesquiera, categoría por categoría. Sin el segundo rango, el bloque anterior del mismo largo |
-| `GET/POST /api/recurrencias` · `PATCH/DELETE /:id` | Plantillas de lo que se repite (mensual, quincenal, semanal, anual) |
+| `GET/POST /api/recurrencias` · `PATCH/DELETE /:id` | Plantillas de lo que se repite (mensual, quincenal, semanal, anual), con monto fijo o promediado (`amountMode`), ventana de pausa (`pausedFrom`/`pausedUntil`) y tope de ocurrencias (`maxOccurrences`) |
 | `GET /api/recurrencias/pendientes?profileId` | La bandeja por confirmar. **Derivada**: no escribe ni guarda propuestas |
 | `POST /api/recurrencias/:id/asentar` | Crea el movimiento y marca el periodo, en una transacción. 409 si ya se resolvió |
 | `POST /api/recurrencias/:id/descartar` · `/reabrir` | Descartar no mueve el libro; reabrir deshace un descarte |
@@ -648,7 +663,11 @@ categoría de otro libro —ni una categoría de ingreso para un gasto—; y una
 recurrencia no puede asentar dos veces el mismo periodo, porque la clave
 `(plantilla, periodo)` es única en la base y no una comprobación del código
 —si anulas el movimiento que asentaste, ese periodo vuelve solo a la bandeja, y
-si esa plantilla aportaba a una inversión, el aporte se va con el movimiento—.
+si esa plantilla aportaba a una inversión, el aporte se va con el movimiento—;
+un periodo que cae dentro de una pausa no se puede asentar, porque no es una
+propuesta de esa plantilla; y lo que la bandeja enseña, lo que el calendario
+anuncia y lo que se escribe al confirmar son siempre el mismo monto, también
+cuando sale de un promedio.
 El libro siempre cuadra.
 
 ## Sistema de diseño
@@ -680,8 +699,6 @@ encontró y lo que **no** cubre.
 
 **Cómo se usa**
 
-- Recurrencias de monto variable, pausar sin archivar y rejilla mensual en el
-  calendario
 - Export completo del perfil, no solo movimientos
 - Móvil/PWA e internacionalización
 

@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import type {
-  Account, Category, Frecuencia, Investment, Recurrencia, Tag, TxType,
+  Account, Category, Frecuencia, Investment, ModoMonto, Recurrencia, Tag, TxType,
 } from '../../shared/types.ts'
 import { api } from '../api.ts'
 import { fmtDateAnio, fmtMoney, parseAmount, todayISO } from '../format.ts'
-import { ocurrencias } from '../../shared/recurrencias.ts'
+import { finEfectivo, ocurrencias } from '../../shared/recurrencias.ts'
 import { useApp } from '../context.ts'
 import { Cadencia, reglaDesde, type ValoresCadencia } from './Cadencia.tsx'
 import { Modal } from './Modal.tsx'
@@ -47,6 +47,12 @@ export function RecurrenciaModal({
   const [endDate, setEndDate] = useState(recurrencia?.endDate ?? '')
   const [investments, setInvestments] = useState<Investment[]>([])
   const [investmentId, setInvestmentId] = useState(recurrencia?.investmentId ?? 0)
+  const [amountMode, setAmountMode] = useState<ModoMonto>(recurrencia?.amountMode ?? 'fijo')
+  const [pausedFrom, setPausedFrom] = useState(recurrencia?.pausedFrom ?? '')
+  const [pausedUntil, setPausedUntil] = useState(recurrencia?.pausedUntil ?? '')
+  const [tope, setTope] = useState(
+    recurrencia?.maxOccurrences ? String(recurrencia.maxOccurrences) : '',
+  )
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
@@ -77,7 +83,18 @@ export function RecurrenciaModal({
   )
 
   const cadencia: ValoresCadencia = { frequency, dayOfMonth, dayOfMonth2, monthOfYear, weekday }
-  const regla = reglaDesde(cadencia, startDate, endDate)
+  const maxOccurrences = /^\d{1,3}$/.test(tope.trim()) ? Number(tope.trim()) : null
+  // Lo que viaja al servidor es solo la cadencia; la pausa y el tope van por su
+  // cuenta en el draft, con sus nombres de la API.
+  const cadenciaRegla = reglaDesde(cadencia, startDate, endDate)
+  // La previa, en cambio, sí los necesita adentro: cuenta lo que el servidor va
+  // a proponer, y proponer con una pausa es proponer menos.
+  const regla = {
+    ...cadenciaRegla,
+    pausadaDesde: pausedFrom && pausedUntil ? pausedFrom : null,
+    pausadaHasta: pausedFrom && pausedUntil ? pausedUntil : null,
+    maxOcurrencias: maxOccurrences,
+  }
   const cambiarCadencia = (c: Partial<ValoresCadencia>) => {
     if (c.frequency !== undefined) setFrequency(c.frequency)
     if (c.dayOfMonth !== undefined) setDayOfMonth(c.dayOfMonth)
@@ -95,9 +112,19 @@ export function RecurrenciaModal({
   const previa = useMemo(() => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate)) return null
     const { lista, truncado } = ocurrencias(regla, { hasta: todayISO() })
-    return { cuantas: lista.length, primera: lista[0]?.fecha ?? null, truncado }
+    return {
+      cuantas: lista.length,
+      primera: lista[0]?.fecha ?? null,
+      truncado,
+      // Con tope, cuándo se acaba. Es la cifra que el usuario quiere ver: "12
+      // ocurrencias" no dice en qué mes deja de aparecer.
+      ultima: finEfectivo(regla),
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [frequency, dayOfMonth, dayOfMonth2, monthOfYear, weekday, startDate, endDate])
+  }, [
+    frequency, dayOfMonth, dayOfMonth2, monthOfYear, weekday, startDate, endDate,
+    pausedFrom, pausedUntil, tope,
+  ])
 
   const toggleTag = (id: number) =>
     setTagIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
@@ -108,6 +135,15 @@ export function RecurrenciaModal({
     if (!cents) return setError('Escribe un monto válido, por ejemplo 250 o 1,250.50')
     if (!accountId) return setError('Elige una cuenta')
     if (type === 'transferencia' && !transferAccountId) return setError('Elige la cuenta destino')
+    if (tope.trim() !== '' && maxOccurrences === null) {
+      return setError('El tope va en veces enteras, de 1 a 600')
+    }
+    if ((pausedFrom ? 1 : 0) + (pausedUntil ? 1 : 0) === 1) {
+      return setError('La pausa necesita sus dos fechas: desde cuándo y hasta cuándo')
+    }
+    if (pausedFrom && pausedUntil && pausedUntil < pausedFrom) {
+      return setError('La pausa termina antes de empezar')
+    }
     setSaving(true)
     setError(null)
     try {
@@ -119,9 +155,13 @@ export function RecurrenciaModal({
         categoryId: type === 'transferencia' ? null : categoryId || null,
         transferAccountId: type === 'transferencia' ? transferAccountId : null,
         note,
-        ...regla,
+        ...cadenciaRegla,
         tagIds,
         investmentId: type === 'gasto' ? investmentId || null : null,
+        amountMode,
+        pausedFrom: pausedFrom || null,
+        pausedUntil: pausedUntil || null,
+        maxOccurrences,
         archived: recurrencia?.archived ?? false,
       }
       if (recurrencia) await api.recurrencias.update(recurrencia.id, draft)
@@ -157,7 +197,9 @@ export function RecurrenciaModal({
         </div>
 
         <label className="campo campo-monto">
-          <span className="campo-label">Monto</span>
+          <span className="campo-label">
+            {amountMode === 'promedio' ? 'Monto de arranque' : 'Monto'}
+          </span>
           <div className="monto-wrap">
             <span className="monto-signo" aria-hidden="true">$</span>
             <input
@@ -170,6 +212,44 @@ export function RecurrenciaModal({
             />
           </div>
         </label>
+
+        {/* El recibo de luz nunca llega igual. El modo variable no es "sin
+            monto": es de dónde sale el que se propone. El fijo se queda como
+            monto de arranque, para mientras no haya historial que promediar. */}
+        <div className="seg seg-chico" role="radiogroup" aria-label="De dónde sale el monto">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={amountMode === 'fijo'}
+            className={`seg-item${amountMode === 'fijo' ? ' activa' : ''}`}
+            onClick={() => setAmountMode('fijo')}
+          >
+            Siempre el mismo
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={amountMode === 'promedio'}
+            className={`seg-item${amountMode === 'promedio' ? ' activa' : ''}`}
+            onClick={() => setAmountMode('promedio')}
+          >
+            Varía cada vez
+          </button>
+        </div>
+        {amountMode === 'promedio' && (
+          <p className="forma-nota">
+            Cada propuesta va a traer el <strong>promedio de las últimas 3 que asentaste</strong>,
+            no este monto. Mientras no haya ninguna, propone el de arriba. Sigue siendo una
+            propuesta: el recibo real se escribe al confirmar.
+            {recurrencia && recurrencia.muestrasPromedio > 0 && (
+              <>
+                {' '}Hoy propondría <strong>{fmtMoney(recurrencia.montoPropuestoCents)}</strong>, de{' '}
+                {recurrencia.muestrasPromedio}{' '}
+                {recurrencia.muestrasPromedio === 1 ? 'asentada' : 'asentadas'}.
+              </>
+            )}
+          </p>
+        )}
 
         <div className="campos-2">
           <label className="campo">
@@ -282,6 +362,54 @@ export function RecurrenciaModal({
           </label>
         </div>
 
+        {/* Doce mensualidades de un curso son doce. Cuenta las que de verdad
+            caen, así que una pausa en medio corre el final en vez de
+            comerse dos. */}
+        <label className="campo">
+          <span className="campo-label">Termina tras N veces (opcional)</span>
+          <input
+            className="campo-input"
+            inputMode="numeric"
+            placeholder="Ej. 12"
+            value={tope}
+            onChange={(e) => setTope(e.target.value)}
+          />
+        </label>
+
+        {/* Pausar no es archivar. Archivar calla la plantilla entera y al
+            desarchivarla vuelve el histórico completo; una pausa declara un
+            hueco, y lo que cae dentro no propone nunca. */}
+        <fieldset className="campo campo-fieldset">
+          <legend className="campo-label">Pausa (opcional)</legend>
+          <div className="campos-2">
+            <label className="campo">
+              <span className="campo-label">Desde</span>
+              <input
+                type="date"
+                className="campo-input"
+                value={pausedFrom}
+                onChange={(e) => setPausedFrom(e.target.value)}
+              />
+            </label>
+            <label className="campo">
+              <span className="campo-label">Hasta</span>
+              <input
+                type="date"
+                className="campo-input"
+                value={pausedUntil}
+                onChange={(e) => setPausedUntil(e.target.value)}
+              />
+            </label>
+          </div>
+          <p className="forma-nota">
+            Lo que caiga en esas fechas <strong>no se propone nunca</strong>: no es un atraso que se
+            acumule, es un hueco. Dos meses sin colegiatura no son dos colegiaturas pendientes.
+            {pausedFrom && pausedUntil && (
+              <> Se salta lo del {fmtDateAnio(pausedFrom)} al {fmtDateAnio(pausedUntil)}.</>
+            )}
+          </p>
+        </fieldset>
+
         <fieldset className="campo campo-fieldset">
           <legend className="campo-label">Etiquetas</legend>
           {tags.length > 0 ? (
@@ -307,6 +435,23 @@ export function RecurrenciaModal({
           <p className="rec-previa" role="status">
             {previa.cuantas === 0 ? (
               <>Todavía no hay nada vencido. La primera propuesta llegará a su fecha.</>
+            ) : recurrencia ? (
+              // ⚠ Editando, "vas a encontrar N por confirmar" mentía: contaba
+              // **todos** los periodos vencidos, incluidos los que esta
+              // plantilla ya tiene asentados. El aviso de D8 se escribió para
+              // crear, donde no hay historial y las dos cifras coinciden.
+              <>
+                Esta plantilla cubre{' '}
+                <strong>
+                  {previa.cuantas} {previa.cuantas === 1 ? 'periodo' : 'periodos'} hasta hoy
+                </strong>
+                , desde el {fmtDateAnio(previa.primera!)}. De esos,{' '}
+                <strong>
+                  {recurrencia.pendientes}{' '}
+                  {recurrencia.pendientes === 1 ? 'sigue' : 'siguen'} sin resolver
+                </strong>
+                ; lo ya asentado no se toca.
+              </>
             ) : (
               <>
                 Al guardar vas a encontrar{' '}
@@ -316,9 +461,18 @@ export function RecurrenciaModal({
                 , desde el {fmtDateAnio(previa.primera!)}
                 {previa.truncado && ' (y más, de tantas que son)'}. Ninguna se asienta sola:
                 tú decides cuáles entran al libro.
-                {parseAmount(amount) && (
+                {amountMode === 'fijo' && parseAmount(amount) && (
                   <> Suman {fmtMoney(previa.cuantas * parseAmount(amount)!)}.</>
                 )}
+              </>
+            )}
+            {/* Con tope, la fecha es la respuesta: "12 veces" no dice en qué
+                mes deja de aparecer. Sale del mismo módulo puro que el
+                servidor, así que no puede diferir de lo que va a proponer. */}
+            {maxOccurrences !== null && previa.ultima && (
+              <>
+                {' '}La última cae el <strong>{fmtDateAnio(previa.ultima)}</strong>, y después esta
+                plantilla ya no propone nada.
               </>
             )}
           </p>

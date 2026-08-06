@@ -1991,6 +1991,12 @@ select.campo-input { cursor: pointer; }
   .tarjetas-grid { grid-template-columns: 1fr; }
   .tarjetas-resumen { gap: 24px; }
   .libro { display: block; overflow-x: auto; }
+  /* La rejilla no se vuelve scroll horizontal como las demás tablas: siete
+     columnas angostas siguen siendo un mes, y perder la forma del mes es
+     perder la rejilla. Lo que se encoge es la altura de la celda. */
+  .rejilla { display: table; overflow: visible; }
+  .rejilla-celda { height: auto; padding: 4px 3px; }
+  .rejilla-ev-titulo { font-size: 10px; }
   .acciones { opacity: 1; }
   /* En pantalla angosta cada propuesta se apila y los botones bajan enteros:
      "Asentar" no puede quedar a medias, es el que escribe en el libro. */
@@ -2091,6 +2097,82 @@ select.campo-input { cursor: pointer; }
 .cal-chip-deuda { color: var(--rojo-osc); border-color: var(--rojo-borde); }
 .cal-chip-recurrencia { color: var(--verde-osc); border-color: var(--verde); }
 .cal-chip-msi { color: var(--laton); border-color: var(--laton); }
+
+/* ── la rejilla mensual del calendario ───────────────────────────────────
+   Una tabla de verdad: las columnas son los días de la semana. Todo va a la
+   vista, sin `hover` ni clic para descubrir un dato (R19), y por eso las
+   celdas crecen con lo que llevan en vez de esconderlo detrás de un "+2". */
+.rejillas { display: flex; flex-direction: column; gap: 24px; }
+.rejilla { table-layout: fixed; width: 100%; }
+/* ⚠ `display: flex` en un `<caption>` lo saca de su caja y acaba dibujado
+   debajo del encabezado, no arriba de la tabla. El flex va en un envoltorio
+   adentro; el `<caption>` se queda como bloque. */
+.rejilla-caption {
+  caption-side: top;
+  text-align: left;
+  padding: 0 0 10px;
+}
+.rejilla-caption > span {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.rejilla-mes {
+  font-family: var(--f-display);
+  font-size: 17px;
+  text-transform: capitalize;
+  color: var(--tinta);
+}
+.rejilla-total { font-size: 12px; color: var(--tinta-2); font-family: var(--f-mono); }
+.rejilla th {
+  text-transform: capitalize;
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-align: left;
+}
+.rejilla-celda {
+  vertical-align: top;
+  height: 76px;
+  padding: 6px;
+  border: 1px solid var(--regla);
+}
+.rejilla-fuera { background: color-mix(in srgb, var(--papel) 60%, transparent); }
+.rejilla-fuera .rejilla-dia { color: var(--tinta-3); }
+/* El día de hoy se marca con filete y con la palabra: el color solo no basta. */
+.rejilla-hoy { border-color: var(--acento); }
+.rejilla-dia {
+  display: block;
+  font-family: var(--f-mono);
+  font-size: 11px;
+  color: var(--tinta-2);
+  margin-bottom: 4px;
+}
+.rejilla-hoy-marca { color: var(--acento); font-family: var(--f-ui); }
+.rejilla-ev {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  border-left: 2px solid currentColor;
+  background: none;
+  padding: 1px 0 1px 5px;
+  margin-bottom: 3px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--tinta-2);
+}
+.rejilla-ev-boton { cursor: pointer; }
+.rejilla-ev-boton:hover .rejilla-ev-titulo,
+.rejilla-ev-boton:focus-visible .rejilla-ev-titulo { text-decoration: underline; }
+.rejilla-ev-titulo {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--tinta);
+}
+.rejilla-ev-monto { font-family: var(--f-mono); font-size: 10.5px; color: var(--tinta-2); }
 
 /* ── cierre imprimible ───────────────────────────────────────────────── */
 /* ── alertas del Resumen ─────────────────────────────────────────────────

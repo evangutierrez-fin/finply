@@ -45,6 +45,19 @@ function FilaPropuesta({
               cambia de bolsillo. Es lo que el total de arriba cuenta aparte. */}
           {propuesta.investmentName && ` · aporte a ${propuesta.investmentName}`}
           {propuesta.tags.length > 0 && ` · ${propuesta.tags.map((t) => t.name).join(' · ')}`}
+          {/* De dónde salió el monto. Un promedio que no se explica es un
+              número que el usuario no puede comprobar, y entonces lo corrige
+              siempre "por si acaso" — que es justo lo que venía a evitar. */}
+          {propuesta.amountMode === 'promedio' && (
+            <>
+              {' · '}
+              {propuesta.muestrasPromedio > 0
+                ? `promedio de ${propuesta.muestrasPromedio} ${
+                    propuesta.muestrasPromedio === 1 ? 'asentada' : 'asentadas'
+                  }`
+                : 'monto de arranque: todavía no hay historial'}
+            </>
+          )}
         </p>
       </div>
       <Money
@@ -84,8 +97,10 @@ function FilaPlantilla({
     <li className={`hoja plantilla${rec.archived ? ' plantilla-archivada' : ''}`}>
       <div className="plantilla-head">
         <span className="plantilla-concepto">{rec.note || 'Sin concepto'}</span>
+        {/* Lo que va a proponer, no lo que dice la columna: con monto variable
+            son distintos, y la cifra que aquí se lee es la que va a caer. */}
         <Money
-          cents={rec.type === 'gasto' ? -rec.amountCents : rec.amountCents}
+          cents={rec.type === 'gasto' ? -rec.montoPropuestoCents : rec.montoPropuestoCents}
           className="cifra-chica"
         />
       </div>
@@ -93,6 +108,13 @@ function FilaPlantilla({
         {rec.descripcion} · {rec.accountName}
         {rec.categoryName && ` · ${rec.categoryName}`}
         {rec.type === 'transferencia' && rec.transferAccountName && ` → ${rec.transferAccountName}`}
+        {rec.investmentName && ` · aporte a ${rec.investmentName}`}
+        {rec.amountMode === 'promedio' &&
+          (rec.muestrasPromedio > 0
+            ? ` · promedio de ${rec.muestrasPromedio} ${
+                rec.muestrasPromedio === 1 ? 'asentada' : 'asentadas'
+              }`
+            : ' · monto variable, sin historial todavía')}
       </p>
       <p className="plantilla-meta">
         {rec.archived ? (
@@ -105,7 +127,19 @@ function FilaPlantilla({
               </strong>
             )}
             {rec.proximaFecha ? `Sigue el ${fmtDateAnio(rec.proximaFecha)}` : 'Ya terminó'}
-            {rec.endDate && ` · hasta el ${fmtDateAnio(rec.endDate)}`}
+            {/* El tope se dice por su fecha, que es lo que se quiere saber. Si
+                además hay fecha de fin, `ultimaFecha` ya trae la que llegue
+                primero: no hacen falta las dos. */}
+            {rec.ultimaFecha && ` · hasta el ${fmtDateAnio(rec.ultimaFecha)}`}
+            {rec.maxOccurrences && ` (${rec.maxOccurrences} veces en total)`}
+          </>
+        )}
+        {rec.pausedFrom && rec.pausedUntil && (
+          <>
+            {' · '}
+            <strong className="plantilla-pausa">
+              en pausa del {fmtDateAnio(rec.pausedFrom)} al {fmtDateAnio(rec.pausedUntil)}
+            </strong>
           </>
         )}
       </p>

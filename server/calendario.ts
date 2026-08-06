@@ -11,7 +11,7 @@ import { db, modulosDe } from './db.ts'
 import type { ModuloId } from '../shared/modulos.ts'
 import { SALDO_FACTURA } from './facturas.ts'
 import { estadoTarjetas } from './tarjetas.ts'
-import { reglaDe } from './recurrencias.ts'
+import { montoPropuesto, promediosDe, reglaDe } from './recurrencias.ts'
 import { tablaAmortizacion } from '../shared/credito.ts'
 import { hoyISO, proximoDiaDelMes, siguienteDiaDelMes, sumarDias } from '../shared/fechas.ts'
 import { describirRecurrencia, ocurrencias } from '../shared/recurrencias.ts'
@@ -40,6 +40,11 @@ function deRecurrencias(profileId: number, desde: string, hasta: string): Evento
     ).map((f) => `${f.recurrence_id}·${f.period}`),
   )
 
+  // El monto que se anuncia tiene que ser **el que la bandeja va a proponer**,
+  // no la columna: con monto variable son distintos, y dos pantallas que
+  // enseñan la misma partida no pueden decir dos cifras (D14).
+  const promedios = promediosDe(ids)
+
   const eventos: EventoCalendario[] = []
   for (const row of rows) {
     const regla = reglaDe(row)
@@ -50,7 +55,7 @@ function deRecurrencias(profileId: number, desde: string, hasta: string): Evento
         tipo: 'recurrencia',
         titulo: row.note || (row.type === 'ingreso' ? 'Ingreso recurrente' : 'Gasto recurrente'),
         detalle: `${row.account_name} · ${describirRecurrencia(regla)}`,
-        montoCents: row.amount_cents,
+        montoCents: montoPropuesto(row, promedios.get(row.id)),
         refId: row.id,
         direccion: row.type === 'ingreso' ? 'entra' : 'sale',
         periodo: o.periodo,

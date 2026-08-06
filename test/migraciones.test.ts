@@ -884,6 +884,54 @@ describe('migraciones', () => {
     db.close()
   })
 
+  test('las plantillas estrenan monto fijo, sin pausa y sin tope', () => {
+    const db = baseEnVersion(23)
+    db.exec(`
+      INSERT INTO recurrences (id, profile_id, account_id, type, amount_cents, frequency,
+        day_of_month, start_date)
+        VALUES (1, 1, 1, 'gasto', 470000, 'mensual', 1, '2026-01-01');
+      INSERT INTO recurrence_runs (id, recurrence_id, period, status)
+        VALUES (1, 1, '2026-01', 'asentado');
+    `)
+
+    migrate(db)
+
+    assert.equal((db.prepare('PRAGMA user_version').get() as any).user_version, SCHEMA_VERSION)
+
+    // Lo que falta significa "lo de antes": una plantilla vieja propone su
+    // monto de siempre, no se pausa sola y no se termina sola.
+    const rec = db.prepare('SELECT * FROM recurrences WHERE id = 1').get() as any
+    assert.equal(rec.amount_mode, 'fijo')
+    assert.equal(rec.paused_from, null)
+    assert.equal(rec.paused_until, null)
+    assert.equal(rec.max_occurrences, null)
+    assert.equal(rec.amount_cents, 470000)
+    // Y su bitácora sigue intacta: nada de esto reabre un periodo resuelto.
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM recurrence_runs').get() as any).n, 1)
+    assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0)
+    db.close()
+  })
+
+  test('los CHECK nuevos rechazan un modo inventado y un tope de cero', () => {
+    const db = baseEnVersion(23)
+    migrate(db)
+    const insertar = (extra: string) =>
+      db.exec(
+        `INSERT INTO recurrences (profile_id, account_id, type, amount_cents, frequency,
+           day_of_month, start_date${extra ? `, ${extra.split('=')[0]}` : ''})
+         VALUES (1, 1, 'gasto', 1000, 'mensual', 1, '2026-01-01'${
+           extra ? `, ${extra.split('=')[1]}` : ''
+         })`,
+      )
+    assert.throws(() => insertar("amount_mode='promedios'"), /CHECK/)
+    assert.throws(() => insertar('max_occurrences=0'), /CHECK/)
+    // Y los válidos entran sin ruido.
+    insertar("amount_mode='promedio'")
+    insertar('max_occurrences=12')
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM recurrences').get() as any).n, 2)
+    db.close()
+  })
+
   test('una base de una versión más nueva no se toca', () => {
     const db = baseVieja()
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`)

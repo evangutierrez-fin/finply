@@ -1374,6 +1374,51 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    id: 24,
+    name: 'recurrencias: monto promedio, pausa y tope de ocurrencias',
+    up: (db) => {
+      // Las tres columnas son de la **plantilla**, no de la propuesta: la
+      // bandeja se sigue derivando y aquí no se guarda ni una propuesta (D7).
+      //
+      // `amount_mode` decide de dónde sale el monto que se propone. En 'fijo'
+      // —lo que son todas las que ya existen— sale de `amount_cents`, igual que
+      // ayer. En 'promedio' sale de las últimas asentadas, y `amount_cents` se
+      // queda como el monto de arranque: mientras no haya historial, es lo que
+      // se propone.
+      if (!hasColumn(db, 'recurrences', 'amount_mode')) {
+        db.exec(
+          `ALTER TABLE recurrences ADD COLUMN amount_mode TEXT NOT NULL DEFAULT 'fijo'
+             CHECK (amount_mode IN ('fijo', 'promedio'))`,
+        )
+      }
+
+      // La pausa es una **ventana de fechas**, no un interruptor, y por eso son
+      // dos columnas. Un interruptor de "pausada sí/no" solo sabe callar desde
+      // hoy: al soltarlo, los meses que pasaron vuelven a la bandeja, que es
+      // exactamente lo que ya hacía archivar y desarchivar. Lo que cae dentro
+      // de la ventana no propone **nunca** — dos meses sin colegiatura no son
+      // dos colegiaturas atrasadas.
+      //
+      // Y tiene principio a propósito: sin él, pausar hasta marzo se llevaría
+      // también el atraso de todo el año pasado.
+      if (!hasColumn(db, 'recurrences', 'paused_from')) {
+        db.exec(`
+          ALTER TABLE recurrences ADD COLUMN paused_from TEXT;
+          ALTER TABLE recurrences ADD COLUMN paused_until TEXT;
+        `)
+      }
+
+      // Doce mensualidades de un curso son doce. Cuenta las que de verdad
+      // caen: una pausa en medio no te descuenta mensualidades, corre el final.
+      if (!hasColumn(db, 'recurrences', 'max_occurrences')) {
+        db.exec(
+          `ALTER TABLE recurrences ADD COLUMN max_occurrences INTEGER
+             CHECK (max_occurrences IS NULL OR max_occurrences > 0)`,
+        )
+      }
+    },
+  },
 ]
 
 /** Versión de esquema que espera este código. */

@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { AA_TEXTO, evaluarTinta, normalizarHex } from '../shared/color.ts'
 import { MAX_UNIDADES_E8 } from '../shared/inversiones.ts'
 import { MODULO_IDS, type ModuloId } from '../shared/modulos.ts'
+import { MAX_PERIODOS } from '../shared/recurrencias.ts'
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Fecha inválida (AAAA-MM-DD)')
 const isoMonth = z.string().regex(/^\d{4}-\d{2}$/, 'Mes inválido (AAAA-MM)')
@@ -449,8 +450,32 @@ export const recurrenceInput = z
      * aportar es dinero que sale de la cuenta hacia la inversión.
      */
     investmentId: z.number().int().positive().nullish(),
+    /**
+     * De dónde sale el monto que propone. 'promedio' usa las últimas asentadas
+     * y deja `amountCents` como monto de arranque, para cuando no hay historial.
+     */
+    amountMode: z.enum(['fijo', 'promedio']).default('fijo'),
+    /** Ventana de pausa, inclusiva por los dos lados. Las dos o ninguna. */
+    pausedFrom: isoDate.nullish(),
+    pausedUntil: isoDate.nullish(),
+    /** Tope de ocurrencias. El mismo techo que el motor: 600. */
+    maxOccurrences: z
+      .number()
+      .int()
+      .min(1, 'El tope va de 1 a 600 ocurrencias')
+      .max(MAX_PERIODOS, 'El tope va de 1 a 600 ocurrencias')
+      .nullish(),
   })
   .superRefine((r, ctx) => {
+    if ((r.pausedFrom ? 1 : 0) + (r.pausedUntil ? 1 : 0) === 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'La pausa necesita sus dos fechas: desde cuándo y hasta cuándo',
+      })
+    }
+    if (r.pausedFrom && r.pausedUntil && r.pausedUntil < r.pausedFrom) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'La pausa termina antes de empezar' })
+    }
     if (r.investmentId && r.type !== 'gasto') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
