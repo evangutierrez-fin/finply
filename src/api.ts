@@ -3,7 +3,12 @@ import type {
   Aging, CentroCosto, CompraMSI, Contraparte, Debt, DebtPayment, EstadoResultados, EstadoTarjeta,
   Factura, FlujoProyectado, Frecuencia, Goal, InformeImport, InformePrecios, Investment,
   InvestmentEntryType, LoteImport, MapeoImport, ModuloId, Note, Profile, Recurrencia, ReporteAnual,
-  ResultadoImport, RolCategoria, Simulacion, Summary, Tag, Tx, TxType,
+  ResultadoImport, RolCategoria, Simulacion, Summary, Tag, Tx, TxAttachment, TxType,
+  Bien, BienKind, CorteConciliacion, SerieCuenta, PresupuestoMes, TopeTotal,
+  Anticipo, BandejaFacturas, Cobranza, FacturaRecurrente,
+  Almacen, Arrendamiento, Hora, MovimientoStock, Producto, ResumenHoras,
+  Cotizacion, ResumenCotizaciones, TableroContraparte, SugerenciaTx,
+  CampoPropio, PlantillaTx, ReglaImport, ComparacionEstrategia, ModoMonto,
 } from '../shared/types.ts'
 
 /** Error de la API que conserva el código y el cuerpo, para poder reaccionar. */
@@ -61,6 +66,8 @@ export interface TxFilters {
   minCents?: number
   maxCents?: number
   q?: string
+  /** Conciliación: 'si' solo lo palomeado, 'no' solo lo pendiente. */
+  conciliado?: 'si' | 'no'
   limit?: number
   offset?: number
 }
@@ -77,6 +84,7 @@ function txSearch(params: TxFilters): URLSearchParams {
   if (params.minCents !== undefined) search.set('minCents', String(params.minCents))
   if (params.maxCents !== undefined) search.set('maxCents', String(params.maxCents))
   if (params.q) search.set('q', params.q)
+  if (params.conciliado) search.set('conciliado', params.conciliado)
   if (params.limit !== undefined) search.set('limit', String(params.limit))
   if (params.offset) search.set('offset', String(params.offset))
   return search
@@ -100,6 +108,21 @@ export interface TxDraft {
   /** Impuesto contenido en el monto, no sumado a él. */
   taxCents?: number
   deductible?: boolean
+  /**
+   * El reparto por categoría (D17). **Ausente ≠ vacío**, igual que `tagIds`:
+   * ausente deja el reparto como estaba, vacío lo quita. Los renglones tienen
+   * que sumar exactamente `amountCents` o el servidor rechaza.
+   */
+  splits?: { categoryId?: number | null; amountCents: number; note?: string }[]
+  /** El gasto que este movimiento devuelve. `null` explícito lo desliga. */
+  refundOfId?: number | null
+  /**
+   * Módulo Inmuebles. Van los dos o ninguno: el papel es lo que hace que un
+   * depósito no cuente como ingreso, y vive en el movimiento —no en el
+   * módulo—, así que apagar Inmuebles no lo convierte en ingreso (R18).
+   */
+  rentalId?: number | null
+  rentalRole?: 'renta' | 'deposito' | 'devolucion_deposito' | 'mantenimiento' | null
 }
 
 export interface ImportDraft {
@@ -135,6 +158,18 @@ export interface DebtDraft {
   downPaymentCents?: number
   /** Solo al crear: cuenta de la que sale (o a la que entra) el enganche. */
   downPaymentAccountId?: number | null
+  /**
+   * Comisión de apertura: la debes, pero se descuenta de lo que te depositan,
+   * así que el desembolso asienta `principal − comisión` (D30).
+   */
+  originationFeeCents?: number
+}
+
+/** Lo que la Fase 11 le agregó a una cuenta. `null` en el mínimo quita el aviso. */
+export interface CuentaExtra {
+  minBalanceCents?: number | null
+  institution?: string
+  sortOrder?: number
 }
 
 /** Datos de crédito de una cuenta. `null` los borra; ausente no opina. */
@@ -171,6 +206,15 @@ export interface RecurrenciaDraft {
   endDate?: string | null
   tagIds?: number[]
   archived?: boolean
+  /** Inversión a la que aporta. Solo en un gasto; `null` suelta la liga. */
+  investmentId?: number | null
+  /** 'promedio' propone el promedio de las últimas asentadas. */
+  amountMode?: ModoMonto
+  /** Ventana de pausa, inclusiva. Las dos o ninguna. */
+  pausedFrom?: string | null
+  pausedUntil?: string | null
+  /** Termina tras tantas ocurrencias, contando las que de verdad caen. */
+  maxOccurrences?: number | null
 }
 
 /** Cambios de **esta** partida al asentarla. No tocan la plantilla. */
@@ -183,6 +227,62 @@ export interface AsentarDraft {
   accountId?: number
   note?: string
   tagIds?: number[]
+}
+
+/** El contrato que renta un bien. El inmueble vive en Bienes, no aquí. */
+export interface ArrendamientoDraft {
+  profileId: number
+  assetId: number
+  tenant: string
+  rentCents: number
+  depositCents: number
+  paymentDay: number
+  startDate: string
+  endDate?: string | null
+  note?: string
+  archived?: boolean
+}
+
+export interface HoraDraft {
+  profileId: number
+  date: string
+  minutes: number
+  /** La tarifa **de este renglón**. Admite cero: primero el tiempo, luego el precio. */
+  rateCents: number
+  counterpartyId?: number | null
+  costCenterId?: number | null
+  note?: string
+}
+
+export interface FiltroHoras {
+  profileId: number
+  desde?: string
+  hasta?: string
+  counterpartyId?: number
+  sinFacturar?: boolean
+}
+
+export interface ProductoDraft {
+  profileId: number
+  sku?: string
+  name: string
+  unit?: string
+  /** Debajo de esto Finply avisa. `null` quita el aviso. */
+  minQtyMilli?: number | null
+  archived?: boolean
+}
+
+export interface MovimientoStockDraft {
+  profileId: number
+  productId: number
+  date: string
+  kind: 'entrada' | 'salida' | 'ajuste'
+  /** Milésimas de unidad. En un ajuste puede ser negativa: es un delta. */
+  qtyMilli: number
+  unitCostCents?: number
+  note?: string
+  /** El movimiento del libro que pagó esta entrada. Ligarlo no lo crea (R4). */
+  txId?: number | null
 }
 
 /**
@@ -214,6 +314,12 @@ export const api = {
         accent: string
         dimensionLabel: string
         modules: ModuloId[]
+        /** Preferencias de la Fase 21. `null` vuelve al valor de siempre. */
+        navOrder: string[] | null
+        homeView: string | null
+        dateFormat: string
+        weekStart: number
+        hideCents: boolean
       }> &
         TintaDraft,
     ) => req<Profile>(`/api/profiles/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
@@ -222,14 +328,18 @@ export const api = {
   accounts: {
     list: (profileId: number) => req<Account[]>(`/api/accounts?profileId=${profileId}`),
     create: (
-      data: { profileId: number; name: string; type: string; openingCents: number } & CreditoDraft,
+      data: { profileId: number; name: string; type: string; openingCents: number } & CreditoDraft &
+        CuentaExtra,
     ) => req<Account>('/api/accounts', { method: 'POST', body: JSON.stringify(data) }),
     update: (
       id: number,
       data: Partial<{ name: string; type: string; openingCents: number; archived: boolean }> &
-        CreditoDraft,
+        CreditoDraft &
+        CuentaExtra,
     ) => req<Account>(`/api/accounts/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     remove: (id: number) => req<{ ok: true }>(`/api/accounts/${id}`, { method: 'DELETE' }),
+    /** El saldo de esta cuenta al cierre de cada mes. La serie global no lo dice. */
+    serie: (id: number, meses = 12) => req<SerieCuenta>(`/api/accounts/${id}/serie?meses=${meses}`),
   },
   tarjetas: {
     /** Estado de cuenta de cada tarjeta: corte, pago y línea disponible. */
@@ -245,16 +355,27 @@ export const api = {
   },
   categories: {
     list: (profileId: number) => req<Category[]>(`/api/categories?profileId=${profileId}`),
-    create: (data: { profileId: number; name: string; kind: 'ingreso' | 'gasto' }) =>
-      req<Category>('/api/categories', { method: 'POST', body: JSON.stringify(data) }),
-    rename: (id: number, name: string) =>
-      req<Category>(`/api/categories/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
-    /** El papel en el estado de resultados. `null` la deja sin clasificar. */
-    setRole: (id: number, name: string, role: RolCategoria | null) =>
-      req<Category>(`/api/categories/${id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ name, role }),
-      }),
+    create: (data: {
+      profileId: number
+      name: string
+      kind: 'ingreso' | 'gasto'
+      parentId?: number | null
+    }) => req<Category>('/api/categories', { method: 'POST', body: JSON.stringify(data) }),
+    /**
+     * Un PATCH parcial de verdad: lo que no se manda se queda como estaba.
+     * Hasta la Fase 23 el nombre era obligatorio aunque no cambiara — el
+     * hallazgo 3 de la auditoría.
+     */
+    update: (
+      id: number,
+      cambios: {
+        name?: string
+        role?: RolCategoria | null
+        parentId?: number | null
+        archived?: boolean
+      },
+    ) =>
+      req<Category>(`/api/categories/${id}`, { method: 'PATCH', body: JSON.stringify(cambios) }),
     /** Sin `reassignTo` ni `force`, una categoría en uso responde 409 con txCount. */
     remove: (id: number, options: { reassignTo?: number; force?: boolean } = {}) => {
       const search = new URLSearchParams()
@@ -266,7 +387,23 @@ export const api = {
         movimientosReasignados: number
         movimientosSinCategoria: number
         presupuestosBorrados: number
+        hijosPromovidos: number
+        reglasBorradas: number
       }>(`/api/categories/${id}${qs ? `?${qs}` : ''}`, { method: 'DELETE' })
+    },
+    /** Las reglas que proponen categoría al importar (Fase 23). */
+    reglas: {
+      list: (profileId: number) =>
+        req<ReglaImport[]>(`/api/categories/reglas?profileId=${profileId}`),
+      create: (data: { profileId: number; pattern: string; categoryId: number }) =>
+        req<ReglaImport>('/api/categories/reglas', { method: 'POST', body: JSON.stringify(data) }),
+      update: (id: number, cambios: { pattern?: string; categoryId?: number; position?: number }) =>
+        req<ReglaImport>(`/api/categories/reglas/${id}`, {
+          method: 'PATCH',
+          body: JSON.stringify(cambios),
+        }),
+      remove: (id: number) =>
+        req<{ ok: true }>(`/api/categories/reglas/${id}`, { method: 'DELETE' }),
     },
   },
   tags: {
@@ -297,11 +434,89 @@ export const api = {
       }
     },
     exportUrl: (params: TxFilters) => `/api/transactions/export.csv?${txSearch(params)}`,
+    /** Lo que la barra rápida propone: la última partida y los usos recientes. */
+    sugerencia: (profileId: number) =>
+      req<SugerenciaTx>(`/api/transactions/sugerencia?profileId=${profileId}`),
     create: (data: TxDraft) =>
       req<Tx>('/api/transactions', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: number, data: TxDraft) =>
       req<Tx>(`/api/transactions/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     remove: (id: number) => req<{ ok: true }>(`/api/transactions/${id}`, { method: 'DELETE' }),
+    /** Copia una partida sin sus ligas: es un movimiento nuevo, no un segundo abono. */
+    duplicar: (id: number, date?: string) =>
+      req<Tx>(`/api/transactions/${id}/duplicar`, {
+        method: 'POST',
+        body: JSON.stringify(date ? { date } : {}),
+      }),
+    /** Palomear (o despalomear) contra el estado de cuenta. No mueve una cifra. */
+    conciliar: (data: { profileId: number; txIds: number[]; reconciled: boolean }) =>
+      req<{ ok: true; cambiados: number }>('/api/transactions/conciliar', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    adjuntar: (id: number, data: { filename: string; mime: string; dataB64: string }) =>
+      req<TxAttachment>(`/api/transactions/${id}/adjuntos`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    adjuntoUrl: (txId: number, adjuntoId: number) =>
+      `/api/transactions/${txId}/adjuntos/${adjuntoId}`,
+    quitarAdjunto: (txId: number, adjuntoId: number) =>
+      req<{ ok: true }>(`/api/transactions/${txId}/adjuntos/${adjuntoId}`, { method: 'DELETE' }),
+  },
+  bienes: {
+    list: (profileId: number) => req<Bien[]>(`/api/bienes?profileId=${profileId}`),
+    create: (data: {
+      profileId: number
+      name: string
+      kind: BienKind
+      costCents: number
+      acquiredDate: string
+      debtId?: number | null
+      note?: string
+    }) => req<Bien>('/api/bienes', { method: 'POST', body: JSON.stringify(data) }),
+    update: (
+      id: number,
+      data: Partial<{
+        name: string
+        kind: BienKind
+        costCents: number
+        acquiredDate: string
+        debtId: number | null
+        note: string
+        archived: boolean
+      }>,
+    ) => req<Bien>(`/api/bienes/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    remove: (id: number) => req<{ ok: true }>(`/api/bienes/${id}`, { method: 'DELETE' }),
+    /** Cuánto vale hoy, declarado por el usuario. Repetir fecha corrige. */
+    valuar: (id: number, data: { date: string; valueCents: number; note?: string }) =>
+      req<Bien>(`/api/bienes/${id}/valuaciones`, { method: 'POST', body: JSON.stringify(data) }),
+    quitarValuacion: (valuacionId: number) =>
+      req<Bien>(`/api/bienes/valuaciones/${valuacionId}`, { method: 'DELETE' }),
+  },
+  conciliacion: {
+    list: (profileId: number, accountId?: number) =>
+      req<CorteConciliacion[]>(
+        `/api/conciliacion?profileId=${profileId}${accountId ? `&accountId=${accountId}` : ''}`,
+      ),
+    declarar: (data: {
+      profileId: number
+      accountId: number
+      date: string
+      balanceCents: number
+      note?: string
+    }) => req<CorteConciliacion>('/api/conciliacion', { method: 'POST', body: JSON.stringify(data) }),
+    /**
+     * Asienta la diferencia del corte como movimiento: faltante del cajón como
+     * gasto, sobrante como ingreso. El monto no se manda — es el que Finply ya
+     * calculó, y aceptar otro convertiría el ajuste en una partida inventada.
+     */
+    ajustar: (id: number, profileId: number, datos: { categoryId?: number | null; concept?: string } = {}) =>
+      req<{ txId: number; corte: CorteConciliacion }>(`/api/conciliacion/${id}/ajustar`, {
+        method: 'POST',
+        body: JSON.stringify({ profileId, ...datos }),
+      }),
+    remove: (id: number) => req<{ ok: true }>(`/api/conciliacion/${id}`, { method: 'DELETE' }),
   },
   debts: {
     list: (profileId: number) => req<Debt[]>(`/api/debts?profileId=${profileId}`),
@@ -312,6 +527,14 @@ export const api = {
     remove: (id: number) => req<{ ok: true }>(`/api/debts/${id}`, { method: 'DELETE' }),
     /** El plan de pagos: capital contra interés mes por mes. Exige plazo. */
     amortizacion: (id: number) => req<Amortizacion>(`/api/debts/${id}/amortizacion`),
+    /**
+     * Los dos métodos —bola de nieve y avalancha— sobre las mismas deudas y el
+     * mismo dinero extra. Devuelve los dos: cuál conviene es del usuario (R9).
+     */
+    estrategia: (profileId: number, extraCents: number) =>
+      req<ComparacionEstrategia>(
+        `/api/debts/estrategia?profileId=${profileId}&extraCents=${extraCents}`,
+      ),
     addPayment: (
       debtId: number,
       data: {
@@ -352,10 +575,32 @@ export const api = {
   },
   contrapartes: {
     list: (profileId: number) => req<Contraparte[]>(`/api/contrapartes?profileId=${profileId}`),
-    create: (data: { profileId: number; name: string; role?: string; taxId?: string; note?: string }) =>
-      req<Contraparte>('/api/contrapartes', { method: 'POST', body: JSON.stringify(data) }),
-    update: (id: number, data: Partial<{ name: string; role: string; taxId: string; note: string; archived: boolean }>) =>
-      req<Contraparte>(`/api/contrapartes/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    /** Todo de una contraparte en una hoja. Derivado: no guarda nada. */
+    tablero: (id: number, profileId: number) =>
+      req<TableroContraparte>(`/api/contrapartes/${id}/tablero?profileId=${profileId}`),
+    create: (data: {
+      profileId: number
+      name: string
+      role?: string
+      taxId?: string
+      note?: string
+      contact?: string
+      creditDays?: number | null
+      creditLimitCents?: number | null
+    }) => req<Contraparte>('/api/contrapartes', { method: 'POST', body: JSON.stringify(data) }),
+    update: (
+      id: number,
+      data: Partial<{
+        name: string
+        role: string
+        taxId: string
+        note: string
+        contact: string
+        creditDays: number | null
+        creditLimitCents: number | null
+        archived: boolean
+      }>,
+    ) => req<Contraparte>(`/api/contrapartes/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     remove: (id: number) => req<{ ok: true }>(`/api/contrapartes/${id}`, { method: 'DELETE' }),
   },
   centros: {
@@ -366,6 +611,53 @@ export const api = {
       req<CentroCosto>(`/api/centros/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     remove: (id: number) => req<{ ok: true }>(`/api/centros/${id}`, { method: 'DELETE' }),
   },
+  /** Cotizaciones y órdenes de compra: el documento que va antes de la factura. */
+  cotizaciones: {
+    list: (profileId: number, opciones: { direction?: string; status?: string } = {}) => {
+      const q = new URLSearchParams({ profileId: String(profileId) })
+      if (opciones.direction) q.set('direction', opciones.direction)
+      if (opciones.status) q.set('status', opciones.status)
+      return req<Cotizacion[]>(`/api/cotizaciones?${q}`)
+    },
+    resumen: (profileId: number) =>
+      req<{ emitida: ResumenCotizaciones; recibida: ResumenCotizaciones }>(
+        `/api/cotizaciones/resumen?profileId=${profileId}`,
+      ),
+    create: (data: {
+      profileId: number
+      counterpartyId: number
+      direction: string
+      folio?: string
+      concept?: string
+      issueDate: string
+      validUntil?: string | null
+      subtotalCents: number
+      taxCents?: number
+      costCenterId?: number | null
+    }) => req<Cotizacion>('/api/cotizaciones', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: number, data: Record<string, unknown>) =>
+      req<Cotizacion>(`/api/cotizaciones/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    /** Darla por perdida, o revivirla. 'aceptada' se llega facturando. */
+    estado: (id: number, profileId: number, status: 'enviada' | 'perdida') =>
+      req<Cotizacion>(`/api/cotizaciones/${id}/estado?profileId=${profileId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      }),
+    facturar: (
+      id: number,
+      profileId: number,
+      data: { folio?: string; issueDate: string; dueDate?: string | null },
+    ) =>
+      req<{ cotizacion: Cotizacion; factura: Factura }>(
+        `/api/cotizaciones/${id}/facturar?profileId=${profileId}`,
+        { method: 'POST', body: JSON.stringify(data) },
+      ),
+    remove: (id: number, profileId: number) =>
+      req<{ ok: true; facturaViva: boolean }>(
+        `/api/cotizaciones/${id}?profileId=${profileId}`,
+        { method: 'DELETE' },
+      ),
+  },
   facturas: {
     list: (profileId: number, opciones: { direction?: string; pendientes?: boolean } = {}) => {
       const q = new URLSearchParams({ profileId: String(profileId) })
@@ -374,6 +666,7 @@ export const api = {
       return req<Factura[]>(`/api/facturas?${q}`)
     },
     aging: (profileId: number) => req<Aging>(`/api/facturas/aging?profileId=${profileId}`),
+    cobranza: (profileId: number) => req<Cobranza>(`/api/facturas/cobranza?profileId=${profileId}`),
     create: (data: {
       profileId: number
       counterpartyId: number
@@ -384,6 +677,8 @@ export const api = {
       dueDate?: string | null
       subtotalCents: number
       taxCents?: number
+      withheldTaxCents?: number
+      withheldIncomeCents?: number
       costCenterId?: number | null
     }) => req<Factura>('/api/facturas', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: number, data: Record<string, unknown>) =>
@@ -393,12 +688,136 @@ export const api = {
       id: number,
       data: { accountId: number; amountCents: number; date: string; note?: string; categoryId?: number | null },
     ) => req<Factura>(`/api/facturas/${id}/cobros`, { method: 'POST', body: JSON.stringify(data) }),
+    /** Cancelar parte de una factura. No mueve dinero: baja lo cobrable. */
+    nota: (id: number, data: { date: string; folio?: string; concept?: string; amountCents: number }) =>
+      req<Factura>(`/api/facturas/${id}/notas`, { method: 'POST', body: JSON.stringify(data) }),
+    quitarNota: (id: number, notaId: number) =>
+      req<Factura>(`/api/facturas/${id}/notas/${notaId}`, { method: 'DELETE' }),
+    anticipos: (id: number) => req<Anticipo[]>(`/api/facturas/${id}/anticipos`),
+    /** Liga un cobro que ya existía. No crea un movimiento nuevo. */
+    aplicarAnticipo: (id: number, txId: number) =>
+      req<Factura>(`/api/facturas/${id}/anticipos`, { method: 'POST', body: JSON.stringify({ txId }) }),
+    recurrentes: {
+      list: (profileId: number) =>
+        req<FacturaRecurrente[]>(`/api/facturas/recurrentes?profileId=${profileId}`),
+      pendientes: (profileId: number) =>
+        req<BandejaFacturas>(`/api/facturas/recurrentes/pendientes?profileId=${profileId}`),
+      create: (data: Record<string, unknown>) =>
+        req<FacturaRecurrente>('/api/facturas/recurrentes', { method: 'POST', body: JSON.stringify(data) }),
+      update: (id: number, data: Record<string, unknown>) =>
+        req<FacturaRecurrente>(`/api/facturas/recurrentes/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+      remove: (profileId: number, id: number) =>
+        req<{ ok: true; emitidas: number }>(
+          `/api/facturas/recurrentes/${id}?profileId=${profileId}`,
+          { method: 'DELETE' },
+        ),
+      emitir: (profileId: number, id: number, data: { periodo: string } & Record<string, unknown>) =>
+        req<Factura>(`/api/facturas/recurrentes/${id}/emitir?profileId=${profileId}`, {
+          method: 'POST',
+          body: JSON.stringify(data),
+        }),
+      descartar: (profileId: number, id: number, periodo: string) =>
+        req<{ ok: true }>(`/api/facturas/recurrentes/${id}/descartar?profileId=${profileId}`, {
+          method: 'POST',
+          body: JSON.stringify({ periodo }),
+        }),
+    },
   },
   negocio: {
     resultados: (profileId: number, desde: string, hasta: string) =>
       req<EstadoResultados>(`/api/negocio/resultados?profileId=${profileId}&desde=${desde}&hasta=${hasta}`),
-    flujo: (profileId: number, dias: number) =>
-      req<FlujoProyectado>(`/api/negocio/flujo?profileId=${profileId}&dias=${dias}`),
+  },
+  // ── Módulos de giro (Fase 15). Los tres son opt-in y ninguno asienta dinero
+  // por su cuenta: lo que mueve el libro se registra como movimiento normal.
+  inmuebles: {
+    list: (profileId: number) => req<Arrendamiento[]>(`/api/inmuebles?profileId=${profileId}`),
+    create: (data: ArrendamientoDraft) =>
+      req<Arrendamiento>('/api/inmuebles', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: number, data: ArrendamientoDraft) =>
+      req<Arrendamiento>(`/api/inmuebles/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    /**
+     * Los movimientos se quedan en el libro: ese dinero se movió. Pierden la
+     * liga —y con ella su papel—, así que dice cuántos depósitos vuelven a
+     * contar como ingreso.
+     */
+    remove: (profileId: number, id: number) =>
+      req<{ ok: true; movimientos: number; depositos: number }>(
+        `/api/inmuebles/${id}?profileId=${profileId}`,
+        { method: 'DELETE' },
+      ),
+  },
+  horas: {
+    list: (filtro: FiltroHoras) => {
+      const q = new URLSearchParams({ profileId: String(filtro.profileId) })
+      if (filtro.desde) q.set('desde', filtro.desde)
+      if (filtro.hasta) q.set('hasta', filtro.hasta)
+      if (filtro.counterpartyId) q.set('counterpartyId', String(filtro.counterpartyId))
+      if (filtro.sinFacturar) q.set('sinFacturar', 'true')
+      return req<Hora[]>(`/api/horas?${q}`)
+    },
+    /** Los totales miran la ventana; lo por cobrar mira **todo** el historial. */
+    resumen: (profileId: number, desde?: string, hasta?: string) => {
+      const q = new URLSearchParams({ profileId: String(profileId) })
+      if (desde) q.set('desde', desde)
+      if (hasta) q.set('hasta', hasta)
+      return req<ResumenHoras>(`/api/horas/resumen?${q}`)
+    },
+    create: (data: HoraDraft) =>
+      req<Hora>('/api/horas', { method: 'POST', body: JSON.stringify(data) }),
+    /** 409 si ya se facturaron: editarlas cambiaría el respaldo de la factura. */
+    update: (id: number, data: HoraDraft) =>
+      req<Hora>(`/api/horas/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    remove: (profileId: number, id: number) =>
+      req<{ ok: true }>(`/api/horas/${id}?profileId=${profileId}`, { method: 'DELETE' }),
+    /**
+     * Todas las horas sin facturar de un cliente, en una factura. **No asienta
+     * un peso**: el ingreso nace al cobrarla (D14).
+     */
+    facturar: (
+      profileId: number,
+      data: {
+        counterpartyId: number
+        issueDate: string
+        dueDate?: string | null
+        folio?: string
+        concept?: string
+        taxCents?: number
+      },
+    ) =>
+      req<Factura>(`/api/horas/facturar?profileId=${profileId}`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+  },
+  inventario: {
+    /**
+     * La ventana solo afecta al **costo de ventas**: la existencia y el valor
+     * miran todo el historial, porque lo que tienes hoy es lo que entró menos
+     * lo que salió desde siempre.
+     */
+    almacen: (profileId: number, periodo?: { desde: string; hasta: string }) => {
+      const q = new URLSearchParams({ profileId: String(profileId) })
+      if (periodo) {
+        q.set('desde', periodo.desde)
+        q.set('hasta', periodo.hasta)
+      }
+      return req<Almacen>(`/api/inventario?${q}`)
+    },
+    movimientos: (profileId: number, productId: number) =>
+      req<MovimientoStock[]>(`/api/inventario/${productId}/movimientos?profileId=${profileId}`),
+    create: (data: ProductoDraft) =>
+      req<Producto>('/api/inventario', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: number, data: ProductoDraft) =>
+      req<Producto>(`/api/inventario/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    /** Con historial responde 409: lo que toca es archivar, no perder el pasado. */
+    remove: (profileId: number, id: number) =>
+      req<{ ok: true }>(`/api/inventario/${id}?profileId=${profileId}`, { method: 'DELETE' }),
+    registrar: (data: MovimientoStockDraft) =>
+      req<Producto>('/api/inventario/movimientos', { method: 'POST', body: JSON.stringify(data) }),
+    borrarMovimiento: (profileId: number, id: number) =>
+      req<{ ok: true }>(`/api/inventario/movimientos/${id}?profileId=${profileId}`, {
+        method: 'DELETE',
+      }),
   },
   precios: {
     analizar: (data: { profileId: number; texto: string; fecha?: string | null }) =>
@@ -411,46 +830,174 @@ export const api = {
   },
   simulador: (
     profileId: number,
-    opciones: { meses: number; ahorroMensualCents: number; rendimientoAnualBp: number },
+    opciones: {
+      meses: number
+      ahorroMensualCents: number
+      rendimientoAnualBp: number
+      inflacionAnualBp?: number
+      /** Ausente = se aporta todo el horizonte. */
+      mesesAporte?: number
+      retiroMensualCents?: number
+      /** Cero o ausente = no se pregunta por una meta. */
+      objetivoCents?: number
+    },
   ) =>
     req<Simulacion>(
       `/api/simulador?profileId=${profileId}&meses=${opciones.meses}` +
         `&ahorroMensualCents=${opciones.ahorroMensualCents}` +
-        `&rendimientoAnualBp=${opciones.rendimientoAnualBp}`,
+        `&rendimientoAnualBp=${opciones.rendimientoAnualBp}` +
+        `&inflacionAnualBp=${opciones.inflacionAnualBp ?? 0}` +
+        (opciones.mesesAporte === undefined ? '' : `&mesesAporte=${opciones.mesesAporte}`) +
+        `&retiroMensualCents=${opciones.retiroMensualCents ?? 0}` +
+        `&objetivoCents=${opciones.objetivoCents ?? 0}`,
     ),
   budgets: {
+    /** El mes entero: topes mensuales, anuales del año, tope total y el avance. */
     list: (profileId: number, month: string) =>
-      req<Budget[]>(`/api/budgets?profileId=${profileId}&month=${month}`),
-    set: (data: { profileId: number; categoryId: number; month: string; amountCents: number }) =>
-      req<Budget>('/api/budgets', { method: 'POST', body: JSON.stringify(data) }),
+      req<PresupuestoMes>(`/api/budgets?profileId=${profileId}&month=${month}`),
+    set: (data: {
+      profileId: number
+      categoryId: number
+      /** 'AAAA-MM' si es mensual, 'AAAA' si es anual. */
+      period: string
+      periodKind?: 'mes' | 'anio'
+      amountCents: number
+      /** Si este mes recibe el saldo del anterior. Solo mensuales. */
+      rollover?: boolean
+    }) => req<PresupuestoMes>('/api/budgets', { method: 'POST', body: JSON.stringify(data) }),
     copy: (data: { profileId: number; from: string; to: string }) =>
-      req<{ copiados: number; budgets: Budget[] }>('/api/budgets/copiar', {
+      req<{ copiados: number; presupuesto: PresupuestoMes }>('/api/budgets/copiar', {
         method: 'POST',
         body: JSON.stringify(data),
       }),
     remove: (id: number) => req<{ ok: true }>(`/api/budgets/${id}`, { method: 'DELETE' }),
+    setTotal: (data: { profileId: number; month: string; amountCents: number }) =>
+      req<TopeTotal>('/api/budgets/total', { method: 'PUT', body: JSON.stringify(data) }),
+    removeTotal: (id: number) =>
+      req<{ ok: true }>(`/api/budgets/total/${id}`, { method: 'DELETE' }),
   },
   goals: {
     list: (profileId: number) => req<Goal[]>(`/api/goals?profileId=${profileId}`),
     create: (data: {
-      profileId: number; name: string; targetCents: number; dueDate?: string | null; note?: string
+      profileId: number
+      name: string
+      targetCents: number
+      dueDate?: string | null
+      note?: string
+      /** Dónde vive el dinero de la meta. Sin ella, la meta es solo un apunte. */
+      accountId?: number | null
     }) => req<Goal>('/api/goals', { method: 'POST', body: JSON.stringify(data) }),
     update: (
       id: number,
-      data: Partial<{ name: string; targetCents: number; dueDate: string | null; note: string }>,
+      data: Partial<{
+        name: string
+        targetCents: number
+        dueDate: string | null
+        note: string
+        accountId: number | null
+      }>,
     ) => req<Goal>(`/api/goals/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     remove: (id: number) => req<{ ok: true }>(`/api/goals/${id}`, { method: 'DELETE' }),
-    addEntry: (id: number, data: { amountCents: number; date: string; note?: string }) =>
+    addEntry: (
+      id: number,
+      data: { amountCents: number; date: string; note?: string; accountId?: number | null },
+    ) =>
       req<Goal>(`/api/goals/${id}/entries`, { method: 'POST', body: JSON.stringify(data) }),
     removeEntry: (entryId: number) =>
       req<Goal>(`/api/goals/entries/${entryId}`, { method: 'DELETE' }),
   },
+  /**
+   * Configuración del perfil (Fase 21). Ni una de estas rutas mueve dinero:
+   * lo que se registra con un campo propio o con una plantilla pasa por
+   * `/api/transactions`, como todo lo demás.
+   */
+  personalizacion: {
+    campos: {
+      list: (profileId: number) =>
+        req<CampoPropio[]>(`/api/personalizacion/campos?profileId=${profileId}`),
+      create: (data: {
+        profileId: number
+        label: string
+        kind: string
+        options?: string
+      }) =>
+        req<CampoPropio>('/api/personalizacion/campos', {
+          method: 'POST',
+          body: JSON.stringify(data),
+        }),
+      update: (
+        id: number,
+        profileId: number,
+        data: Partial<{ label: string; kind: string; options: string; position: number; archived: boolean }>,
+      ) =>
+        req<CampoPropio>(`/api/personalizacion/campos/${id}?profileId=${profileId}`, {
+          method: 'PATCH',
+          body: JSON.stringify(data),
+        }),
+      /** Se lleva sus respuestas, y la respuesta dice cuántas eran. */
+      remove: (id: number, profileId: number) =>
+        req<{ ok: true; respuestas: number }>(
+          `/api/personalizacion/campos/${id}?profileId=${profileId}`,
+          { method: 'DELETE' },
+        ),
+    },
+    plantillas: {
+      list: (profileId: number) =>
+        req<PlantillaTx[]>(`/api/personalizacion/plantillas?profileId=${profileId}`),
+      create: (data: Record<string, unknown>) =>
+        req<PlantillaTx>('/api/personalizacion/plantillas', {
+          method: 'POST',
+          body: JSON.stringify(data),
+        }),
+      update: (id: number, profileId: number, data: Record<string, unknown>) =>
+        req<PlantillaTx>(`/api/personalizacion/plantillas/${id}?profileId=${profileId}`, {
+          method: 'PATCH',
+          body: JSON.stringify(data),
+        }),
+      /** Borrarla no toca un solo movimiento de los que salieron de ella. */
+      remove: (id: number, profileId: number) =>
+        req<{ ok: true }>(`/api/personalizacion/plantillas/${id}?profileId=${profileId}`, {
+          method: 'DELETE',
+        }),
+    },
+    configUrl: (profileId: number) => `/api/personalizacion/config?profileId=${profileId}`,
+    aplicarConfig: (profileId: number, config: unknown) =>
+      req<{
+        categoriasNuevas: number
+        camposNuevos: number
+        plantillasNuevas: number
+        plantillasCojas: string[]
+        respetadas: { categorias: number; campos: number; plantillas: number }
+      }>(`/api/personalizacion/config?profileId=${profileId}`, {
+        method: 'POST',
+        body: JSON.stringify(config),
+      }),
+  },
   notes: {
-    list: (profileId: number) => req<Note[]>(`/api/notes?profileId=${profileId}`),
-    create: (data: { profileId: number; title: string; body: string }) =>
-      req<Note>('/api/notes', { method: 'POST', body: JSON.stringify(data) }),
-    update: (id: number, data: Partial<{ title: string; body: string; pinned: boolean }>) =>
-      req<Note>(`/api/notes/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    /** Sin filtro son todas; con `txId` o `period`, las de esa partida o ese mes. */
+    list: (profileId: number, filtro?: { txId?: number; period?: string }) => {
+      const params = new URLSearchParams({ profileId: String(profileId) })
+      if (filtro?.txId) params.set('txId', String(filtro.txId))
+      if (filtro?.period) params.set('period', filtro.period)
+      return req<Note[]>(`/api/notes?${params}`)
+    },
+    create: (data: {
+      profileId: number
+      title: string
+      body: string
+      txId?: number | null
+      period?: string | null
+    }) => req<Note>('/api/notes', { method: 'POST', body: JSON.stringify(data) }),
+    update: (
+      id: number,
+      data: Partial<{
+        title: string
+        body: string
+        pinned: boolean
+        txId: number | null
+        period: string | null
+      }>,
+    ) => req<Note>(`/api/notes/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     remove: (id: number) => req<{ ok: true }>(`/api/notes/${id}`, { method: 'DELETE' }),
   },
   importaciones: {
@@ -509,22 +1056,59 @@ export const api = {
   calendario: (profileId: number, dias = 30) =>
     req<Calendario>(`/api/calendario?profileId=${profileId}&dias=${dias}`),
   /**
+   * La caja proyectada día a día. Derivada del calendario y de lo que ya está
+   * asentado con fecha futura: pedirla no escribe una fila.
+   */
+  flujo: (profileId: number, dias = 30) =>
+    req<FlujoProyectado>(`/api/flujo?profileId=${profileId}&dias=${dias}`),
+  /**
    * Las alertas de hoy. **Derivadas**: no se guardan, no se descartan y
    * pedirlas no escribe nada. Se apagan solas cuando el hecho deja de ser
    * cierto.
    */
   alertas: (profileId: number) => req<Alerta[]>(`/api/alertas?profileId=${profileId}`),
   /** El panel sobre los últimos `meses` **cerrados**; el mes en curso no entra. */
-  analisis: (profileId: number, meses = 6) =>
-    req<Analisis>(`/api/analisis?profileId=${profileId}&meses=${meses}`),
+  analisis: (profileId: number, meses = 6, umbralHormigaCents?: number) =>
+    req<Analisis>(
+      `/api/analisis?profileId=${profileId}&meses=${meses}` +
+        (umbralHormigaCents === undefined ? '' : `&umbralHormigaCents=${umbralHormigaCents}`),
+    ),
   summary: (profileId: number, month: string) =>
     req<Summary>(`/api/summary?profileId=${profileId}&month=${month}`),
   reportes: {
     /** El año completo: series, categorías, etiquetas y totales. */
     anual: (profileId: number, year: number) =>
       req<ReporteAnual>(`/api/reportes?profileId=${profileId}&year=${year}`),
-    comparativa: (profileId: number, month: string) =>
-      req<Comparativa>(`/api/reportes/comparativa?profileId=${profileId}&month=${month}`),
+    /**
+     * Dos periodos cualesquiera, de mes a mes. Sin `contra`, el servidor toma
+     * el bloque inmediatamente anterior del mismo largo.
+     */
+    comparativa: (
+      profileId: number,
+      periodo: { desde: string; hasta: string },
+      contra?: { desde: string; hasta: string },
+    ) =>
+      req<Comparativa>(
+        `/api/reportes/comparativa?profileId=${profileId}` +
+          `&desde=${periodo.desde}&hasta=${periodo.hasta}` +
+          (contra ? `&contraDesde=${contra.desde}&contraHasta=${contra.hasta}` : ''),
+      ),
+    // Los mismos dos reportes en CSV, hechos por las mismas funciones del
+    // servidor: el archivo no puede decir una cifra distinta de la pantalla.
+    anualCsvUrl: (profileId: number, year: number) =>
+      `/api/reportes/export.csv?profileId=${profileId}&year=${year}`,
+    comparativaCsvUrl: (
+      profileId: number,
+      periodo: { desde: string; hasta: string },
+      contra?: { desde: string; hasta: string },
+    ) =>
+      `/api/reportes/comparativa.csv?profileId=${profileId}` +
+      `&desde=${periodo.desde}&hasta=${periodo.hasta}` +
+      (contra ? `&contraDesde=${contra.desde}&contraHasta=${contra.hasta}` : ''),
+  },
+  /** Sacar los datos de un perfil: una hoja por tabla dentro de un .zip. */
+  exportar: {
+    libroUrl: (profileId: number) => `/api/exportar/libro.zip?profileId=${profileId}`,
   },
   backup: {
     /** El navegador descarga el archivo directo desde esta ruta. */

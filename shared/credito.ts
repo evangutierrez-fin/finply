@@ -82,6 +82,122 @@ export function fechasParcialidades(
   })
 }
 
+// ── El pago mínimo de la tarjeta ──────────────────────────────────────────
+//
+// La tarjeta era la única deuda de Finply **sin interés modelado**, y es la
+// más cara que tiene cualquiera: una deuda con tasa y plazo enseña su tabla de
+// amortización, y la tarjeta enseñaba nada más el saldo.
+//
+// Nada de aquí es de un banco ni de un país (R15): el usuario escribe su tasa,
+// su porcentaje de pago mínimo y su piso, que es lo que dice su contrato. Y
+// nada de aquí es un consejo (R9): es su aritmética con sus supuestos.
+
+/** Hasta dónde se simula antes de declarar que esto no termina. */
+const TOPE_MESES = 600
+
+export interface PlanPagoMinimo {
+  /** Meses hasta liquidar. `null` si con el mínimo nunca se liquida. */
+  meses: number | null
+  totalPagadoCents: number
+  totalInteresCents: number
+  /** El primer pago mínimo, que es el que el usuario reconoce del estado. */
+  primerPagoCents: number
+  /**
+   * Verdadero cuando el mínimo no alcanza ni para el interés del mes: el saldo
+   * sube en vez de bajar y la deuda no se acaba nunca. Es la respuesta honesta,
+   * no un error.
+   */
+  nuncaTermina: boolean
+}
+
+/**
+ * El pago mínimo de un corte: un porcentaje del saldo, con piso, y nunca más
+ * que el saldo entero. Así lo calculan los contratos — el piso existe justo
+ * para que un saldo chico no se pague en cien años.
+ */
+export function pagoMinimo(
+  saldoCents: number,
+  minPaymentBp: number,
+  floorCents: number | null,
+): number {
+  if (saldoCents <= 0) return 0
+  const porcentaje = Math.round((saldoCents * minPaymentBp) / 10_000)
+  return Math.min(saldoCents, Math.max(porcentaje, floorCents ?? 0))
+}
+
+/**
+ * Qué pasa si solo pagas el mínimo, mes a mes: se devenga el interés del
+ * periodo sobre el saldo, se abona el mínimo y se repite.
+ *
+ * El interés se aplica **antes** del pago, que es el orden del estado de
+ * cuenta, y la simulación supone que no vuelves a usar la tarjeta. Ese
+ * supuesto va escrito en la vista: es optimista a propósito, porque incluso
+ * así la cifra asusta.
+ */
+export function simularPagoMinimo(params: {
+  saldoCents: number
+  annualRateBp: number
+  minPaymentBp: number
+  floorCents: number | null
+  /** Un pago fijo del usuario en vez del mínimo, para poder comparar. */
+  pagoFijoCents?: number
+}): PlanPagoMinimo {
+  const { saldoCents, annualRateBp, minPaymentBp, floorCents, pagoFijoCents } = params
+  const vacio: PlanPagoMinimo = {
+    meses: 0,
+    totalPagadoCents: 0,
+    totalInteresCents: 0,
+    primerPagoCents: 0,
+    nuncaTermina: false,
+  }
+  if (saldoCents <= 0) return vacio
+
+  const tasaMensual = annualRateBp / 10_000 / 12
+  let saldo = saldoCents
+  let pagado = 0
+  let intereses = 0
+  let primerPago = 0
+
+  for (let mes = 1; mes <= TOPE_MESES; mes++) {
+    const interes = Math.round(saldo * tasaMensual)
+    saldo += interes
+    intereses += interes
+    const exigido = pagoFijoCents ?? pagoMinimo(saldo, minPaymentBp, floorCents)
+    const pago = Math.min(saldo, exigido)
+    if (mes === 1) primerPago = pago
+    // Si lo exigido no cubre ni el interés, el saldo crece: esto no termina.
+    if (pago <= interes && saldo > 0) {
+      return {
+        meses: null,
+        totalPagadoCents: pagado + pago,
+        totalInteresCents: intereses,
+        primerPagoCents: primerPago,
+        nuncaTermina: true,
+      }
+    }
+    saldo -= pago
+    pagado += pago
+    if (saldo <= 0) {
+      return {
+        meses: mes,
+        totalPagadoCents: pagado,
+        totalInteresCents: intereses,
+        primerPagoCents: primerPago,
+        nuncaTermina: false,
+      }
+    }
+  }
+
+  // Cincuenta años sin liquidar es, para cualquier efecto práctico, nunca.
+  return {
+    meses: null,
+    totalPagadoCents: pagado,
+    totalInteresCents: intereses,
+    primerPagoCents: primerPago,
+    nuncaTermina: true,
+  }
+}
+
 /**
  * Tabla de amortización de cuota nivelada (sistema francés).
  *

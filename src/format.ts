@@ -1,9 +1,39 @@
 // Formateo de dinero y fechas. Fechas siempre como texto 'AAAA-MM-DD'
 // para evitar sorpresas de zona horaria.
+//
+// Desde la Fase 21 la **convención la elige el perfil** —cómo se ven las
+// fechas, si se enseñan los centavos— y la aritmética vive en
+// `shared/formato.ts`, que es puro y está probado. Aquí queda una sola cosa:
+// dónde se guarda la preferencia activa.
+//
+// Es un valor de módulo y no un contexto de React **a propósito**. `fmtMoney` y
+// `fmtDate` se llaman desde trescientos lugares, muchos fuera de un componente
+// —dentro de `useMemo`, en funciones sueltas de una vista, en el rótulo de un
+// eje—, y convertirlas en hooks obligaría a tocar cada uno para pasar algo que
+// es global por naturaleza: cómo se lee este libro. App lo fija al cargar el
+// perfil y lo cambia al cambiar de perfil.
+
+import {
+  FORMATO_POR_OMISION, MESES, fechaCon, fechaConAnio, pesosCon, type Formato,
+} from '../shared/formato.ts'
+
+let formatoActivo: Formato = FORMATO_POR_OMISION
+
+/** Fija la convención del libro abierto. La llama App, y solo App. */
+export function usarFormato(formato: Partial<Formato>): void {
+  formatoActivo = { ...FORMATO_POR_OMISION, ...formato }
+}
+
+export function formatoActual(): Formato {
+  return formatoActivo
+}
 
 const formatters = new Map<string, Intl.NumberFormat>()
 
 export function fmtMoney(cents: number, currency = 'MXN'): string {
+  // Sin centavos hay que rehacer el formateador, así que el camino rápido
+  // —con centavos, que es el de siempre— conserva su caché.
+  if (formatoActivo.sinCentavos) return pesosCon(cents, formatoActivo, currency)
   let f = formatters.get(currency)
   if (!f) {
     f = new Intl.NumberFormat('es-MX', { style: 'currency', currency })
@@ -32,11 +62,23 @@ export function fmtCompacto(cents: number): string {
   return `${signo}$${Math.round(abs)}`
 }
 
-/** '1,234.56' | '$1234' | '1234.5' → centavos enteros, o null si no es un monto. */
-export function parseAmount(raw: string): number | null {
+/**
+ * '1,234.56' | '$1234' | '1234.5' → centavos enteros, o null si no es un monto.
+ *
+ * Por omisión exige que sea **mayor que cero**, porque casi todo lo que se
+ * teclea en Finply es un monto y un monto de cero no significa nada. La
+ * excepción es el saldo de un corte de conciliación (D19): el estado de cuenta
+ * de una tarjeta viene en negativo, y el de una cuenta vacía viene en cero.
+ */
+export function parseAmount(
+  raw: string,
+  opciones: { permitirNegativo?: boolean } = {},
+): number | null {
   const clean = raw.replace(/[$,\s]/g, '')
-  if (!/^\d+(\.\d{1,2})?$/.test(clean)) return null
+  const patron = opciones.permitirNegativo ? /^-?\d+(\.\d{1,2})?$/ : /^\d+(\.\d{1,2})?$/
+  if (!patron.test(clean)) return null
   const cents = Math.round(parseFloat(clean) * 100)
+  if (opciones.permitirNegativo) return cents
   return cents > 0 ? cents : null
 }
 
@@ -55,20 +97,15 @@ export function fmtTasa(bp: number): string {
   return `${Number.isInteger(pct) ? pct : pct.toFixed(2).replace(/0$/, '')} %`
 }
 
-export const MESES = [
-  'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
-  'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
-]
+export { MESES }
 
 export function fmtDate(iso: string): string {
-  const [, m, d] = iso.split('-')
-  return `${Number(d)} ${MESES[Number(m) - 1]!.slice(0, 3)}`
+  return fechaCon(iso, formatoActivo.fecha)
 }
 
-/** Como fmtDate pero con el año corto: un plan a 48 meses cruza varios. */
+/** Como fmtDate pero con el año: un plan a 48 meses cruza varios. */
 export function fmtDateAnio(iso: string): string {
-  const [y] = iso.split('-')
-  return `${fmtDate(iso)} ${y!.slice(2)}`
+  return fechaConAnio(iso, formatoActivo.fecha)
 }
 
 export function monthLabel(month: string): string {

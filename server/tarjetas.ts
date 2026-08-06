@@ -12,7 +12,12 @@
 //     cargo ancla. Si contara los dos, la tarjeta pediría el doble.
 
 import { db, ensureCategory, ensureTarjeta, httpError, inTransaction } from './db.ts'
-import { fechasParcialidades, parcialidades } from '../shared/credito.ts'
+import {
+  fechasParcialidades,
+  pagoMinimo,
+  parcialidades,
+  simularPagoMinimo,
+} from '../shared/credito.ts'
 import { hoyISO, siguienteDiaDelMes, sumarMeses, ultimoCorte } from '../shared/fechas.ts'
 import type { CompraMSI, EstadoTarjeta } from '../shared/types.ts'
 
@@ -144,6 +149,22 @@ export function estadoTarjetas(profileId: number, hoy = hoyISO()): EstadoTarjeta
     const saldoAlCorte = -t.opening_cents + mov.deuda + cuotas.facturado
     const configurada = t.cut_day !== null
 
+    // El costo de la tarjeta, si el usuario copió su contrato.
+    //
+    // El mínimo se calcula sobre lo que la tarjeta te está cobrando: el saldo
+    // del corte cuando hay corte, y si no, la deuda entera.
+    //
+    // La simulación, en cambio, corre sobre el **saldo revolvente** —la deuda
+    // menos las parcialidades de meses que todavía no se facturan—, porque esa
+    // parte no genera intereses: ese es justo el trato de un MSI. Meterla
+    // cobraría un interés que nadie va a pagar.
+    const annualRateBp = t.annual_rate_bp ?? null
+    const minPaymentBp = t.min_payment_bp ?? null
+    const floorCents = t.min_payment_floor_cents ?? null
+    const hayMinimo = minPaymentBp !== null || floorCents !== null
+    const baseMinimo = configurada ? Math.max(0, saldoAlCorte) : Math.max(0, deudaCents)
+    const revolventeCents = Math.max(0, deudaCents - cuotas.porFacturar)
+
     return {
       accountId: t.id,
       name: t.name,
@@ -163,6 +184,22 @@ export function estadoTarjetas(profileId: number, hoy = hoyISO()): EstadoTarjeta
         : null,
       msiPorFacturarCents: cuotas.porFacturar,
       msiProximoCorteCents: cuotas.proximo,
+      annualRateBp,
+      minPaymentBp,
+      minPaymentFloorCents: floorCents,
+      pagoMinimoCents: hayMinimo ? pagoMinimo(baseMinimo, minPaymentBp ?? 0, floorCents) : null,
+      // Sin tasa no hay nada honesto que decir: cuánto tardas en liquidar
+      // pagando el mínimo depende por completo de cuánto te cobra la tarjeta,
+      // y Finply no supone la tasa de nadie (R15).
+      siPagasElMinimo:
+        annualRateBp !== null && hayMinimo && revolventeCents > 0
+          ? simularPagoMinimo({
+              saldoCents: revolventeCents,
+              annualRateBp,
+              minPaymentBp: minPaymentBp ?? 0,
+              floorCents,
+            })
+          : null,
     }
   })
 }

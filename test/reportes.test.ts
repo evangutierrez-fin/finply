@@ -117,7 +117,9 @@ describe('lo que solo mueve patrimonio no cuenta (D6)', () => {
     assert.equal(r.totales.tasaAhorro, 1 / 3)
     // El gasto sin categoría del mes son los 20,000 de vivir, no los 80,000
     // que saldrían si el enganche se colara.
-    assert.deepEqual(r.porCategoria, [{ name: 'Sin categoría', expenseCents: 2000000 }])
+    // `hijos` vacío: desde la Fase 23 cada renglón trae su desglose, y una
+    // categoría sin subcategorías lo trae vacío.
+    assert.deepEqual(r.porCategoria, [{ name: 'Sin categoría', expenseCents: 2000000, hijos: [] }])
   })
 
   test('aportar y retirar de una inversión no mueve ingresos ni gastos', async () => {
@@ -286,8 +288,11 @@ describe('comparativa mes contra mes', () => {
     await mov(perfil.id, cuenta.id, { type: 'gasto', amountCents: 250000, date: '2026-07-10', categoryId: comida.id })
     await mov(perfil.id, cuenta.id, { type: 'gasto', amountCents: 300000, date: '2026-06-12', categoryId: super_.id })
 
-    const comp = (await c.get(`/api/reportes/comparativa?profileId=${perfil.id}&month=2026-07`)).body
-    assert.equal(comp.anterior, '2026-06')
+    const comp = (
+      await c.get(`/api/reportes/comparativa?profileId=${perfil.id}&desde=2026-07&hasta=2026-07`)
+    ).body
+    assert.equal(comp.previo.desde, '2026-06')
+    assert.equal(comp.previo.hasta, '2026-06')
     assert.equal(comp.actual.expenseCents, 250000)
     assert.equal(comp.previo.expenseCents, 400000)
 
@@ -302,8 +307,10 @@ describe('comparativa mes contra mes', () => {
     const { perfil, cuenta } = await libroBase(c, 'Cruce de año')
     await mov(perfil.id, cuenta.id, { type: 'gasto', amountCents: 50000, date: '2025-12-20' })
 
-    const comp = (await c.get(`/api/reportes/comparativa?profileId=${perfil.id}&month=2026-01`)).body
-    assert.equal(comp.anterior, '2025-12')
+    const comp = (
+      await c.get(`/api/reportes/comparativa?profileId=${perfil.id}&desde=2026-01&hasta=2026-01`)
+    ).body
+    assert.equal(comp.previo.desde, '2025-12')
     assert.equal(comp.previo.expenseCents, 50000)
   })
 })

@@ -37,11 +37,53 @@ export function armarCsv(encabezados: string[], filas: string[][]): string {
   return `${BOM}${lineas.join('\r\n')}\r\n`
 }
 
-/** Centavos enteros → '1234.56', con punto decimal y sin separador de miles. */
-export function montoCsv(cents: number): string {
-  const signo = cents < 0 ? '-' : ''
-  const abs = Math.abs(cents)
-  return `${signo}${Math.floor(abs / 100)}.${String(abs % 100).padStart(2, '0')}`
+export interface SeccionCsv {
+  titulo: string
+  encabezados: string[]
+  filas: string[][]
+}
+
+/**
+ * Varias tablas en un solo CSV, separadas por su título y una línea en blanco.
+ *
+ * Un **reporte no es una tabla de datos**: la pantalla enseña los totales, los
+ * doce meses, las categorías, las fuentes y las etiquetas a la vez, y partirlo
+ * en cinco archivos obligaría al usuario a rearmar lo que estaba mirando. Es
+ * la forma que tiene un reporte impreso, y por eso vale aquí y no valdría para
+ * el export completo, que sí es una tabla por hoja (D32).
+ */
+export function armarCsvSecciones(titulo: string, secciones: SeccionCsv[]): string {
+  const filas: string[][] = [[titulo], []]
+  for (const s of secciones) {
+    filas.push([s.titulo], s.encabezados, ...s.filas, [])
+  }
+  return armarCsv(filas[0]!, filas.slice(1))
+}
+
+/**
+ * Un entero escalado → su decimal exacto, con punto y sin separador de miles.
+ *
+ * Finply guarda enteros por una razón —centavos, puntos base, unidades por
+ * 10⁸, milésimas— y esa escala es cosa suya, no del usuario: en un archivo
+ * que se va a abrir en otro lado, `4500` donde hay $45.00 es un error de cien
+ * veces. Deshacer la escala aquí es exacto: se parte el entero, no se divide
+ * en coma flotante.
+ *
+ * Acepta `bigint` porque una cantidad en unidades por 10⁸ puede pasarse del
+ * entero seguro de JavaScript, que es justo por lo que se guarda escalada.
+ */
+export function escalaCsv(valor: number | bigint, decimales: number): string {
+  const entero = BigInt(valor)
+  const signo = entero < 0n ? '-' : ''
+  const abs = entero < 0n ? -entero : entero
+  const div = 10n ** BigInt(decimales)
+  const fraccion = String(abs % div).padStart(decimales, '0')
+  return decimales === 0 ? `${signo}${abs}` : `${signo}${abs / div}.${fraccion}`
+}
+
+/** Centavos enteros → '1234.56'. */
+export function montoCsv(cents: number | bigint): string {
+  return escalaCsv(cents, 2)
 }
 
 // ── Lectura ───────────────────────────────────────────────────────────────

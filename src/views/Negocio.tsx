@@ -4,13 +4,12 @@ import { useApp } from '../context.ts'
 import { useFetch } from '../hooks.ts'
 import { fmtDate, fmtMoney, currentMonth, shiftMonth, monthLabel } from '../format.ts'
 import { Money } from '../components/Money.tsx'
-import type { EstadoResultados, RenglonResultados } from '../../shared/types.ts'
-
-const VENTANAS = [
-  { dias: 30, label: '30 días' },
-  { dias: 60, label: '60 días' },
-  { dias: 90, label: '90 días' },
-]
+import type { View } from '../components/Sidebar.tsx'
+import type {
+  EstadoResultados,
+  RenglonRentabilidad,
+  RenglonResultados,
+} from '../../shared/types.ts'
 
 /** Primer y último día de un mes 'AAAA-MM'. */
 function limites(month: string): { desde: string; hasta: string } {
@@ -40,6 +39,65 @@ function Renglones({ titulo, filas, total }: { titulo: string; filas: RenglonRes
   )
 }
 
+/**
+ * El cambio contra el mismo periodo anterior. El porcentaje solo se dice
+ * cuando el mes pasado había algo contra qué medir: crecer desde cero no es
+ * "infinito por ciento", es que antes no había nada.
+ */
+function Contra({ ahora, antes, label }: { ahora: number; antes: number; label: string }) {
+  const delta = ahora - antes
+  const pct = antes > 0 ? Math.round((delta / antes) * 1000) / 10 : null
+  return (
+    <span className={`negocio-delta${delta >= 0 ? ' stat-in' : ''}`}>
+      {delta === 0 ? '=' : delta > 0 ? '▲' : '▼'} <Money cents={delta} signed className="cifra-chica" />
+      {pct !== null && ` · ${pct > 0 ? '+' : ''}${pct} %`}
+      <span className="negocio-delta-label"> {label}</span>
+    </span>
+  )
+}
+
+/** Ingresos, gasto atribuido y margen. Sirve igual a un cliente y a un centro. */
+function TablaRentabilidad({
+  titulo,
+  filas,
+  vacio,
+}: {
+  titulo: string
+  filas: RenglonRentabilidad[]
+  vacio: string
+}) {
+  if (filas.length === 0) return <p className="grafica-vacia">{vacio}</p>
+  return (
+    <table className="tabla">
+      <thead>
+        <tr>
+          <th>{titulo}</th>
+          <th className="col-num">Entró</th>
+          <th className="col-num">Salió</th>
+          <th className="col-num">Margen</th>
+        </tr>
+      </thead>
+      <tbody>
+        {filas.map((f) => (
+          <tr key={f.id ?? 'sin'}>
+            <td>{f.name}</td>
+            <td className="col-num"><Money cents={f.ingresosCents} className="cifra-chica" /></td>
+            <td className="col-num"><Money cents={f.gastoCents} className="cifra-chica" /></td>
+            <td className="col-num">
+              <span className={f.margenCents >= 0 ? 'stat-in' : ''}>
+                <Money cents={f.margenCents} signed className="cifra-chica" />
+              </span>
+              {f.margenPct !== null && (
+                <span className="cifra-chica"> · {Math.round(f.margenPct * 100)} %</span>
+              )}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
 function Resultados({ datos }: { datos: EstadoResultados }) {
   const pct = datos.margenBrutoPct
   return (
@@ -47,7 +105,10 @@ function Resultados({ datos }: { datos: EstadoResultados }) {
       <table className="tabla resultados">
         <tbody>
           <tr className="resultados-fuerte">
-            <td>Ingresos cobrados</td>
+            <td>
+              Ingresos cobrados
+              <Contra ahora={datos.ingresosCents} antes={datos.previo.ingresosCents} label="contra el periodo anterior" />
+            </td>
             <td className="col-num"><Money cents={datos.ingresosCents} /></td>
           </tr>
           <Renglones titulo="Costo de ventas" filas={datos.detalle.costoVenta} total={datos.costoVentaCents} />
@@ -59,7 +120,14 @@ function Resultados({ datos }: { datos: EstadoResultados }) {
           <Renglones titulo="Gastos variables" filas={datos.detalle.variable} total={datos.gastoVariableCents} />
           <Renglones titulo="Sin clasificar" filas={datos.detalle.sinClasificar} total={datos.sinClasificarCents} />
           <tr className="resultados-fuerte resultados-utilidad">
-            <td>Utilidad</td>
+            <td>
+              Utilidad
+              <Contra
+                ahora={datos.utilidadCents}
+                antes={datos.previo.utilidadCents}
+                label={`contra ${fmtDate(datos.previo.desde)} – ${fmtDate(datos.previo.hasta)}`}
+              />
+            </td>
             <td className="col-num">
               <span className={datos.utilidadCents >= 0 ? 'stat-in' : ''}>
                 <Money cents={datos.utilidadCents} signed />
@@ -79,19 +147,14 @@ function Resultados({ datos }: { datos: EstadoResultados }) {
   )
 }
 
-export function Negocio() {
+export function Negocio({ onNav }: { onNav: (view: View) => void }) {
   const { profile, refreshKey } = useApp()
   const [mes, setMes] = useState(currentMonth())
-  const [dias, setDias] = useState(30)
   const { desde, hasta } = limites(mes)
 
   const { data: r, error } = useFetch(
     () => api.negocio.resultados(profile.id, desde, hasta),
     [profile.id, desde, hasta, refreshKey],
-  )
-  const { data: flujo } = useFetch(
-    () => api.negocio.flujo(profile.id, dias),
-    [profile.id, dias, refreshKey],
   )
 
   return (
@@ -178,112 +241,61 @@ export function Negocio() {
             </section>
           </div>
 
+          {r.porCliente.length > 0 && (
+            <section className="hoja">
+              <h2 className="hoja-titulo">Qué deja cada cliente</h2>
+              <TablaRentabilidad
+                titulo="Cliente"
+                filas={r.porCliente}
+                vacio="Todavía ningún movimiento lleva contraparte."
+              />
+              <p className="reportes-supuesto">
+                Un gasto solo cuenta aquí si le pusiste contraparte, y la contraparte de un gasto
+                suele ser el proveedor, no el cliente: por eso casi todo el costo vive abajo, en{' '}
+                {profile.dimensionLabel.toLowerCase()}, y no repartido entre clientes.{' '}
+                {r.gastoSinContraparteCents > 0 && (
+                  <>
+                    Este periodo quedaron{' '}
+                    <strong className="cifra-chica">{fmtMoney(r.gastoSinContraparteCents)}</strong>{' '}
+                    de gasto sin atribuir a nadie.{' '}
+                  </>
+                )}
+                No se reparte a ojo, por lo mismo que un gasto sin papel no se supone fijo.
+              </p>
+            </section>
+          )}
+
           {r.porCentro.length > 1 && (
             <section className="hoja">
               <h2 className="hoja-titulo">Por {profile.dimensionLabel.toLowerCase()}</h2>
-              <table className="tabla">
-                <thead>
-                  <tr>
-                    <th>{profile.dimensionLabel}</th>
-                    <th className="col-num">Entró</th>
-                    <th className="col-num">Salió</th>
-                    <th className="col-num">Neto</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {r.porCentro.map((c) => (
-                    <tr key={c.id ?? 'sin'}>
-                      <td>{c.name}</td>
-                      <td className="col-num"><Money cents={c.ingresosCents} className="cifra-chica" /></td>
-                      <td className="col-num"><Money cents={c.gastoCents} className="cifra-chica" /></td>
-                      <td className="col-num">
-                        <span className={c.ingresosCents - c.gastoCents >= 0 ? 'stat-in' : ''}>
-                          <Money cents={c.ingresosCents - c.gastoCents} signed className="cifra-chica" />
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <TablaRentabilidad
+                titulo={profile.dimensionLabel}
+                filas={r.porCentro}
+                vacio="Sin movimientos en el periodo."
+              />
             </section>
           )}
         </>
       )}
 
-      {flujo && (
-        <section className="hoja">
-          <header className="ruta-head">
-            <h2 className="hoja-titulo">Flujo de caja proyectado</h2>
-            <div className="seg seg-chico" role="radiogroup" aria-label="Horizonte">
-              {VENTANAS.map((v) => (
-                <button
-                  key={v.dias}
-                  type="button"
-                  role="radio"
-                  aria-checked={dias === v.dias}
-                  className={`seg-item${dias === v.dias ? ' activa' : ''}`}
-                  onClick={() => setDias(v.dias)}
-                >
-                  {v.label}
-                </button>
-              ))}
-            </div>
-          </header>
-          <dl className="hero-stats">
-            <div className="stat">
-              <dt>Caja hoy</dt>
-              <dd><Money cents={flujo.saldoInicialCents} /></dd>
-            </div>
-            <div className="stat">
-              <dt>Va a entrar</dt>
-              <dd><span className="stat-in"><Money cents={flujo.entradasCents} /></span></dd>
-            </div>
-            <div className="stat">
-              <dt>Va a salir</dt>
-              <dd><Money cents={flujo.salidasCents} /></dd>
-            </div>
-            <div className="stat stat-neto">
-              <dt>Caja en {dias} días</dt>
-              <dd>
-                <span className={flujo.saldoFinalCents >= 0 ? '' : 'stat-rojo'}>
-                  <Money cents={flujo.saldoFinalCents} />
-                </span>
-              </dd>
-            </div>
-          </dl>
-
-          {flujo.primerDiaEnRojo && (
-            <p className="aviso" role="alert">
-              Con lo que ya está comprometido, la caja se quedaría en números rojos el{' '}
-              <strong>{fmtDate(flujo.primerDiaEnRojo)}</strong>.
-            </p>
-          )}
-
-          {flujo.eventos.length === 0 ? (
-            <p className="grafica-vacia">No hay nada comprometido en esta ventana.</p>
-          ) : (
-            <ul className="lista-simple">
-              {flujo.eventos.map((e, i) => (
-                <li key={`${e.tipo}-${e.refId}-${i}`}>
-                  <span>
-                    <span className="abono-fecha">{fmtDate(e.fecha)}</span> {e.titulo}
-                  </span>
-                  <span className={e.direccion === 'entra' ? 'stat-in cifra-chica' : 'cifra-chica'}>
-                    {e.direccion === 'entra' ? '+' : '−'}
-                    {fmtMoney(e.montoCents ?? 0)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-          <p className="reportes-supuesto">
-            Solo lo que Finply ya sabe que vence: facturas con fecha de pago, recurrencias por
-            confirmar, el pago para no generar intereses de tus tarjetas, la mensualidad de tus
-            deudas con plazo y las parcialidades a meses. No proyecta ventas que no has facturado
-            ni gastos que no has apuntado, así que la caja del final es un piso, no un pronóstico.
+      {/*
+        El flujo de caja proyectado vivía aquí y desde la Fase 16 tiene su
+        propia sección, igual para un libro personal que para uno de negocio:
+        "¿llego a fin de mes?" no es una pregunta de contabilidad. Queda la
+        liga, no una segunda copia de la misma cifra.
+      */}
+      <section className="hoja negocio-liga">
+        <div>
+          <h2 className="hoja-titulo">Flujo de caja proyectado</h2>
+          <p className="reportes-nota">
+            La caja de hoy movida día a día por lo que ya vence: facturas con fecha de pago,
+            recurrencias, tarjetas y deudas. Ahora vive en su propia sección.
           </p>
-        </section>
-      )}
+        </div>
+        <button type="button" className="btn btn-fantasma" onClick={() => onNav('flujo')}>
+          Ver el flujo →
+        </button>
+      </section>
     </div>
   )
 }

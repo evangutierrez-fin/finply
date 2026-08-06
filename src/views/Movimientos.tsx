@@ -1,10 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, type TxFilters } from '../api.ts'
 import { useApp } from '../context.ts'
+import { useAtajos } from '../atajos.ts'
 import { useFetch } from '../hooks.ts'
-import { currentMonth, fmtDate, monthLabel, parseAmount, shiftMonth } from '../format.ts'
+import { currentMonth, fmtDate, monthLabel, parseAmount, shiftMonth, todayISO } from '../format.ts'
 import { Money } from '../components/Money.tsx'
-import type { Tx } from '../../shared/types.ts'
+import { BarraRapida } from '../components/BarraRapida.tsx'
+import { Conciliar } from '../components/Conciliar.tsx'
+import { NotaModal } from '../components/NotaModal.tsx'
+import type { Note, Tx } from '../../shared/types.ts'
 
 const POR_PAGINA = 50
 
@@ -18,9 +22,21 @@ export function Movimientos() {
   const [month, setMonth] = useState(currentMonth())
   const [accountId, setAccountId] = useState(0)
   const [type, setType] = useState('')
+  const [conciliado, setConciliado] = useState<'' | 'si' | 'no'>('')
+  // La conciliación se abre a mano y solo con una cuenta elegida: comparar
+  // contra un estado de cuenta exige saber contra cuál.
+  const [conciliando, setConciliando] = useState(false)
   const [qInput, setQInput] = useState('')
   const [q, setQ] = useState('')
   const [deletingId, setDeletingId] = useState<number | null>(null)
+  // La nota de una partida (Fase 20): se escribe desde el renglón, que es
+  // donde uno se acuerda de lo que quería apuntar.
+  const [anotando, setAnotando] = useState<{ txId: number; note: Note | null } | null>(null)
+  const buscarRef = useRef<HTMLInputElement>(null)
+
+  // `/` es de esta vista, porque el buscador vive aquí. El atajo no se declara
+  // en la app entera: mandaría a buscar a quien está en otra sección.
+  useAtajos({ buscar: () => buscarRef.current?.focus() })
 
   // Filtros avanzados: ocultos por omisión para no saturar la vista diaria.
   const [avanzados, setAvanzados] = useState(false)
@@ -54,6 +70,7 @@ export function Movimientos() {
     minCents,
     maxCents,
     q: q || undefined,
+    conciliado: conciliado || undefined,
   }
 
   // Cualquier cambio de filtro vuelve a la primera página: quedarse en la
@@ -82,7 +99,9 @@ export function Movimientos() {
   const txs = page?.items ?? []
   const total = page?.total ?? 0
   const paginas = Math.max(1, Math.ceil(total / POR_PAGINA))
-  const hayFiltro = Boolean(q || accountId || type || tagId || from || to || minInput || maxInput)
+  const hayFiltro = Boolean(
+    q || accountId || type || tagId || from || to || minInput || maxInput || conciliado,
+  )
 
   const limpiar = () => {
     setFrom('')
@@ -93,6 +112,41 @@ export function Movimientos() {
     setAccountId(0)
     setType('')
     setQInput('')
+    setConciliado('')
+  }
+
+  const duplicar = async (tx: Tx) => {
+    try {
+      await api.tx.duplicar(tx.id, todayISO())
+      stamp('Duplicado')
+      bump()
+    } catch (err) {
+      alert((err as Error).message)
+    }
+  }
+
+  /**
+   * Abrir la nota que ya cuelga de una partida. El renglón solo trae su título
+   * —el cuerpo no viaja en el listado—, así que se pide la nota entera al
+   * tocarla, que es cuando de verdad hace falta.
+   */
+  const abrirNota = async (noteId: number, txId: number) => {
+    try {
+      const notas = await api.notes.list(profile.id, { txId })
+      setAnotando({ txId, note: notas.find((n) => n.id === noteId) ?? null })
+    } catch (err) {
+      alert((err as Error).message)
+    }
+  }
+
+  /** Palomear o despalomear una partida. No mueve un solo saldo. */
+  const marcar = async (tx: Tx, reconciled: boolean) => {
+    try {
+      await api.tx.conciliar({ profileId: profile.id, txIds: [tx.id], reconciled })
+      bump()
+    } catch (err) {
+      alert((err as Error).message)
+    }
   }
 
   return (
@@ -136,8 +190,9 @@ export function Movimientos() {
           <option value="transferencia">Transferencias</option>
         </select>
         <input
+          ref={buscarRef}
           className="filtro filtro-busqueda"
-          placeholder="Buscar concepto, categoría o cuenta…"
+          placeholder="Buscar concepto, categoría o cuenta…  ( / )"
           value={qInput}
           onChange={(e) => setQInput(e.target.value)}
           aria-label="Buscar"
@@ -179,6 +234,18 @@ export function Movimientos() {
               ))}
             </select>
           </label>
+          <label className="filtro-campo">
+            <span className="filtro-label">Conciliación</span>
+            <select
+              className="filtro"
+              value={conciliado}
+              onChange={(e) => setConciliado(e.target.value as '' | 'si' | 'no')}
+            >
+              <option value="">Todo</option>
+              <option value="no">Sin palomear</option>
+              <option value="si">Palomeado</option>
+            </select>
+          </label>
           {hayFiltro && (
             <button type="button" className="btn-liga" onClick={limpiar}>Limpiar filtros</button>
           )}
@@ -186,6 +253,8 @@ export function Movimientos() {
       )}
 
       {error && <p className="aviso" role="alert">{error}</p>}
+
+      <BarraRapida />
 
       {page && txs.length === 0 ? (
         <div className="vacio">
@@ -214,6 +283,14 @@ export function Movimientos() {
               {paginas > 1 && ` · página ${pagina + 1} de ${paginas}`}
             </span>
             <span className="libro-barra-acciones">
+              <button
+                type="button"
+                className="btn btn-fantasma btn-chico"
+                aria-expanded={conciliando}
+                onClick={() => setConciliando((v) => !v)}
+              >
+                ✓ Conciliar
+              </button>
               <button type="button" className="btn btn-fantasma btn-chico" onClick={irAImportar}>
                 ↑ Importar CSV
               </button>
@@ -223,9 +300,22 @@ export function Movimientos() {
             </span>
           </div>
 
+          {conciliando && (
+            <Conciliar
+              accounts={accounts ?? []}
+              accountId={accountId}
+              onElegirCuenta={setAccountId}
+              onSoloPendientes={() => {
+                setConciliado('no')
+                setAvanzados(true)
+              }}
+            />
+          )}
+
           <table className="libro">
             <thead>
               <tr>
+                {conciliando && <th className="col-palomear">✓</th>}
                 <th className="col-fecha">Fecha</th>
                 <th>Concepto</th>
                 <th className="col-cuenta">Cuenta</th>
@@ -236,7 +326,21 @@ export function Movimientos() {
             </thead>
             <tbody>
               {txs.map((tx, i) => (
-                <tr key={tx.id} className="libro-fila" style={{ animationDelay: `${Math.min(i * 25, 400)}ms` }}>
+                <tr
+                  key={tx.id}
+                  className={`libro-fila${tx.reconciledAt ? ' conciliada' : ''}`}
+                  style={{ animationDelay: `${Math.min(i * 25, 400)}ms` }}
+                >
+                  {conciliando && (
+                    <td className="col-palomear">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(tx.reconciledAt)}
+                        onChange={(e) => void marcar(tx, e.target.checked)}
+                        aria-label={`Conciliar ${tx.note || fmtDate(tx.date)}`}
+                      />
+                    </td>
+                  )}
                   <td className="col-fecha">{fmtDate(tx.date)}</td>
                   <td>
                     <span className="mov-concepto">
@@ -246,6 +350,40 @@ export function Movimientos() {
                     {tx.debtPaymentId && <span className="mov-cat">Abono de deuda</span>}
                     {tx.msiPurchaseId && <span className="mov-cat">Compra a meses</span>}
                     {tx.debtId && <span className="mov-cat">Desembolso de deuda</span>}
+                    {tx.refundOfId && <span className="mov-cat">Devolución · baja el gasto</span>}
+                    {tx.attachments.length > 0 && (
+                      <span className="mov-cat" title="Tiene recibo">◫ recibo</span>
+                    )}
+                    {/*
+                      La nota de la libreta atada a esta partida (Fase 20). Se
+                      enseña el título, no el cuerpo: aquí la noticia es que
+                      **hay** una explicación y dónde tocarla.
+                    */}
+                    {tx.notes.map((n) => (
+                      <button
+                        key={n.id}
+                        type="button"
+                        className="chip chip-nota"
+                        onClick={() => void abrirNota(n.id, tx.id)}
+                        title="Ver la nota de esta partida"
+                      >
+                        ✎ {n.title}
+                      </button>
+                    ))}
+                    {/*
+                      El reparto se enseña entero: un ticket dividido cuya
+                      categoría no se ve se lee como "sin clasificar", que es
+                      justo lo contrario de lo que pasó.
+                    */}
+                    {tx.splits.length > 0 && (
+                      <span className="mov-reparto">
+                        {tx.splits.map((r) => (
+                          <span className="chip chip-renglon" key={r.id}>
+                            {r.categoryName ?? 'Sin categoría'} <Money cents={r.amountCents} />
+                          </span>
+                        ))}
+                      </span>
+                    )}
                     {tx.tags.length > 0 && (
                       <span className="mov-etiquetas">
                         {tx.tags.map((t) => (
@@ -276,6 +414,15 @@ export function Movimientos() {
                     ) : (
                       <span className="acciones">
                         <button type="button" className="accion" onClick={() => openTx(tx)} aria-label="Corregir">✎</button>
+                        <button type="button" className="accion" onClick={() => void duplicar(tx)} aria-label="Duplicar con la fecha de hoy">⧉</button>
+                        <button
+                          type="button"
+                          className="accion"
+                          onClick={() => setAnotando({ txId: tx.id, note: null })}
+                          aria-label="Escribir una nota de esta partida"
+                        >
+                          ✑
+                        </button>
                         <button type="button" className="accion" onClick={() => setDeletingId(tx.id)} aria-label="Anular">✕</button>
                       </span>
                     )}
@@ -286,13 +433,13 @@ export function Movimientos() {
             <tfoot>
               {/* Las sumas son de todo el filtro, no de la página visible. */}
               <tr className="libro-suma">
-                <td colSpan={3}>Sumas del periodo</td>
+                <td colSpan={conciliando ? 4 : 3}>Sumas del periodo</td>
                 <td className="col-monto"><Money cents={page?.gastoCents ?? 0} /></td>
                 <td className="col-monto"><Money cents={page?.ingresoCents ?? 0} /></td>
                 <td />
               </tr>
               <tr className="libro-neto">
-                <td colSpan={3}>Neto</td>
+                <td colSpan={conciliando ? 4 : 3}>Neto</td>
                 <td colSpan={2} className="col-monto">
                   <span className="doble-raya">
                     <Money cents={(page?.ingresoCents ?? 0) - (page?.gastoCents ?? 0)} signed />
@@ -325,6 +472,15 @@ export function Movimientos() {
             </nav>
           )}
         </>
+      )}
+
+      {anotando && (
+        <NotaModal
+          note={anotando.note}
+          txId={anotando.txId}
+          onClose={() => setAnotando(null)}
+          onSaved={bump}
+        />
       )}
     </div>
   )

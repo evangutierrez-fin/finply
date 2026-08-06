@@ -30,6 +30,9 @@ export const TABLES = [
   'profile_modules',
   'accounts',
   'categories',
+  // Las reglas de import apuntan a la categoría que proponen (Fase 23), así
+  // que van justo detrás de ella.
+  'import_rules',
   'tags',
   'debts',
   'debt_payments',
@@ -37,9 +40,24 @@ export const TABLES = [
   'investment_entries',
   'goals',
   'goal_entries',
+  // Los bienes van antes que los movimientos como todo lo demás, y después de
+  // `debts` porque un bien puede apuntar a la deuda que lo financia.
+  'assets',
+  'asset_valuations',
   'budgets',
-  'notes',
+  // El tope de todo el mes es una tabla más, y una tabla que se olvide aquí
+  // se pierde en cada respaldo sin decir nada.
+  'budget_totals',
+  // El catálogo de campos propios cuelga del perfil (Fase 21); sus **valores**
+  // cuelgan del movimiento y por eso viven al final, con los demás hijos.
+  'profile_fields',
+  // Las plantillas apuntan a cuenta y categoría, así que van después de las dos
+  // y antes de los movimientos, como todo lo demás.
+  'tx_templates',
   'import_batches',
+  // Una plantilla puede aportar a una inversión (Fase 24), que ya venía
+  // arriba: la liga nueva no movió a nadie de lugar, pero es la tercera vez
+  // que una columna nueva podía haberlo hecho.
   'recurrences',
   'recurrence_tags',
   // Las compras a meses van antes que los movimientos: el cargo que las ancla
@@ -52,10 +70,47 @@ export const TABLES = [
   'counterparties',
   'cost_centers',
   'invoices',
+  // La nota de crédito cuelga de la factura y la plantilla apunta a la
+  // contraparte y al centro; las tres van después de ellos y antes de los
+  // movimientos, como todo lo demás.
+  'invoice_credit_notes',
+  'invoice_recurrences',
+  // La cotización va **después** de `invoices` porque apunta a la factura que
+  // salió de ella, y después de `cost_centers` por su centro. Antes de los
+  // movimientos como todo lo demás.
+  'quotes',
+  // Los módulos de giro (Fase 15). El arrendamiento va después de `assets`
+  // —renta un bien— y **antes de los movimientos**, que lo referencian: un
+  // movimiento con `rental_id` no puede restaurarse sin su contrato. El
+  // producto va aquí por simetría, antes de sus movimientos de existencias.
+  'rentals',
+  'products',
   'transactions',
   'transaction_tags',
+  // Todo lo que cuelga del movimiento va después de él: el reparto por
+  // categoría, el recibo y —aunque no cuelgue— el corte de conciliación, que
+  // solo necesita su cuenta.
+  'tx_splits',
+  'tx_attachments',
+  // Los valores de los campos propios: cuelgan del movimiento **y** del campo,
+  // así que van después de los dos. Tabla puente sin columna `id`, como
+  // `transaction_tags`: se vuelca por `rowid`.
+  'tx_field_values',
+  'account_statements',
+  // ⚠ La libreta se mudó aquí en la Fase 20 y **tenía** que mudarse: desde la
+  // migración 20 una nota puede apuntar al movimiento que explica, y estaba
+  // listada arriba, antes de `transactions`. Restaurar habría reventado con
+  // una llave foránea rota. Es exactamente lo que ya pasó con `rentals` en la
+  // Fase 15: la lista está ordenada por dependencias y una columna nueva puede
+  // cambiar de lugar una tabla vieja.
+  'notes',
   // Los periodos resueltos van hasta el final: apuntan al movimiento asentado.
   'recurrence_runs',
+  // Y los de facturas apuntan a la factura que salió de ellos.
+  'invoice_recurrence_runs',
+  // Estas dos van al final porque apuntan a movimientos y facturas.
+  'stock_moves',
+  'time_entries',
 ] as const
 
 export interface Snapshot {
@@ -65,12 +120,31 @@ export interface Snapshot {
   tables: Record<string, Record<string, unknown>[]>
 }
 
+/**
+ * Tablas que **se referencian a sí mismas** y por eso no pueden volcarse por
+ * `rowid` a secas: una fila tiene que salir después de aquella a la que apunta.
+ *
+ * `categories` estrenó `parent_id` en la Fase 23, y el orden de creación no
+ * basta: si alguien crea "Restaurante", después crea "Comida" y **luego** cuelga
+ * la primera de la segunda, el hijo tiene `rowid` menor que su padre. Volcarlo
+ * en ese orden produce un respaldo que revienta al restaurarse, con una llave
+ * foránea rota y sin que nadie lo note hasta que hace falta.
+ *
+ * Se ordena por dependencia y no se difiere la comprobación de llaves: así el
+ * archivo queda bien ordenado **para cualquiera que lo lea**, no solo para la
+ * restauración de Finply.
+ */
+const ORDEN_DE_VOLCADO: Record<string, string> = {
+  categories: 'parent_id IS NOT NULL, rowid ASC',
+}
+
 /** Vuelca todas las tablas —todos los perfiles— a un objeto plano. */
 export function exportSnapshot(): Snapshot {
   const tables: Snapshot['tables'] = {}
   for (const table of TABLES) {
     // Por rowid, no por id: las tablas puente no tienen columna `id`.
-    tables[table] = db.prepare(`SELECT * FROM ${table} ORDER BY rowid ASC`).all() as Record<
+    const orden = ORDEN_DE_VOLCADO[table] ?? 'rowid ASC'
+    tables[table] = db.prepare(`SELECT * FROM ${table} ORDER BY ${orden}`).all() as Record<
       string,
       unknown
     >[]

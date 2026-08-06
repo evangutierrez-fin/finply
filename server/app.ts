@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ZodError } from 'zod'
+import { MAX_ADJUNTO_BYTES } from './validators.ts'
 import profiles from './routes/profiles.ts'
 import accounts from './routes/accounts.ts'
 import categories from './routes/categories.ts'
@@ -16,6 +17,8 @@ import precios from './routes/precios.ts'
 import contrapartes from './routes/contrapartes.ts'
 import centros from './routes/centros.ts'
 import facturas from './routes/facturas.ts'
+import facturasRecurrentes from './routes/facturas-recurrentes.ts'
+import cotizaciones from './routes/cotizaciones.ts'
 import negocio from './routes/negocio.ts'
 import simulador from './routes/simulador.ts'
 import budgets from './routes/budgets.ts'
@@ -26,8 +29,62 @@ import reportes from './routes/reportes.ts'
 import alertas from './routes/alertas.ts'
 import analisis from './routes/analisis.ts'
 import recurrencias from './routes/recurrencias.ts'
+import bienes from './routes/bienes.ts'
 import calendario from './routes/calendario.ts'
+import flujo from './routes/flujo.ts'
+import conciliacion from './routes/conciliacion.ts'
+import inmuebles from './routes/inmuebles.ts'
+import horas from './routes/horas.ts'
+import inventario from './routes/inventario.ts'
+import personalizacion from './routes/personalizacion.ts'
 import backup from './routes/backup.ts'
+import exportar from './routes/exportar.ts'
+
+/**
+ * Cuánto cuerpo se acepta. Por aquí entra la restauración de un respaldo, que
+ * es lo más grande que Finply maneja, y el límite de 100 kB de Express no le
+ * llega ni de lejos.
+ *
+ * ⚠ La cifra no es redonda por gusto: **sale de lo que Finply mismo puede
+ * generar.** Los recibos viajan en base64 dentro del JSON (Fase 10), así que
+ * cada uno pesa un tercio más que el archivo, y con el tope viejo de 64 MB un
+ * libro con dos docenas de recibos grandes producía un respaldo que la propia
+ * app se negaba a restaurar — con un 413 en inglés que no explicaba nada. Es
+ * la peor forma de perder datos: la que se descubre el día que hacen falta.
+ * Hay prueba de que el tope cabe lo que el catálogo de adjuntos permite.
+ */
+export const ADJUNTOS_QUE_CABEN = 150
+export const LIMITE_CUERPO_BYTES = Math.ceil((MAX_ADJUNTO_BYTES * 4) / 3) * ADJUNTOS_QUE_CABEN
+
+/**
+ * De un error a lo que lee el usuario. Está fuera del middleware para poder
+ * probarla: el 413 solo se provoca mandando cientos de megabytes de verdad
+ * —Node no contesta a un cuerpo anunciado y no enviado—, y una prueba así no
+ * cabe en una suite.
+ */
+export function traducirError(err: unknown): { status: number; error: string } {
+  if (err instanceof ZodError) {
+    return { status: 400, error: err.issues[0]?.message ?? 'Datos inválidos' }
+  }
+  if (err instanceof SyntaxError && (err as { status?: number }).status === 400) {
+    return { status: 400, error: 'El cuerpo de la petición no es JSON válido' }
+  }
+  // El 413 de Express llega en inglés y sin explicación. Quien lo ve está
+  // restaurando un respaldo enorme, así que lo que necesita saber es por qué
+  // pesa tanto y cuál es la otra puerta, que existe y no tiene tope.
+  if ((err as { type?: string }).type === 'entity.too.large') {
+    return {
+      status: 413,
+      error:
+        `El archivo pasa del tope de ${Math.round(LIMITE_CUERPO_BYTES / 1024 / 1024)} MB. ` +
+        'Casi siempre son los recibos adjuntos, que viajan dentro del JSON. ' +
+        'Para un libro así, la copia .db de data/respaldos/ se restaura sin ese tope: ' +
+        'basta ponerla en el lugar de tu base.',
+    }
+  }
+  const anyErr = err as { status?: number; message?: string }
+  return { status: anyErr.status ?? 500, error: anyErr.message ?? 'Error interno' }
+}
 
 /**
  * Arma la app de Express sin ponerla a escuchar, para que las pruebas puedan
@@ -36,9 +93,7 @@ import backup from './routes/backup.ts'
 export function createApp(): express.Express {
   const app = express()
 
-  // Un libro de varios años pesa bastante más que el límite de 100 kB que trae
-  // Express por omisión, y por aquí entra la restauración de respaldos.
-  app.use(express.json({ limit: '64mb' }))
+  app.use(express.json({ limit: LIMITE_CUERPO_BYTES }))
 
   app.use('/api/profiles', profiles)
   app.use('/api/accounts', accounts)
@@ -52,6 +107,10 @@ export function createApp(): express.Express {
   app.use('/api/precios', precios)
   app.use('/api/contrapartes', contrapartes)
   app.use('/api/centros', centros)
+  // El prefijo más específico va primero, o '/recurrentes' caería en la ruta
+  // '/:id' de facturas.
+  app.use('/api/cotizaciones', cotizaciones)
+  app.use('/api/facturas/recurrentes', facturasRecurrentes)
   app.use('/api/facturas', facturas)
   app.use('/api/negocio', negocio)
   app.use('/api/simulador', simulador)
@@ -63,8 +122,22 @@ export function createApp(): express.Express {
   app.use('/api/alertas', alertas)
   app.use('/api/analisis', analisis)
   app.use('/api/recurrencias', recurrencias)
+  app.use('/api/bienes', bienes)
   app.use('/api/calendario', calendario)
+  app.use('/api/flujo', flujo)
+  app.use('/api/conciliacion', conciliacion)
+  // Módulos de giro (Fase 15). Las rutas existen siempre, como las tablas: es
+  // el lomo el que decide qué se ve (D16), no el servidor.
+  app.use('/api/inmuebles', inmuebles)
+  app.use('/api/horas', horas)
+  app.use('/api/inventario', inventario)
+  // Configuración del perfil (Fase 21): campos propios y plantillas. Aquí no
+  // se asienta dinero — lo que se escribe con ellos pasa por /api/transactions.
+  app.use('/api/personalizacion', personalizacion)
   app.use('/api/respaldo', backup)
+  // Sacar los datos (Fase 26): el libro de un perfil en hojas que abre
+  // cualquiera. `/api/respaldo` es lo contrario — sirve para volver a entrar.
+  app.use('/api/exportar', exportar)
 
   app.use('/api', (_req, res) => {
     res.status(404).json({ error: 'Ruta no encontrada' })
@@ -83,16 +156,9 @@ export function createApp(): express.Express {
 
   app.use(
     (err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-      if (err instanceof ZodError) {
-        return res.status(400).json({ error: err.issues[0]?.message ?? 'Datos inválidos' })
-      }
-      if (err instanceof SyntaxError && (err as { status?: number }).status === 400) {
-        return res.status(400).json({ error: 'El cuerpo de la petición no es JSON válido' })
-      }
-      const anyErr = err as { status?: number; message?: string }
-      const status = anyErr.status ?? 500
+      const { status, error } = traducirError(err)
       if (status >= 500) console.error(err)
-      res.status(status).json({ error: anyErr.message ?? 'Error interno' })
+      res.status(status).json({ error })
     },
   )
 

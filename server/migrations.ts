@@ -626,6 +626,799 @@ export const MIGRATIONS: Migration[] = [
       `)
     },
   },
+
+  {
+    id: 14,
+    name: 'el libro que cuadra: partida dividida, conciliación, reembolsos y recibos',
+    up: (db) => {
+      // Aditiva entera. Un libro que nunca divida una partida, nunca concilie y
+      // nunca adjunte nada queda **exactamente** igual que antes de migrar: las
+      // tres tablas nacen vacías y las dos columnas nuevas nacen nulas.
+      db.exec(`
+        -- D17. El movimiento sigue siendo **uno solo**; esto es su reparto por
+        -- categoría. Por eso ninguna consulta de saldo, patrimonio o
+        -- conciliación cambia: siguen leyendo \`transactions.amount_cents\`.
+        -- Lo único que cambia es el gasto por categoría, que deja de leer
+        -- \`category_id\` y lee estos renglones cuando existen.
+        --
+        -- Sin filas para un movimiento = sin dividir, y entonces manda su
+        -- \`category_id\` de siempre. Es la misma regla de \`profile_modules\`:
+        -- la ausencia significa "lo de antes", y por eso migrar no mueve nada.
+        CREATE TABLE IF NOT EXISTS tx_splits (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tx_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+          category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+          amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+          note TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_splits_tx ON tx_splits(tx_id);
+        CREATE INDEX IF NOT EXISTS idx_splits_categoria ON tx_splits(category_id);
+
+        -- D19, segunda mitad: el corte. "Al 31 de julio mi banco decía $X".
+        -- Sin esto, marcar casillas no demuestra nada; con esto, la resta
+        -- contra lo conciliado tiene respuesta sí/no.
+        CREATE TABLE IF NOT EXISTS account_statements (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+          date TEXT NOT NULL,
+          balance_cents INTEGER NOT NULL,
+          note TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE (account_id, date)
+        );
+        CREATE INDEX IF NOT EXISTS idx_cortes_cuenta ON account_statements(account_id, date);
+
+        -- El recibo. Va **dentro de la base**, en base64, y no en un archivo
+        -- suelto de data/: así viaja en el respaldo JSON sin que backup.ts
+        -- tenga que saber de archivos, y restaurar en otra máquina devuelve
+        -- también los recibos. Cuesta un tercio más de tamaño que el binario;
+        -- con el tope de 2 MB por archivo, es un precio que se paga.
+        CREATE TABLE IF NOT EXISTS tx_attachments (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tx_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+          filename TEXT NOT NULL,
+          mime TEXT NOT NULL DEFAULT '',
+          size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
+          data_b64 TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_adjuntos_tx ON tx_attachments(tx_id);
+      `)
+
+      // D19, primera mitad: la bandera. Fecha en que se marcó y no un 0/1,
+      // porque cuesta lo mismo y además dice cuándo se comprobó. NULL = sin
+      // conciliar, que es como queda todo lo que ya existía.
+      if (!hasColumn(db, 'transactions', 'reconciled_at')) {
+        db.exec('ALTER TABLE transactions ADD COLUMN reconciled_at TEXT')
+      }
+
+      // El reembolso apunta al gasto que devuelve. `ON DELETE SET NULL` y no
+      // CASCADE: si borras el gasto original, la devolución **sigue en el
+      // libro** porque ese dinero sí entró — es el mismo trato que ya tienen
+      // el desembolso de una deuda y el aporte de una inversión.
+      if (!hasColumn(db, 'transactions', 'refund_of_id')) {
+        db.exec(
+          `ALTER TABLE transactions ADD COLUMN refund_of_id INTEGER
+           REFERENCES transactions(id) ON DELETE SET NULL`,
+        )
+      }
+      db.exec('CREATE INDEX IF NOT EXISTS idx_tx_reembolso ON transactions(refund_of_id)')
+    },
+  },
+
+  {
+    id: 15,
+    name: 'patrimonio completo: bienes, metas ligadas al libro y una moneda por perfil',
+    up: (db) => {
+      db.exec(`
+        -- H3. Financiar un auto creaba una deuda que **bajaba** el patrimonio y
+        -- el auto nunca lo subía: el Resumen decía que comprar un coche te
+        -- empobrecía $240,000. El bien vive aquí, con su liga opcional a la
+        -- deuda que lo financia.
+        --
+        -- Tabla propia y no una inversión de tipo inmueble (D20): una inversión
+        -- tiene aportes, retiros, unidades y XIRR; un bien tiene costo, valor y
+        -- depreciación, y no se le calcula rendimiento. Es el argumento de D15
+        -- con las facturas, otra vez.
+        CREATE TABLE IF NOT EXISTS assets (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          kind TEXT NOT NULL DEFAULT 'otro'
+            CHECK (kind IN ('inmueble', 'vehiculo', 'equipo', 'otro')),
+          cost_cents INTEGER NOT NULL CHECK (cost_cents >= 0),
+          acquired_date TEXT NOT NULL,
+          debt_id INTEGER REFERENCES debts(id) ON DELETE SET NULL,
+          note TEXT NOT NULL DEFAULT '',
+          archived INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        -- El valor de hoy lo **declara el usuario** (R9). Finply no deprecia
+        -- por su cuenta: no hay una tasa universal para un coche o una casa, y
+        -- suponer una convertiría el patrimonio en una opinión de Finply.
+        -- Sin valuaciones, un bien vale lo que costó.
+        CREATE TABLE IF NOT EXISTS asset_valuations (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+          date TEXT NOT NULL,
+          value_cents INTEGER NOT NULL CHECK (value_cents >= 0),
+          note TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_bienes_perfil ON assets(profile_id, archived);
+        CREATE INDEX IF NOT EXISTS idx_valuaciones_bien ON asset_valuations(asset_id, date);
+      `)
+
+      // H1. El aporte a una meta salía de la nada: `goal_entries` no ligaba ni
+      // a cuenta ni a movimiento, así que apartar $50,000 no los quitaba de
+      // ningún lado y el mismo peso se contaba dos veces entre pantallas.
+      // Ahora la meta puede decir **dónde vive su dinero** y cada aporte puede
+      // llevar su movimiento, igual que un aporte a inversión.
+      if (!hasColumn(db, 'goals', 'account_id')) {
+        db.exec(
+          'ALTER TABLE goals ADD COLUMN account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL',
+        )
+      }
+      if (!hasColumn(db, 'transactions', 'goal_entry_id')) {
+        db.exec(
+          `ALTER TABLE transactions ADD COLUMN goal_entry_id INTEGER
+           REFERENCES goal_entries(id) ON DELETE SET NULL`,
+        )
+      }
+      db.exec('CREATE INDEX IF NOT EXISTS idx_tx_meta ON transactions(goal_entry_id)')
+
+      // H2/D18. La moneda pasa a ser **del perfil** y las cuentas la heredan.
+      // `accounts.currency` existía y se validaba, pero los saldos se sumaban
+      // sin convertir: mil dólares sumaban $1,000 al patrimonio en pesos. Se
+      // cierra la puerta en vez de dejarla entreabierta.
+      //
+      // El relleno toma la moneda **más usada** entre las cuentas del perfil,
+      // así que un libro de una sola moneda —todos los que existen— no nota
+      // nada. Las cuentas que difieran **no se tocan**: cambiarles el texto
+      // sería borrar lo que el usuario declaró. La vista de Cuentas las señala
+      // y dice que se suman como si fueran de la moneda del libro.
+      if (!hasColumn(db, 'profiles', 'currency')) {
+        db.exec("ALTER TABLE profiles ADD COLUMN currency TEXT NOT NULL DEFAULT 'MXN'")
+        db.exec(`
+          UPDATE profiles SET currency = COALESCE((
+            SELECT a.currency FROM accounts a
+            WHERE a.profile_id = profiles.id
+            GROUP BY a.currency
+            ORDER BY COUNT(*) DESC, a.id ASC
+            LIMIT 1
+          ), 'MXN')
+        `)
+      }
+
+      // Saldo mínimo con aviso, institución y orden. Los tres nulos o en cero:
+      // una cuenta de siempre se ve y se ordena exactamente igual que ayer.
+      if (!hasColumn(db, 'accounts', 'min_balance_cents')) {
+        db.exec('ALTER TABLE accounts ADD COLUMN min_balance_cents INTEGER')
+      }
+      if (!hasColumn(db, 'accounts', 'institution')) {
+        db.exec("ALTER TABLE accounts ADD COLUMN institution TEXT NOT NULL DEFAULT ''")
+      }
+      if (!hasColumn(db, 'accounts', 'sort_order')) {
+        db.exec('ALTER TABLE accounts ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0')
+      }
+    },
+  },
+  {
+    id: 16,
+    name: 'el presupuesto que se adelanta: periodo, tope total y sobrante que rueda',
+    up: (db) => {
+      // `month` pasa a llamarse `period` porque ya no siempre es un mes: un
+      // tope anual guarda 'AAAA' y uno mensual 'AAAA-MM'. Dejar el nombre
+      // viejo sería una columna llamada "mes" con un año adentro, y eso se
+      // cobra caro el día que alguien la lea de prisa.
+      //
+      // El renombre es solo metadatos —SQLite reescribe el texto del esquema y
+      // arrastra el índice solo—, así que ninguna fila se toca.
+      if (hasColumn(db, 'budgets', 'month')) {
+        db.exec('ALTER TABLE budgets RENAME COLUMN month TO period')
+      }
+
+      // Las dos columnas nuevas nacen con el valor que deja todo igual: los
+      // topes que ya existen son mensuales y no arrastran nada. Un libro de
+      // ayer se ve idéntico hoy (R2).
+      if (!hasColumn(db, 'budgets', 'period_kind')) {
+        db.exec(
+          `ALTER TABLE budgets ADD COLUMN period_kind TEXT NOT NULL DEFAULT 'mes'
+           CHECK (period_kind IN ('mes', 'anio'))`,
+        )
+      }
+      if (!hasColumn(db, 'budgets', 'rollover')) {
+        db.exec(
+          `ALTER TABLE budgets ADD COLUMN rollover INTEGER NOT NULL DEFAULT 0
+           CHECK (rollover IN (0, 1))`,
+        )
+      }
+
+      // El tope de **todo** el mes vive aparte y no en `budgets` con categoría
+      // nula: en SQLite dos NULL no chocan en un UNIQUE, así que la llave
+      // `(perfil, categoría, periodo)` dejaría meter dos topes totales del
+      // mismo mes sin quejarse. Una tabla propia lo hace imposible.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS budget_totals (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          month TEXT NOT NULL,
+          amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+          UNIQUE (profile_id, month)
+        );
+      `)
+    },
+  },
+  {
+    id: 17,
+    name: 'negocio II: retenciones, notas de crédito, facturas recurrentes y el costo de la tarjeta',
+    up: (db) => {
+      // Todo lo de aquí es aditivo y nace con el valor que deja el libro
+      // exactamente igual que ayer (R2): retenciones en cero, sin notas de
+      // crédito, sin plantillas de factura y sin tasa de tarjeta. Un libro
+      // personal que nunca abra una factura no nota nada.
+
+      // ── Retenciones (D21) ────────────────────────────────────────────────
+      // **Monto y no tasa**, igual que `tax_cents`, para no amarrar el modelo
+      // a ninguna jurisdicción (R15). Son dos y no una porque en la práctica
+      // se retienen por dos conceptos distintos y el usuario los ve separados
+      // en su factura; sumarlos en un solo campo perdería el desglose que él
+      // ya tiene enfrente.
+      //
+      // Lo que de verdad cambian: el total del documento sigue siendo
+      // subtotal + impuesto, pero **lo cobrable** es eso menos lo retenido. Sin
+      // esto, la antigüedad de saldos prometía cobrar un dinero que nunca iba
+      // a llegar y la factura no se saldaba jamás.
+      for (const col of ['withheld_tax_cents', 'withheld_income_cents']) {
+        if (!hasColumn(db, 'invoices', col)) {
+          db.exec(
+            `ALTER TABLE invoices ADD COLUMN ${col} INTEGER NOT NULL DEFAULT 0
+             CHECK (${col} >= 0)`,
+          )
+        }
+      }
+
+      // ── Notas de crédito y cancelación parcial ───────────────────────────
+      // Una nota de crédito **no es un cobro**: no se movió un peso. Por eso
+      // no vive en `transactions` —ahí inventaría un ingreso que nadie
+      // recibió— sino en su propia tabla colgada de la factura. Baja lo
+      // cobrable, y cuando lo baja a cero, la factura queda cancelada por
+      // completo sin borrar nada.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS invoice_credit_notes (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+          date TEXT NOT NULL,
+          folio TEXT NOT NULL DEFAULT '',
+          concept TEXT NOT NULL DEFAULT '',
+          amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_notas_factura ON invoice_credit_notes(invoice_id);
+      `)
+
+      // ── La contraparte que ya sabe cómo te paga ──────────────────────────
+      // Los días de crédito ahorran teclear la fecha de vencimiento en cada
+      // factura; el límite es del usuario, no de Finply, y por eso avisa en
+      // vez de impedir. Nulo significa "no lo uso", que es como nacen todas.
+      if (!hasColumn(db, 'counterparties', 'credit_days')) {
+        db.exec('ALTER TABLE counterparties ADD COLUMN credit_days INTEGER')
+      }
+      if (!hasColumn(db, 'counterparties', 'credit_limit_cents')) {
+        db.exec('ALTER TABLE counterparties ADD COLUMN credit_limit_cents INTEGER')
+      }
+      if (!hasColumn(db, 'counterparties', 'contact')) {
+        db.exec("ALTER TABLE counterparties ADD COLUMN contact TEXT NOT NULL DEFAULT ''")
+      }
+
+      // ── Facturas recurrentes (D28) ───────────────────────────────────────
+      // Tabla propia, motor compartido. `recurrences` exige `account_id` y un
+      // tipo ingreso/gasto/transferencia porque asienta dinero; una factura
+      // recurrente no asienta nada —emite un documento— y no tiene cuenta.
+      // Meterlas juntas obligaría a la bandeja, al calendario, a las alertas y
+      // al flujo a preguntar en cada consulta cuál de las dos están mirando,
+      // que es el argumento con el que ya se separaron facturas y deudas (D15).
+      //
+      // Lo que sí se reparte es el motor: la regla de fechas de
+      // `shared/recurrencias.ts` y la idempotencia por `(plantilla, periodo)`.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS invoice_recurrences (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          counterparty_id INTEGER NOT NULL REFERENCES counterparties(id) ON DELETE CASCADE,
+          direction TEXT NOT NULL CHECK (direction IN ('emitida', 'recibida')),
+          concept TEXT NOT NULL DEFAULT '',
+          subtotal_cents INTEGER NOT NULL CHECK (subtotal_cents > 0),
+          tax_cents INTEGER NOT NULL DEFAULT 0 CHECK (tax_cents >= 0),
+          withheld_tax_cents INTEGER NOT NULL DEFAULT 0 CHECK (withheld_tax_cents >= 0),
+          withheld_income_cents INTEGER NOT NULL DEFAULT 0 CHECK (withheld_income_cents >= 0),
+          cost_center_id INTEGER REFERENCES cost_centers(id) ON DELETE SET NULL,
+          -- Días entre emisión y vencimiento. Nulo: la factura nace sin fecha
+          -- de pago, igual que si se capturara a mano.
+          credit_days INTEGER,
+          frequency TEXT NOT NULL CHECK (frequency IN ('mensual', 'quincenal', 'semanal', 'anual')),
+          day_of_month INTEGER,
+          day_of_month_2 INTEGER,
+          month_of_year INTEGER,
+          weekday INTEGER,
+          start_date TEXT NOT NULL,
+          end_date TEXT,
+          archived INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        -- La misma red que en las recurrencias de movimiento: es el UNIQUE, y
+        -- no el código de la ruta, lo que hace imposible emitir dos veces la
+        -- factura del mismo periodo (R5).
+        CREATE TABLE IF NOT EXISTS invoice_recurrence_runs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          recurrence_id INTEGER NOT NULL REFERENCES invoice_recurrences(id) ON DELETE CASCADE,
+          period TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('emitida', 'descartada')),
+          invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE (recurrence_id, period)
+        );
+        CREATE INDEX IF NOT EXISTS idx_facturas_rec_perfil
+          ON invoice_recurrences(profile_id, archived);
+      `)
+
+      // ── Lo que de verdad cuesta la tarjeta ───────────────────────────────
+      // Tasa anual en puntos base, porcentaje de pago mínimo en puntos base y
+      // el piso en centavos: los tres los escribe el usuario copiando su
+      // contrato. Nulos mientras no los escriba, y con nulo la tarjeta se ve
+      // exactamente como ayer.
+      for (const col of ['annual_rate_bp', 'min_payment_bp', 'min_payment_floor_cents']) {
+        if (!hasColumn(db, 'accounts', col)) {
+          db.exec(`ALTER TABLE accounts ADD COLUMN ${col} INTEGER`)
+        }
+      }
+    },
+  },
+  {
+    id: 18,
+    name: 'módulos de giro: inmuebles en renta, horas facturables e inventario simple',
+    up: (db) => {
+      // Tres módulos **opt-in**, que nacen apagados para todo el mundo. Y aun
+      // así sus tablas se crean para todos, porque el esquema es siempre el
+      // completo (D16): encender un módulo a media vida del libro no puede
+      // exigir una migración (R1), y apagarlo no puede perder un dato (R17).
+      // Cuatro tablas vacías en SQLite no cuestan nada.
+
+      // ── Inmuebles en renta ───────────────────────────────────────────────
+      // El inmueble **no vive aquí**: es un bien de la Fase 11, y esto es su
+      // arrendamiento. Duplicarlo habría metido la misma casa dos veces en el
+      // patrimonio, que es exactamente la mentira que la Fase 11 vino a
+      // cerrar.
+      //
+      // El inquilino es texto libre, como el de una deuda, y no una
+      // contraparte: obligar a `counterparties` haría que encender Inmuebles
+      // encendiera Negocio de rebote, y un módulo no manda sobre otro (R17).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS rentals (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+          tenant TEXT NOT NULL DEFAULT '',
+          rent_cents INTEGER NOT NULL CHECK (rent_cents >= 0),
+          deposit_cents INTEGER NOT NULL DEFAULT 0 CHECK (deposit_cents >= 0),
+          -- Día del mes en que toca cobrar. 31 cae el último, como en todo el
+          -- resto de Finply.
+          payment_day INTEGER NOT NULL DEFAULT 1 CHECK (payment_day BETWEEN 1 AND 31),
+          start_date TEXT NOT NULL,
+          end_date TEXT,
+          note TEXT NOT NULL DEFAULT '',
+          archived INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_rentas_perfil ON rentals(profile_id, archived);
+        CREATE INDEX IF NOT EXISTS idx_rentas_bien ON rentals(asset_id);
+      `)
+
+      // La liga del movimiento con su arrendamiento, y qué papel juega ahí.
+      // Es el mismo par que ya llevan las deudas (`debt_id` + `debt_role`), y
+      // por la misma razón: sin el papel habría que adivinar si un ingreso de
+      // un inquilino es la renta o el depósito, y **no es lo mismo**.
+      if (!hasColumn(db, 'transactions', 'rental_id')) {
+        db.exec(
+          `ALTER TABLE transactions ADD COLUMN rental_id INTEGER
+           REFERENCES rentals(id) ON DELETE SET NULL`,
+        )
+      }
+      if (!hasColumn(db, 'transactions', 'rental_role')) {
+        db.exec(
+          `ALTER TABLE transactions ADD COLUMN rental_role TEXT
+           CHECK (rental_role IS NULL OR rental_role IN
+             ('renta', 'deposito', 'devolucion_deposito', 'mantenimiento'))`,
+        )
+      }
+      db.exec('CREATE INDEX IF NOT EXISTS idx_tx_renta ON transactions(rental_id)')
+
+      // ── Horas facturables ────────────────────────────────────────────────
+      // La tarifa vive en **cada renglón** y no en el cliente: se sube a mitad
+      // de un proyecto, y una tarifa guardada aparte reescribiría el precio de
+      // las horas de hace tres meses. Es el mismo criterio que ya rige a una
+      // recurrencia asentada.
+      //
+      // `invoice_id` es lo único que marca una hora como facturada, y es
+      // derivado: borrar la factura las devuelve a "sin facturar" solas.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS time_entries (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          date TEXT NOT NULL,
+          minutes INTEGER NOT NULL CHECK (minutes > 0),
+          rate_cents INTEGER NOT NULL DEFAULT 0 CHECK (rate_cents >= 0),
+          counterparty_id INTEGER REFERENCES counterparties(id) ON DELETE SET NULL,
+          cost_center_id INTEGER REFERENCES cost_centers(id) ON DELETE SET NULL,
+          note TEXT NOT NULL DEFAULT '',
+          invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_horas_perfil ON time_entries(profile_id, date);
+        CREATE INDEX IF NOT EXISTS idx_horas_factura ON time_entries(invoice_id);
+      `)
+
+      // ── Inventario simple ────────────────────────────────────────────────
+      // Las cantidades van en **milésimas de unidad** para que quepa 1.5 kg
+      // sin punto flotante, con el mismo criterio que los centavos.
+      //
+      // No hay columna de existencia ni de costo promedio: los dos se derivan
+      // recorriendo los movimientos, como la bandeja de recurrencias (D7) y el
+      // saldo de una factura. Una existencia guardada envejece en cuanto
+      // alguien corrige una entrada de hace un mes.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS products (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          sku TEXT NOT NULL DEFAULT '',
+          name TEXT NOT NULL,
+          unit TEXT NOT NULL DEFAULT 'pieza',
+          -- Debajo de esto, Finply avisa. NULL quita el aviso.
+          min_qty_milli INTEGER,
+          archived INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE (profile_id, name)
+        );
+
+        CREATE TABLE IF NOT EXISTS stock_moves (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+          date TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('entrada', 'salida', 'ajuste')),
+          -- En un ajuste puede ser negativa: ahí es un delta, no una cantidad.
+          qty_milli INTEGER NOT NULL CHECK (qty_milli <> 0),
+          unit_cost_cents INTEGER NOT NULL DEFAULT 0 CHECK (unit_cost_cents >= 0),
+          note TEXT NOT NULL DEFAULT '',
+          -- Liga opcional al movimiento del libro que pagó esa entrada. El
+          -- inventario **no asienta dinero** por su cuenta (R4).
+          tx_id INTEGER REFERENCES transactions(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_stock_producto ON stock_moves(product_id, date, id);
+      `)
+    },
+  },
+  {
+    id: 19,
+    name: 'cotizaciones y órdenes de compra: el documento antes de la factura',
+    up: (db) => {
+      // El ciclo empezaba a media calle. Finply sabía de la factura —el
+      // documento que ya es un cobro— pero no de lo que la precede: la
+      // cotización que mandas y esperas, y la orden que le pones a un
+      // proveedor. Sin eso no hay forma de contestar "¿cuánto tengo en la
+      // calle esperando respuesta?", que es la pregunta con la que un negocio
+      // decide si puede comprometerse a algo más.
+      //
+      // **Una sola tabla con `direction`**, igual que `invoices`: la
+      // cotización y la orden son el mismo documento con la flecha invertida
+      // —quién promete y a quién— y partirlas en dos tablas obligaría a cada
+      // consulta, cada alerta y cada respaldo a preguntar cuál de las dos está
+      // mirando. Es D15 al derecho: dos cosas que sí son la misma.
+      //
+      // Lo que **no** entra, y por qué: la recepción de mercancía y el cotejo
+      // de tres vías (orden/recepción/factura) abren un ciclo nuevo, no cierran
+      // el que ya estaba. D23 lo deja fuera con su criterio.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS quotes (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          counterparty_id INTEGER NOT NULL REFERENCES counterparties(id) ON DELETE CASCADE,
+          -- 'emitida' es la cotización que mandas a un cliente; 'recibida', la
+          -- orden que le pones a un proveedor. Mismo documento, flecha al revés.
+          direction TEXT NOT NULL CHECK (direction IN ('emitida', 'recibida')),
+          folio TEXT NOT NULL DEFAULT '',
+          concept TEXT NOT NULL DEFAULT '',
+          issue_date TEXT NOT NULL,
+          -- Hasta cuándo vale lo que prometiste. Nulo: sin vigencia, que es lo
+          -- que pasa con media cotización real.
+          valid_until TEXT,
+          subtotal_cents INTEGER NOT NULL CHECK (subtotal_cents > 0),
+          tax_cents INTEGER NOT NULL DEFAULT 0 CHECK (tax_cents >= 0),
+          cost_center_id INTEGER REFERENCES cost_centers(id) ON DELETE SET NULL,
+          -- Tres estados y **ninguno se llama 'vencida'**: eso se deriva de
+          -- \`valid_until\` contra hoy, y guardarlo obligaría a un trabajo
+          -- nocturno que le cambiara el estado a las cotizaciones dormidas. Es
+          -- D10 otra vez: lo que se puede derivar no se guarda, porque un
+          -- estado guardado se queda viejo y nadie se entera.
+          status TEXT NOT NULL DEFAULT 'enviada'
+            CHECK (status IN ('enviada', 'aceptada', 'perdida')),
+          -- La factura que salió de ella. Se llena al convertirla, y si esa
+          -- factura se borra la cotización sigue aceptada: la aceptaron.
+          invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_cotizaciones_perfil
+          ON quotes(profile_id, direction, status);
+        CREATE INDEX IF NOT EXISTS idx_cotizaciones_contraparte ON quotes(counterparty_id);
+      `)
+    },
+  },
+  {
+    id: 20,
+    name: 'la nota se ata a lo que habla: un movimiento o un mes',
+    up: (db) => {
+      // La libreta era la única sección que no se hablaba con ninguna otra:
+      // apuntabas "el súper del 12 salió carísimo porque llevé a los niños" y
+      // esa frase vivía en una isla, sin forma de llegar desde el movimiento
+      // ni de volver a él.
+      //
+      // Dos ligas y las dos **opcionales**, porque una nota suelta sigue
+      // siendo legítima —la libreta es la libreta—:
+      //
+      //   · `tx_id`   — esta nota explica **ese** movimiento.
+      //   · `period`  — esta nota es del mes ('AAAA-MM'), que es donde caen
+      //                 los "este mes gasté de más por la mudanza".
+      //
+      // `ON DELETE SET NULL` y no CASCADE: anular el movimiento no borra lo
+      // que el usuario escribió. Es el mismo trato que ya tienen el desembolso
+      // de una deuda (Fase 3), la devolución (Fase 10) y el papel de un
+      // arrendamiento (Fase 15): se pierde la liga, nunca el dato.
+      //
+      // Aditiva y por eso inofensiva: sin las dos columnas, una nota es
+      // exactamente la nota suelta de siempre.
+      if (hasColumn(db, 'notes', 'tx_id')) return
+      db.exec(`
+        ALTER TABLE notes ADD COLUMN tx_id INTEGER REFERENCES transactions(id) ON DELETE SET NULL;
+        ALTER TABLE notes ADD COLUMN period TEXT;
+        CREATE INDEX IF NOT EXISTS idx_notes_tx ON notes(tx_id);
+        CREATE INDEX IF NOT EXISTS idx_notes_periodo ON notes(profile_id, period);
+      `)
+    },
+  },
+  {
+    id: 21,
+    name: 'personalización: campos propios, plantillas y preferencias del perfil',
+    up: (db) => {
+      // **D24 resuelta: llave-valor, no columnas.** Un campo propio por perfil
+      // no puede ser una columna de `transactions` —cada libro pediría su
+      // migración y eso choca de frente con R1—, así que el catálogo vive en
+      // su tabla y los valores en otra, uno por (movimiento, campo).
+      //
+      // El costo conocido y aceptado: filtrar o sumar por un campo propio es
+      // más caro que por una columna. Se paga barato porque **no se suma**: un
+      // campo propio se ve, se edita y se exporta, pero ningún reporte lo
+      // agrega. Es el criterio que la propia D24 dejó escrito —"si entran a los
+      // reportes hay que definir su tipo, y ahí empieza otra fase"— y además lo
+      // que impide que un dato que Finply no entiende mueva una cifra.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS profile_fields (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          label TEXT NOT NULL,
+          -- El tipo decide qué control se dibuja y qué se valida al guardar.
+          -- 'lista' trae sus opciones en \`options\`, un renglón cada una.
+          kind TEXT NOT NULL DEFAULT 'texto'
+            CHECK (kind IN ('texto', 'numero', 'fecha', 'lista', 'casilla')),
+          options TEXT NOT NULL DEFAULT '',
+          position INTEGER NOT NULL DEFAULT 0,
+          -- Archivar y no borrar: un campo que ya no se usa no puede llevarse
+          -- por delante lo que se apuntó con él (R17 otra vez, en chico).
+          archived INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_campos_perfil ON profile_fields(profile_id, position);
+
+        CREATE TABLE IF NOT EXISTS tx_field_values (
+          tx_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+          field_id INTEGER NOT NULL REFERENCES profile_fields(id) ON DELETE CASCADE,
+          value TEXT NOT NULL,
+          PRIMARY KEY (tx_id, field_id)
+        );
+
+        -- Plantillas de movimiento: "gasolina", "despensa quincenal". No es
+        -- una recurrencia —no tiene fecha ni periodo y no propone nada sola—:
+        -- es el formulario ya llenado, esperando a que alguien lo confirme.
+        -- \`amount_cents\` nulo significa "el monto lo pongo yo cada vez", que
+        -- es lo normal en la gasolina y lo raro en la colegiatura.
+        CREATE TABLE IF NOT EXISTS tx_templates (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          type TEXT NOT NULL DEFAULT 'gasto'
+            CHECK (type IN ('ingreso', 'gasto', 'transferencia')),
+          account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+          transfer_account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+          category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+          amount_cents INTEGER CHECK (amount_cents IS NULL OR amount_cents > 0),
+          note TEXT NOT NULL DEFAULT '',
+          position INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_plantillas_perfil ON tx_templates(profile_id, position);
+      `)
+
+      // Las preferencias del perfil van en columnas suyas y **no** en una
+      // tabla como los módulos, porque nadie las consulta: se leen con el
+      // perfil y las aplica el cliente. `profile_modules` es tabla porque
+      // `modulosDe` las cruza en un JOIN en cada carga del Resumen.
+      //
+      // Todas nulas o en cero: lo que falta significa "lo de antes", así que un
+      // libro que no toque nada se ve exactamente igual que ayer.
+      if (hasColumn(db, 'profiles', 'nav_order')) return
+      db.exec(`
+        -- Orden propio del lomo, ids de vista separados por coma. Nulo: el
+        -- orden agrupado de siempre.
+        ALTER TABLE profiles ADD COLUMN nav_order TEXT;
+        -- Qué sección abre al entrar. Nulo: el Resumen.
+        ALTER TABLE profiles ADD COLUMN home_view TEXT;
+        -- Cómo se ven las fechas. Nulo: 'corto' ("12 jun").
+        ALTER TABLE profiles ADD COLUMN date_format TEXT;
+        -- Qué día empieza la semana (1 = lunes … 7 = domingo). Nulo: lunes.
+        -- ⚠ Es **solo de vista**: la clave de periodo de una recurrencia
+        -- semanal sigue siendo la semana ISO, que empieza en lunes por
+        -- definición. Moverla rompería la idempotencia de R5 y reproponría el
+        -- histórico entero.
+        ALTER TABLE profiles ADD COLUMN week_start INTEGER;
+        -- Redondear las cifras a la vista. Cero: con centavos, como siempre.
+        ALTER TABLE profiles ADD COLUMN hide_cents INTEGER NOT NULL DEFAULT 0;
+      `)
+    },
+  },
+  {
+    id: 22,
+    name: 'taxonomía II: subcategorías, archivar y reglas de import',
+    up: (db) => {
+      // **D25 resuelta: un solo nivel.** `parent_id` apunta a otra categoría
+      // del mismo perfil y del mismo tipo, y la regla que lo hace barato es
+      // que un padre no puede tener padre: el gasto por categoría sigue siendo
+      // un `GROUP BY` sobre una fila por hoja y el plegado ocurre arriba. Un
+      // árbol libre habría obligado a una CTE recursiva en cada reporte.
+      //
+      // No se toca el `UNIQUE (profile_id, name, kind)`: un nombre sigue siendo
+      // único en todo el libro. El import casa categorías por nombre, la
+      // configuración exportable de la Fase 21 viaja por nombre y los reportes
+      // agrupan por nombre — dos "Frutas" en dos padres distintos se sumarían
+      // solas.
+      //
+      // `ON DELETE SET NULL` y no `CASCADE`: borrar "Comida" **promueve** a
+      // "Restaurante" en vez de llevárselo con su historial por delante. Es lo
+      // mismo que ya hace `transactions.category_id`, y por lo mismo.
+      if (!hasColumn(db, 'categories', 'parent_id')) {
+        db.exec(`
+          ALTER TABLE categories ADD COLUMN parent_id INTEGER
+            REFERENCES categories(id) ON DELETE SET NULL;
+          -- Archivar en vez de borrar, como ya hacen cuentas, plantillas y
+          -- campos propios: sale del selector y el pasado queda intacto (R17).
+          -- Se hereda: un padre archivado se lleva a sus hijos del selector, y
+          -- desarchivarlo los devuelve tal cual.
+          ALTER TABLE categories ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
+          CREATE INDEX IF NOT EXISTS idx_categorias_padre
+            ON categories(profile_id, parent_id);
+        `)
+      }
+
+      // Reglas que **proponen** categoría al importar (R4: proponen, no
+      // asientan; se ven en la vista previa antes de escribir nada). El patrón
+      // se compara normalizado —sin acentos ni mayúsculas— contra el concepto.
+      //
+      // `ON DELETE CASCADE` a la categoría: una regla que apunta a una
+      // categoría borrada no propondría nada, y dejarla sería basura silenciosa.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS import_rules (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          pattern TEXT NOT NULL,
+          category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+          -- El orden importa: gana la primera que case, así que la regla más
+          -- específica va arriba.
+          position INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_reglas_perfil ON import_rules(profile_id, position);
+      `)
+    },
+  },
+  {
+    id: 23,
+    name: 'comisión de apertura y aporte recurrente a una inversión',
+    up: (db) => {
+      // **D30 resuelta: la comisión es una columna, no un movimiento.** A
+      // diferencia del enganche —que sale de tu bolsillo el día que firmas—,
+      // la comisión de apertura se descuenta de lo que te depositan: debes
+      // $240,000 y te llegan $235,200. Ese dinero nunca estuvo en tu cuenta,
+      // así que asentarle un movimiento propio lo haría pasar dos veces por el
+      // libro.
+      //
+      // Por eso no hace falta un `debt_role` nuevo, que habría exigido
+      // reconstruir `transactions` entera —26 columnas, 11 índices, siete
+      // tablas hijas y una liga a sí misma— para ensanchar un CHECK.
+      //
+      // El desembolso pasa a asentar `principal − comisión`, y al corregirlo
+      // el principal vuelve a ser `monto + comisión`: la resta y la suma son
+      // la misma igualdad leída por sus dos lados. Con la comisión en cero
+      // —todas las deudas que ya existen— las dos se cancelan y el
+      // comportamiento es exactamente el de ayer.
+      if (!hasColumn(db, 'debts', 'origination_fee_cents')) {
+        db.exec(
+          `ALTER TABLE debts ADD COLUMN origination_fee_cents INTEGER NOT NULL DEFAULT 0`,
+        )
+      }
+
+      // Una plantilla puede aportar a una inversión. Es la misma plantilla de
+      // siempre —propone y espera (R4)—; al asentarla, además del movimiento
+      // se registra el aporte y los dos quedan ligados por
+      // `transactions.investment_entry_id`, que es lo que hace que D6 lo saque
+      // del gasto del mes: pasar dinero de tu cuenta a tu inversión no es
+      // gastar.
+      //
+      // `ON DELETE SET NULL` y no CASCADE: borrar la inversión no puede
+      // llevarse la plantilla —ni su bitácora de periodos ya asentados— por
+      // delante. Se queda como una plantilla normal, que es lo que era.
+      if (!hasColumn(db, 'recurrences', 'investment_id')) {
+        db.exec(
+          `ALTER TABLE recurrences ADD COLUMN investment_id INTEGER
+             REFERENCES investments(id) ON DELETE SET NULL`,
+        )
+      }
+    },
+  },
+  {
+    id: 24,
+    name: 'recurrencias: monto promedio, pausa y tope de ocurrencias',
+    up: (db) => {
+      // Las tres columnas son de la **plantilla**, no de la propuesta: la
+      // bandeja se sigue derivando y aquí no se guarda ni una propuesta (D7).
+      //
+      // `amount_mode` decide de dónde sale el monto que se propone. En 'fijo'
+      // —lo que son todas las que ya existen— sale de `amount_cents`, igual que
+      // ayer. En 'promedio' sale de las últimas asentadas, y `amount_cents` se
+      // queda como el monto de arranque: mientras no haya historial, es lo que
+      // se propone.
+      if (!hasColumn(db, 'recurrences', 'amount_mode')) {
+        db.exec(
+          `ALTER TABLE recurrences ADD COLUMN amount_mode TEXT NOT NULL DEFAULT 'fijo'
+             CHECK (amount_mode IN ('fijo', 'promedio'))`,
+        )
+      }
+
+      // La pausa es una **ventana de fechas**, no un interruptor, y por eso son
+      // dos columnas. Un interruptor de "pausada sí/no" solo sabe callar desde
+      // hoy: al soltarlo, los meses que pasaron vuelven a la bandeja, que es
+      // exactamente lo que ya hacía archivar y desarchivar. Lo que cae dentro
+      // de la ventana no propone **nunca** — dos meses sin colegiatura no son
+      // dos colegiaturas atrasadas.
+      //
+      // Y tiene principio a propósito: sin él, pausar hasta marzo se llevaría
+      // también el atraso de todo el año pasado.
+      if (!hasColumn(db, 'recurrences', 'paused_from')) {
+        db.exec(`
+          ALTER TABLE recurrences ADD COLUMN paused_from TEXT;
+          ALTER TABLE recurrences ADD COLUMN paused_until TEXT;
+        `)
+      }
+
+      // Doce mensualidades de un curso son doce. Cuenta las que de verdad
+      // caen: una pausa en medio no te descuenta mensualidades, corre el final.
+      if (!hasColumn(db, 'recurrences', 'max_occurrences')) {
+        db.exec(
+          `ALTER TABLE recurrences ADD COLUMN max_occurrences INTEGER
+             CHECK (max_occurrences IS NULL OR max_occurrences > 0)`,
+        )
+      }
+    },
+  },
 ]
 
 /** Versión de esquema que espera este código. */

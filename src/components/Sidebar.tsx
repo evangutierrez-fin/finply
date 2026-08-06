@@ -29,9 +29,11 @@ export type View =
   | 'analisis'
   | 'tarjetas'
   | 'deudas'
+  | 'bienes'
   | 'inversiones'
   | 'simulador'
   | 'contrapartes'
+  | 'cotizaciones'
   | 'facturas'
   | 'negocio'
   | 'presupuestos'
@@ -41,6 +43,10 @@ export type View =
   | 'importar'
   | 'recurrencias'
   | 'calendario'
+  | 'flujo'
+  | 'inmuebles'
+  | 'horas'
+  | 'inventario'
   | 'ajustes'
 
 export type ThemePref = 'claro' | 'oscuro' | 'auto'
@@ -68,6 +74,7 @@ const NAV_GROUPS: { label: string | null; items: { id: View; label: string }[] }
     items: [
       { id: 'tarjetas', label: 'Tarjetas' },
       { id: 'deudas', label: 'Deudas' },
+      { id: 'bienes', label: 'Bienes' },
       { id: 'inversiones', label: 'Inversiones' },
       { id: 'simulador', label: 'Simulador' },
     ],
@@ -77,6 +84,7 @@ const NAV_GROUPS: { label: string | null; items: { id: View; label: string }[] }
     items: [
       { id: 'recurrencias', label: 'Recurrencias' },
       { id: 'calendario', label: 'Calendario' },
+      { id: 'flujo', label: 'Flujo' },
       { id: 'presupuestos', label: 'Presupuestos' },
       { id: 'metas', label: 'Metas' },
       { id: 'notas', label: 'Notas' },
@@ -86,11 +94,65 @@ const NAV_GROUPS: { label: string | null; items: { id: View; label: string }[] }
     label: 'Negocio',
     items: [
       { id: 'contrapartes', label: 'Contrapartes' },
+      // La cotización va **antes** que la factura porque en la vida va antes:
+      // el ciclo empieza en la promesa y termina en el cobro.
+      { id: 'cotizaciones', label: 'Cotizaciones' },
       { id: 'facturas', label: 'Facturas' },
       { id: 'negocio', label: 'Resultados' },
     ],
   },
+  // Los tres módulos de giro (Fase 15). Van en su propio grupo y no repartidos
+  // entre los de arriba: nacen apagados y son de quien los pidió, así que un
+  // libro que no los use ni siquiera ve el rótulo — el grupo desaparece entero
+  // cuando se queda sin renglones.
+  {
+    label: 'Tu giro',
+    items: [
+      { id: 'inmuebles', label: 'Inmuebles' },
+      { id: 'horas', label: 'Horas' },
+      { id: 'inventario', label: 'Inventario' },
+    ],
+  },
 ]
+
+/**
+ * Todas las secciones del lomo, aplanadas y en el orden por omisión. Es la
+ * lista que ve el usuario en Ajustes cuando quiere reordenarlas, y la misma
+ * que arma el lomo: dos listas que deben coincidir son dos listas que se
+ * separan.
+ */
+export const NAV_ITEMS: { id: View; label: string }[] = NAV_GROUPS.flatMap((g) => g.items)
+
+/**
+ * El lomo, con el orden que pida el perfil (Fase 21).
+ *
+ * Con un orden propio **el lomo se aplana**: los grupos son un orden, y dos
+ * órdenes sobre la misma lista no pueden convivir. Se dice donde se elige, y
+ * quitar el orden propio devuelve los grupos intactos.
+ *
+ * Lo que el orden guardado no menciona —una sección que se encendió después de
+ * haberlo fijado— se va al final en vez de desaparecer: un módulo nuevo no
+ * puede quedar invisible por una preferencia vieja.
+ */
+export function armarLomo(
+  modules: readonly string[],
+  orden: string[] | null,
+): { label: string | null; items: { id: View; label: string }[] }[] {
+  const visibles = NAV_ITEMS.filter((item) => vistaVisible(item.id, modules as any))
+  if (!orden || orden.length === 0) {
+    // Un grupo que se queda sin renglones desaparece con su rótulo: "Patrimonio"
+    // sobre un hueco se lee como un error de la app, no como una elección.
+    return NAV_GROUPS.map((group) => ({
+      ...group,
+      items: group.items.filter((item) => vistaVisible(item.id, modules as any)),
+    })).filter((group) => group.items.length > 0)
+  }
+  const puesto = new Map(orden.map((id, i) => [id, i]))
+  const items = [...visibles].sort(
+    (a, b) => (puesto.get(a.id) ?? Infinity) - (puesto.get(b.id) ?? Infinity),
+  )
+  return [{ label: null, items }]
+}
 
 const THEME_LABEL: Record<ThemePref, string> = {
   claro: '☀ Claro',
@@ -126,12 +188,7 @@ export function Sidebar({
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
-  // Un grupo que se queda sin renglones desaparece con su rótulo: "Patrimonio"
-  // sobre un hueco se lee como un error de la app, no como una elección.
-  const grupos = NAV_GROUPS.map((group) => ({
-    ...group,
-    items: group.items.filter((item) => vistaVisible(item.id, profile.modules)),
-  })).filter((group) => group.items.length > 0)
+  const grupos = armarLomo(profile.modules, profile.navOrder)
 
   useEffect(() => {
     if (!open) return

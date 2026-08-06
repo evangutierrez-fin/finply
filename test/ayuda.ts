@@ -20,6 +20,7 @@ export interface Respuesta<T> {
 export interface Cliente {
   get: <T = any>(ruta: string) => Promise<Respuesta<T>>
   post: <T = any>(ruta: string, body?: unknown) => Promise<Respuesta<T>>
+  put: <T = any>(ruta: string, body?: unknown) => Promise<Respuesta<T>>
   patch: <T = any>(ruta: string, body?: unknown) => Promise<Respuesta<T>>
   del: <T = any>(ruta: string) => Promise<Respuesta<T>>
   /** Para respuestas que no son JSON (CSV). Ojo: decodificar como texto se
@@ -61,6 +62,7 @@ export async function levantar(): Promise<Cliente> {
   return {
     get: (ruta) => pedir('GET', ruta),
     post: (ruta, body) => pedir('POST', ruta, body ?? {}),
+    put: (ruta, body) => pedir('PUT', ruta, body ?? {}),
     patch: (ruta, body) => pedir('PATCH', ruta, body ?? {}),
     del: (ruta) => pedir('DELETE', ruta),
     getText: async (ruta) => {

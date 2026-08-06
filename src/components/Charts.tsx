@@ -24,11 +24,14 @@ function EjeY({
   y,
   x0,
   x1,
+  rotulo = fmtCompacto,
 }: {
   marcas: number[]
   y: (cents: number) => number
   x0: number
   x1: number
+  /** Cómo se escribe cada marca. Pesos por omisión; la serie en porcentaje trae la suya. */
+  rotulo?: (v: number) => string
 }) {
   return (
     <g aria-hidden="true">
@@ -36,7 +39,7 @@ function EjeY({
         <g key={v}>
           <line x1={x0} y1={y(v)} x2={x1} y2={y(v)} className={v === 0 ? 'grafica-base' : 'grafica-guia'} />
           <text x={x0 - 6} y={y(v) + 3.2} className="grafica-tick eje-rotulo" textAnchor="end">
-            {fmtCompacto(v)}
+            {rotulo(v)}
           </text>
         </g>
       ))}
@@ -483,31 +486,280 @@ export function PatrimonioLinea({ patrimonio }: { patrimonio: PuntoPatrimonio[] 
   )
 }
 
+/**
+ * La caja proyectada, día a día.
+ *
+ * A diferencia del patrimonio —doce puntos, uno por mes—, aquí los puntos son
+ * hasta noventa y ninguno se puede rotular: el eje X va con marcas cada siete
+ * días y la fecha exacta la dice el pie al recorrer. La línea del cero se
+ * dibuja siempre que la serie la cruce, porque **el cruce es la respuesta**: el
+ * tramo bajo cero se pinta aparte para que el día en rojo se vea sin leer una
+ * sola cifra, y aun así la cifra va escrita en el pie y en la tabla (R19).
+ */
+export function FlujoLinea({
+  puntos,
+  primerDiaEnRojo,
+}: {
+  puntos: { fecha: string; saldoCents: number; entradasCents: number; salidasCents: number }[]
+  primerDiaEnRojo: string | null
+}) {
+  const [activo, setActivo] = useState<number | null>(null)
+  const nav = useNavegable(puntos.length, setActivo)
+  if (puntos.length < 2) return null
+
+  const valores = puntos.map((p) => p.saldoCents)
+  const max = Math.max(...valores, 0)
+  const min = Math.min(...valores, 0)
+  const rango = max - min || 1
+
+  const chartH = 150
+  const ancho = 620
+  const width = MARGEN_EJE + ancho
+  const margen = 12
+  const paso = (ancho - margen * 2) / (puntos.length - 1)
+  const y = (cents: number) => chartH - ((cents - min) / rango) * chartH * 0.86 - chartH * 0.07
+  const x = (i: number) => MARGEN_EJE + margen + i * paso
+  const base = y(0)
+
+  const coords = puntos.map((p, i) => ({ x: x(i), y: y(p.saldoCents), p }))
+  const linea = coords.map((q) => `${q.x.toFixed(1)},${q.y.toFixed(1)}`).join(' ')
+  const area = `${coords[0]!.x},${base} ${linea} ${coords.at(-1)!.x},${base}`
+  const destacado = activo === null ? null : puntos[activo]
+  const iRojo = primerDiaEnRojo === null ? -1 : puntos.findIndex((p) => p.fecha === primerDiaEnRojo)
+
+  return (
+    <div className="grafica">
+      <svg
+        viewBox={`0 0 ${width} ${chartH + 20}`}
+        className="grafica-svg"
+        role="img"
+        aria-label={`Saldo proyectado día a día, del ${fmtDate(puntos[0]!.fecha)} al ${fmtDate(
+          puntos.at(-1)!.fecha,
+        )}. Usa las flechas para recorrer los días.`}
+        {...nav}
+      >
+        <EjeY marcas={ticksBonitos(min, max, 4)} y={y} x0={MARGEN_EJE} x1={width} />
+        <polygon points={area} className="serie-area" />
+        <polyline points={linea} className="serie-linea" />
+        {min < 0 && (
+          <>
+            {/* Lo que cae bajo cero, con su propia tinta: el rojo del libro. */}
+            <clipPath id="bajo-cero">
+              <rect x={MARGEN_EJE} y={base} width={width - MARGEN_EJE} height={chartH - base} />
+            </clipPath>
+            <polyline points={linea} className="serie-linea serie-rojo" clipPath="url(#bajo-cero)" />
+            <line x1={MARGEN_EJE} y1={base} x2={width} y2={base} className="grafica-base" />
+          </>
+        )}
+        {iRojo > 0 && (
+          <line
+            x1={x(iRojo)}
+            y1="0"
+            x2={x(iRojo)}
+            y2={chartH}
+            className="grafica-marca-rojo"
+          />
+        )}
+        {coords.map((q, i) => (
+          <g key={q.p.fecha} onMouseEnter={() => setActivo(i)}>
+            <rect x={q.x - paso / 2} y="0" width={paso} height={chartH} fill="transparent" />
+            {(activo === i || i === 0 || i === coords.length - 1 || i === iRojo) && (
+              <circle cx={q.x} cy={q.y} r={activo === i ? 4 : 2.5} className="serie-punto" />
+            )}
+            {i % 7 === 0 && i > 0 && (
+              <text x={q.x} y={chartH + 14} className="grafica-tick" textAnchor="middle">
+                {q.p.fecha.slice(8)}
+              </text>
+            )}
+          </g>
+        ))}
+      </svg>
+      <div className="grafica-pie" aria-live="polite">
+        {destacado ? (
+          <span className="grafica-dato">
+            <strong>{fmtDate(destacado.fecha)}</strong>
+            {' · caja '}
+            <span className="cifra-chica">{fmtMoney(destacado.saldoCents)}</span>
+            {destacado.entradasCents > 0 && (
+              <> · entra <span className="cifra-chica">{fmtMoney(destacado.entradasCents)}</span></>
+            )}
+            {destacado.salidasCents > 0 && (
+              <> · sale <span className="cifra-chica">{fmtMoney(destacado.salidasCents)}</span></>
+            )}
+            {destacado.entradasCents === 0 && destacado.salidasCents === 0 && ' · sin movimiento'}
+          </span>
+        ) : (
+          <span className="grafica-leyenda">
+            Caja al cierre de cada día · {fmtDate(puntos[0]!.fecha)} —{' '}
+            {fmtDate(puntos.at(-1)!.fecha)}
+          </span>
+        )}
+      </div>
+      <TablaDatos
+        titulo="Saldo proyectado al cierre de cada día"
+        columnas={['Día', 'Caja', 'Entra', 'Sale']}
+        filas={puntos.map((p) => [
+          fmtDate(p.fecha),
+          fmtMoney(p.saldoCents),
+          fmtMoney(p.entradasCents),
+          fmtMoney(p.salidasCents),
+        ])}
+      />
+    </div>
+  )
+}
+
+/**
+ * La minigráfica de una cuenta: treinta días de saldo en el ancho de un dedo.
+ *
+ * **Es forma, no magnitud**, y por eso es la única gráfica de Finply que no se
+ * mide desde cero (Fase 10a). La razón es que aquí no hay eje ni cifras que
+ * leer: la cantidad va escrita al lado —el saldo y el cambio de los 30 días, en
+ * pesos—, así que un trazo que arranca en el mínimo no puede confundirse con
+ * una montaña. Medida desde cero, una cuenta de $150,000 que se movió $8,000
+ * dibujaría una raya recta en todos los casos, que es no dibujar nada.
+ *
+ * Va `aria-hidden`: lo que dice ya está en el texto del renglón, y un lector de
+ * pantalla no necesita oír dos veces lo mismo (R19).
+ */
+export function Spark({ puntos }: { puntos: number[] }) {
+  if (puntos.length < 2) return null
+  const max = Math.max(...puntos)
+  const min = Math.min(...puntos)
+  const rango = max - min || 1
+  const w = 100
+  const h = 22
+  const x = (i: number) => (i / (puntos.length - 1)) * w
+  const y = (v: number) => h - 3 - ((v - min) / rango) * (h - 6)
+  const linea = puntos.map((p, i) => `${x(i).toFixed(1)},${y(p).toFixed(1)}`).join(' ')
+  const sube = puntos.at(-1)! >= puntos[0]!
+
+  return (
+    // Sin `preserveAspectRatio="none"`: estirarlo al ancho del renglón cambiaría
+    // la pendiente, y la pendiente es lo único que esta gráfica dice.
+    <svg viewBox={`0 0 ${w} ${h}`} className="spark" aria-hidden="true">
+      <polyline points={linea} className={`spark-linea${sube ? '' : ' spark-baja'}`} />
+      <circle cx={x(puntos.length - 1)} cy={y(puntos.at(-1)!)} r="2" className="spark-punta" />
+    </svg>
+  )
+}
+
+/**
+ * De qué está hecho el patrimonio, en dos barras a la misma escala: lo que
+ * tienes, repartido, y lo que debes debajo. Cuatro números en una lista no
+ * dicen si tu casa pesa más que tu deuda; dos barras sí, de un vistazo.
+ *
+ * Los segmentos se distinguen por **claridad**, no por tono —una rampa de la
+ * misma tinta se lee igual con cualquier daltonismo (R10)— y cada uno lleva su
+ * muestra junto a su cifra en la lista de abajo, que es la tabla de esta
+ * gráfica: aquí no hay dato que viva solo en el color.
+ */
+export function Composicion({
+  partes,
+  debesCents,
+}: {
+  partes: { nombre: string; cents: number }[]
+  debesCents: number
+}) {
+  const bruto = partes.reduce((s, p) => s + p.cents, 0)
+  if (bruto <= 0 && debesCents <= 0) return null
+  const escala = Math.max(bruto, debesCents, 1)
+  const parte = (cents: number) => `${Math.max(0, (cents / escala) * 100)}%`
+
+  return (
+    // `aria-hidden` por lo mismo que la minigráfica: cada tramo está escrito
+    // con su nombre y su cifra en la lista de abajo, y oírlo dos veces no
+    // agrega nada.
+    <div className="composicion" aria-hidden="true">
+      <div className="composicion-fila">
+        <span className="composicion-rotulo">Tienes</span>
+        <span className="composicion-riel">
+          {/*
+            El índice es el del renglón, **no** el de los que sobrevivieron al
+            filtro: con Bienes en cero, "Te deben" se pintaba con el tono de
+            Bienes y su muestra en la lista decía otro. Un dato que vive en el
+            color no puede cambiar de color según qué más haya.
+          */}
+          {partes.map((p, i) =>
+            p.cents > 0 ? (
+              <span
+                key={p.nombre}
+                className={`composicion-parte parte-${i}`}
+                style={{ width: parte(p.cents) }}
+                title={p.nombre}
+              />
+            ) : null,
+          )}
+        </span>
+      </div>
+      {debesCents > 0 && (
+        <div className="composicion-fila">
+          <span className="composicion-rotulo">Debes</span>
+          <span className="composicion-riel">
+            <span className="composicion-parte parte-debes" style={{ width: parte(debesCents) }} />
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Un renglón de la gráfica de categorías. `hijos` es el desglose de la Fase 23
+ * y es opcional: las etiquetas y las fuentes lo mandan vacío o no lo mandan.
+ */
+export interface RenglonCategoria {
+  name: string
+  expenseCents: number
+  hijos?: { name: string; expenseCents: number }[]
+}
+
 /** Barras horizontales: en qué se fue el gasto del mes (una sola serie, tono de acento). */
-export function CategoryBars({ byCategory }: { byCategory: Summary['byCategory'] }) {
+export function CategoryBars({ byCategory }: { byCategory: RenglonCategoria[] }) {
   if (byCategory.length === 0) {
     return <p className="grafica-vacia">Sin gastos este mes.</p>
   }
-  const max = byCategory[0]!.expenseCents || 1
+  // El máximo se busca, no se supone en el primer renglón: una lista que llegue
+  // en cualquier otro orden dibujaba barras más largas que el riel.
+  const max = Math.max(...byCategory.map((c) => c.expenseCents), 1)
   const total = byCategory.reduce((s, c) => s + c.expenseCents, 0)
   return (
     <ul className="cat-bars">
       {byCategory.map((c, i) => (
-        <li key={c.name} className="cat-row">
-          <span className="cat-nombre">{c.name}</span>
-          <span className="cat-riel">
-            <span
-              className="cat-lleno"
-              style={{
-                width: `${Math.max(2, (c.expenseCents / max) * 100)}%`,
-                animationDelay: `${i * 60}ms`,
-              }}
-            />
-          </span>
-          <span className="cifra cifra-chica">{fmtMoney(c.expenseCents)}</span>
-          {/* La barra compara contra la categoría más grande; el porcentaje
-              dice la parte del total, que es otra pregunta. */}
-          <span className="cat-parte">{total > 0 ? Math.round((c.expenseCents / total) * 100) : 0} %</span>
+        <li key={c.name} className="cat-row-grupo">
+          <div className="cat-row">
+            <span className="cat-nombre">{c.name}</span>
+            <span className="cat-riel">
+              <span
+                className="cat-lleno"
+                style={{
+                  width: `${Math.max(2, (c.expenseCents / max) * 100)}%`,
+                  animationDelay: `${i * 60}ms`,
+                }}
+              />
+            </span>
+            <span className="cifra cifra-chica">{fmtMoney(c.expenseCents)}</span>
+            {/* La barra compara contra la categoría más grande; el porcentaje
+                dice la parte del total, que es otra pregunta. */}
+            <span className="cat-parte">{total > 0 ? Math.round((c.expenseCents / total) * 100) : 0} %</span>
+          </div>
+          {/* El desglose (D25). Va siempre a la vista, no detrás de un clic ni
+              de un `hover`: el cierre de año se imprime, y en papel no hay
+              ratón (R19). Si el reporte agrega al padre, el hijo tiene que
+              poder verse o la cifra deja de ser auditable. */}
+          {c.hijos && c.hijos.length > 0 && (
+            <ul className="cat-hijos">
+              {c.hijos.map((h) => (
+                <li key={h.name} className="cat-hijo">
+                  <span className="cat-hijo-nombre">{h.name}</span>
+                  <span className="cifra cifra-chica">{fmtMoney(h.expenseCents)}</span>
+                  <span className="cat-parte">
+                    {c.expenseCents !== 0 ? Math.round((h.expenseCents / c.expenseCents) * 100) : 0} %
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
         </li>
       ))}
     </ul>
@@ -596,11 +848,38 @@ export function HistorialValor({
  */
 export function ProyeccionLineas({
   series,
+  titulo,
+  etiqueta,
+  formato = fmtMoney,
+  formatoEje = fmtCompacto,
+  marca,
 }: {
-  series: { nombre: string; puntos: { mes: number; patrimonioCents: number }[]; punteada?: boolean }[]
+  /** Una serie por ruta. `puntos[i]` es el valor del mes `i`. */
+  series: { nombre: string; puntos: number[]; punteada?: boolean }[]
+  /** Encabezado de la tabla que leen los lectores de pantalla. */
+  titulo: string
+  /** Qué se está viendo, para el `aria-label` del SVG. */
+  etiqueta: string
+  /**
+   * Cómo se escribe un valor en el pie y en la tabla. Por omisión son pesos;
+   * la serie en porcentaje pasa la suya.
+   */
+  formato?: (v: number) => string
+  /**
+   * Cómo se escribe una marca del eje. Va aparte de `formato` porque el eje
+   * tiene 46 px: los pesos van compactos ("$1.5M") o se salen del recuadro, y
+   * un porcentaje cabe entero. Cuando no se pasa, se compacta.
+   */
+  formatoEje?: (v: number) => string
+  /**
+   * Un mes que merece una raya vertical: el último de aporte, cuando hay fase
+   * de retiro. Sin él, la cima de la montaña es un cambio de pendiente que hay
+   * que adivinar.
+   */
+  marca?: { mes: number; texto: string } | null
 }) {
   const [activo, setActivo] = useState<number | null>(null)
-  const todos = series.flatMap((s) => s.puntos.map((p) => p.patrimonioCents))
+  const todos = series.flatMap((s) => s.puntos)
   const meses = Math.max(...series.map((s) => s.puntos.length), 1) - 1
   const nav = useNavegable(meses + 1, setActivo)
   if (todos.length === 0) return null
@@ -613,7 +892,7 @@ export function ProyeccionLineas({
   const width = MARGEN_EJE + ancho
   const margen = 14
   const paso = (ancho - margen * 2) / (meses || 1)
-  const y = (cents: number) => chartH - ((cents - min) / rango) * chartH * 0.88 - chartH * 0.06
+  const y = (v: number) => chartH - ((v - min) / rango) * chartH * 0.88 - chartH * 0.06
   const base = y(0)
   const x = (mes: number) => MARGEN_EJE + margen + mes * paso
 
@@ -623,15 +902,21 @@ export function ProyeccionLineas({
         viewBox={`0 0 ${width} ${chartH}`}
         className="grafica-svg"
         role="img"
-        aria-label="Patrimonio proyectado con cada estrategia. Usa las flechas para recorrer los meses."
+        aria-label={`${etiqueta} Usa las flechas para recorrer los meses.`}
         {...nav}
       >
-        <EjeY marcas={ticksBonitos(min, max, 4)} y={y} x0={MARGEN_EJE} x1={width} />
+        <EjeY marcas={ticksBonitos(min, max, 4)} y={y} x0={MARGEN_EJE} x1={width} rotulo={formatoEje} />
         {min < 0 && <line x1={MARGEN_EJE} y1={base} x2={width} y2={base} className="grafica-base" />}
+        {marca && marca.mes > 0 && marca.mes < meses && (
+          <g aria-hidden="true">
+            <line x1={x(marca.mes)} y1="0" x2={x(marca.mes)} y2={chartH} className="grafica-corte" />
+            <text x={x(marca.mes) + 4} y="11" className="grafica-tick">{marca.texto}</text>
+          </g>
+        )}
         {series.map((s) => (
           <polyline
             key={s.nombre}
-            points={s.puntos.map((p) => `${x(p.mes).toFixed(1)},${y(p.patrimonioCents).toFixed(1)}`).join(' ')}
+            points={s.puntos.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')}
             className={`serie-linea ${s.punteada ? 'serie-punteada' : ''}`}
           />
         ))}
@@ -648,10 +933,10 @@ export function ProyeccionLineas({
         ))}
         {activo !== null &&
           series.map((s) => {
-            const p = s.puntos[activo]
-            return p ? (
-              <circle key={s.nombre} cx={x(p.mes)} cy={y(p.patrimonioCents)} r="4" className="serie-punto" />
-            ) : null
+            const v = s.puntos[activo]
+            return v === undefined ? null : (
+              <circle key={s.nombre} cx={x(activo)} cy={y(v)} r="4" className="serie-punto" />
+            )
           })}
       </svg>
       <div className="grafica-pie" aria-live="polite">
@@ -661,7 +946,7 @@ export function ProyeccionLineas({
             {series.map((s) => (
               <span key={s.nombre}>
                 {' · '}
-                {s.nombre}: <span className="cifra-chica">{fmtMoney(s.puntos[activo]?.patrimonioCents ?? 0)}</span>
+                {s.nombre}: <span className="cifra-chica">{formato(s.puntos[activo] ?? 0)}</span>
               </span>
             ))}
           </span>
@@ -678,11 +963,11 @@ export function ProyeccionLineas({
         )}
       </div>
       <TablaDatos
-        titulo="Patrimonio proyectado con cada estrategia"
+        titulo={titulo}
         columnas={['Mes', ...series.map((s) => s.nombre)]}
         filas={Array.from({ length: meses + 1 }, (_, i) => [
           String(i),
-          ...series.map((s) => fmtMoney(s.puntos[i]?.patrimonioCents ?? 0)),
+          ...series.map((s) => formato(s.puntos[i] ?? 0)),
         ])}
       />
     </div>

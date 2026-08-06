@@ -6,7 +6,9 @@ import { fmtDate, fmtMoney, parseAmount, todayISO } from '../format.ts'
 import { Money, CountUpMoney } from '../components/Money.tsx'
 import { Modal } from '../components/Modal.tsx'
 import { HistorialValor } from '../components/Charts.tsx'
-import { fmtUnidades, parseUnidades, precioImplicito, valorDeUnidades } from '../../shared/inversiones.ts'
+import {
+  fmtUnidades, parseUnidades, precioImplicito, repartoPorTipo, valorDeUnidades,
+} from '../../shared/inversiones.ts'
 import type {
   Account, InformePrecios, Investment, InvestmentEntryType, InvestmentKind,
 } from '../../shared/types.ts'
@@ -436,6 +438,15 @@ function InvestmentCard({ investment, index }: { investment: Investment; index: 
 
       <Sparkline investment={investment} />
 
+      {investment.retiradoCents > 0 && (
+        <p className="deuda-cifras">
+          De esa ganancia, <Money cents={investment.gananciaRealizadaCents} className="cifra-chica" />{' '}
+          ya la cobraste al retirar y{' '}
+          <Money cents={investment.gananciaEnPapelCents} className="cifra-chica" /> sigue en papel.
+          Lo que todavía tienes te costó {fmtMoney(investment.costoCents)}.
+        </p>
+      )}
+
       <p className="deuda-cifras">
         Aportado: <Money cents={investment.aportadoCents} className="cifra-chica" />
         {investment.retiradoCents > 0 && (
@@ -533,6 +544,55 @@ function InvestmentCard({ investment, index }: { investment: Investment; index: 
         <InvestmentModal investment={investment} onClose={() => setEditing(false)} onSaved={bump} />
       )}
     </article>
+  )
+}
+
+/**
+ * Cómo está repartida la cartera por tipo. Es el mismo ángulo que la
+ * concentración del gasto por categoría, y contesta la misma pregunta: de qué
+ * depende tu dinero.
+ *
+ * Las barras van contra el **total**, no contra la más grande: aquí la
+ * pregunta es qué parte del todo pesa cada una, no cuál gana. Y va todo a la
+ * vista, sin `hover` ni clic (R19): con `<dl>` y sus cifras al lado, se lee
+ * igual en papel y con un lector de pantalla. Esto no recomienda un reparto
+ * (R9): dice el que hay.
+ */
+function RepartoCartera({ inversiones }: { inversiones: Investment[] }) {
+  const filas = repartoPorTipo(inversiones)
+  if (filas.length < 2) return null
+  const total = filas.reduce((s, f) => s + f.valueCents, 0)
+  const mayor = filas[0]!
+
+  return (
+    <section className="hoja">
+      <h2 className="rotulo">Cómo está repartida</h2>
+      <ul className="cat-bars reparto-bars">
+        {filas.map((f, i) => (
+          <li key={f.kind} className="cat-row-grupo">
+            <div className="cat-row">
+              <span className="cat-nombre">{KIND_LABEL[f.kind as InvestmentKind] ?? f.kind}</span>
+              <span className="cat-riel">
+                <span
+                  className="cat-lleno"
+                  style={{
+                    width: `${Math.max(2, (f.valueCents / total) * 100)}%`,
+                    animationDelay: `${i * 60}ms`,
+                  }}
+                />
+              </span>
+              <span className="cifra cifra-chica">{fmtMoney(f.valueCents)}</span>
+              <span className="cat-parte">{(f.parteBp / 100).toFixed(1)} %</span>
+            </div>
+          </li>
+        ))}
+      </ul>
+      <p className="amort-nota">
+        {(mayor.parteBp / 100).toFixed(1)} % de lo que tienes está en{' '}
+        {KIND_LABEL[mayor.kind as InvestmentKind] ?? mayor.kind}. Es tu concentración: si esa
+        clase se mueve, se mueve esa parte de tu dinero.
+      </p>
+    </section>
   )
 }
 
@@ -719,7 +779,9 @@ export function Inversiones() {
   const aportado = active.reduce((s, i) => s + i.aportadoCents, 0)
   const value = active.reduce((s, i) => s + i.valueCents, 0)
   const gain = active.reduce((s, i) => s + i.gananciaCents, 0)
+  const realizada = active.reduce((s, i) => s + i.gananciaRealizadaCents, 0)
   const conUnidades = active.some((i) => i.unitsE8 > 0)
+  const conRetiros = active.some((i) => i.retiradoCents > 0)
 
   return (
     <div className="vista">
@@ -773,8 +835,22 @@ export function Inversiones() {
                   </span>
                 </dd>
               </div>
+              {/* La misma ganancia partida en dos: lo cobrado ya es tuyo y lo
+                  de papel todavía puede irse. Solo aparece si retiraste algo:
+                  sin retiros la realizada es cero y el renglón sería ruido. */}
+              {conRetiros && (
+                <div className="stat">
+                  <dt>Ya cobrado</dt>
+                  <dd>
+                    <Money cents={realizada} signed />
+                    <span className="cifra-chica"> · {fmtMoney(gain - realizada)} en papel</span>
+                  </dd>
+                </div>
+              )}
             </dl>
           </section>
+
+          <RepartoCartera inversiones={active} />
 
           <section className="inversiones-grid">
             {active.map((inv, i) => (

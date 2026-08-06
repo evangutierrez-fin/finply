@@ -7,7 +7,9 @@ import assert from 'node:assert/strict'
 import {
   fechasParcialidades,
   interesDevengado,
+  pagoMinimo,
   parcialidades,
+  simularPagoMinimo,
   tablaAmortizacion,
 } from '../shared/credito.ts'
 import {
@@ -213,5 +215,85 @@ describe('tabla de amortización', () => {
       tabla.filas.reduce((s, f) => s + f.capitalCents, 0),
       100,
     )
+  })
+})
+
+// ── El pago mínimo de la tarjeta (Fase 14) ────────────────────────────────
+//
+// Era la única deuda de Finply sin interés modelado, y es la más cara que
+// tiene cualquiera. Todo esto es aritmética del usuario con sus supuestos
+// escritos (R9): su tasa, su porcentaje y su piso.
+
+describe('pago mínimo', () => {
+  test('es un porcentaje del saldo, con piso, y nunca más que el saldo', () => {
+    // 5 % de $10,000 son $500, por encima del piso de $300.
+    assert.equal(pagoMinimo(1_000_000, 500, 30000), 50000)
+    // 5 % de $1,000 son $50: manda el piso.
+    assert.equal(pagoMinimo(100_000, 500, 30000), 30000)
+    // Y con $100 de saldo no se puede exigir el piso de $300.
+    assert.equal(pagoMinimo(10_000, 500, 30000), 10000)
+    assert.equal(pagoMinimo(0, 500, 30000), 0, 'sin deuda no hay mínimo')
+    assert.equal(pagoMinimo(100_000, 500, null), 5000, 'sin piso manda el porcentaje')
+  })
+
+  test('sin tasa, el mínimo liquida y no cuesta un peso de interés', () => {
+    const plan = simularPagoMinimo({
+      saldoCents: 100_000,
+      annualRateBp: 0,
+      minPaymentBp: 0,
+      floorCents: 25_000,
+    })
+    assert.equal(plan.totalInteresCents, 0)
+    assert.equal(plan.meses, 4, '$1,000 a $250 fijos son cuatro meses')
+    assert.equal(plan.totalPagadoCents, 100_000)
+    assert.equal(plan.nuncaTermina, false)
+  })
+
+  test('pagar el mínimo cuesta años y más intereses que un pago fijo', () => {
+    const params = { saldoCents: 3_000_000, annualRateBp: 4590, floorCents: 30_000 }
+    const minimo = simularPagoMinimo({ ...params, minPaymentBp: 500 })
+    // El plan existe, tarda años y el interés no es una nota al pie.
+    assert.equal(minimo.nuncaTermina, false)
+    assert.ok(minimo.meses !== null && minimo.meses > 36, `tardó ${minimo.meses} meses`)
+    assert.ok(minimo.totalInteresCents > 500_000, 'con esa tasa el interés pesa')
+    assert.equal(
+      minimo.totalPagadoCents,
+      params.saldoCents + minimo.totalInteresCents,
+      'lo pagado es el saldo más los intereses, sin sobras',
+    )
+    // El primer mínimo es el que el usuario reconoce de su estado de cuenta:
+    // 5 % del saldo ya con el interés del periodo encima.
+    assert.equal(minimo.primerPagoCents, pagoMinimo(3_000_000 + 114_750, 500, 30_000))
+
+    // Y con un pago fijo más grande se acaba antes y cuesta menos. Es la
+    // comparación que vuelve útil la cifra.
+    const fijo = simularPagoMinimo({ ...params, minPaymentBp: 500, pagoFijoCents: 200_000 })
+    assert.ok(fijo.meses !== null && fijo.meses < minimo.meses!)
+    assert.ok(fijo.totalInteresCents < minimo.totalInteresCents)
+  })
+
+  test('si el mínimo no cubre ni el interés, la deuda no se acaba nunca', () => {
+    // 1 % de mínimo contra 60 % anual: cada mes se debe más que el mes pasado.
+    const plan = simularPagoMinimo({
+      saldoCents: 5_000_000,
+      annualRateBp: 6000,
+      minPaymentBp: 100,
+      floorCents: null,
+    })
+    assert.equal(plan.nuncaTermina, true)
+    assert.equal(plan.meses, null, 'no hay un número de meses que decir')
+    assert.ok(plan.totalInteresCents > 0)
+  })
+
+  test('sin deuda no hay nada que simular', () => {
+    const plan = simularPagoMinimo({
+      saldoCents: 0,
+      annualRateBp: 4590,
+      minPaymentBp: 500,
+      floorCents: 30_000,
+    })
+    assert.equal(plan.meses, 0)
+    assert.equal(plan.totalPagadoCents, 0)
+    assert.equal(plan.nuncaTermina, false)
   })
 })

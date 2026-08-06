@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { api } from '../api.ts'
 import { useApp } from '../context.ts'
 import { useFetch } from '../hooks.ts'
-import { fmtDate, fmtMoney, todayISO } from '../format.ts'
+import { fmtDate, fmtMoney, fmtTasa, todayISO } from '../format.ts'
 import { Money } from '../components/Money.tsx'
 import { AccountModal } from '../components/AccountModal.tsx'
 import { MsiModal } from '../components/MsiModal.tsx'
@@ -80,6 +80,7 @@ function TarjetaCarta({
   const limite = estado.creditLimitCents
   const usado = limite ? Math.min(100, Math.max(0, (estado.deudaCents / limite) * 100)) : 0
   const sobregirada = limite !== null && estado.deudaCents > limite
+  const plan = estado.siPagasElMinimo
 
   return (
     <article className="hoja tarjeta-carta" style={{ animationDelay: `${index * 60}ms` }}>
@@ -145,6 +146,37 @@ function TarjetaCarta({
         <p className="tarjeta-nota">
           Ponle día de corte y día de pago para ver cuánto tienes que pagar y hasta cuándo.
         </p>
+      )}
+
+      {estado.pagoMinimoCents !== null && (
+        <div className="tarjeta-minimo">
+          <div className="tarjeta-corte-fila">
+            <span className="rotulo">
+              Pago mínimo
+              {estado.annualRateBp !== null && <> · {fmtTasa(estado.annualRateBp)} anual</>}
+            </span>
+            <Money cents={estado.pagoMinimoCents} className="cifra-chica" />
+          </div>
+          {plan === null ? (
+            <p className="tarjeta-nota">
+              Escribe la tasa anual de la tarjeta para saber qué cuesta pagar solo el mínimo.
+            </p>
+          ) : plan.nuncaTermina ? (
+            <p className="tarjeta-nota tarjeta-nunca">
+              <strong>Pagando el mínimo, esta deuda no se acaba.</strong> Con esa tasa, el interés
+              de cada mes se come el abono y el saldo no baja. Es aritmética de tus propias cifras,
+              no una predicción.
+            </p>
+          ) : (
+            <p className="tarjeta-nota">
+              Pagando <strong>solo el mínimo</strong> —y sin volver a usarla— saldas en{' '}
+              <strong>{plan.meses} meses</strong> y pagas{' '}
+              <strong className="cifra-chica">{fmtMoney(plan.totalInteresCents)}</strong> de
+              intereses: {fmtMoney(plan.totalPagadoCents)} por{' '}
+              {fmtMoney(estado.deudaCents - estado.msiPorFacturarCents)} de deuda.
+            </p>
+          )}
+        </div>
       )}
 
       <footer className="tarjeta-pie">

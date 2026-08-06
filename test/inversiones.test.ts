@@ -1,8 +1,11 @@
 // Aritmética de inversiones: el recorrido, las unidades y el XIRR.
 //
-// Import estático a propósito y sin riesgo: `shared/inversiones.ts`,
-// `shared/rendimiento.ts` y `shared/simulador.ts` son puros y no llegan a
-// `db.ts` (R16). Aquí no se abre ninguna base.
+// Import estático a propósito y sin riesgo: `shared/inversiones.ts` y
+// `shared/rendimiento.ts` son puros y no llegan a `db.ts` (R16). Aquí no se
+// abre ninguna base.
+//
+// El simulador vivía aquí y se fue a `test/simulador.test.ts` en la Fase 18:
+// dejó de ser un apéndice de las inversiones para tener su propia aritmética.
 //
 // El XIRR se comprueba **contra casos calculados a mano**: un flujo que se
 // duplica en un año exacto tiene que dar 100 %, y uno que crece 21 % en dos
@@ -22,7 +25,6 @@ import {
   type EntradaInversion,
 } from '../shared/inversiones.ts'
 import { MINIMO_DIAS, xirr } from '../shared/rendimiento.ts'
-import { mensualEfectiva, proyectar } from '../shared/simulador.ts'
 
 let siguienteId = 1
 function entrada(e: Partial<EntradaInversion> & { type: EntradaInversion['type']; date: string }): EntradaInversion {
@@ -254,112 +256,5 @@ describe('rendimiento anualizado', () => {
       { date: '2026-01-01', amountCents: 0 },
     ])
     assert.equal(r, null)
-  })
-})
-
-describe('simulador', () => {
-  const vacio = { liquidoCents: 0, inversionesCents: 0, deudas: [] }
-
-  test('sin rendimiento y sin deuda, es una suma que se puede hacer de cabeza', () => {
-    const p = proyectar(
-      { ...vacio, liquidoCents: 50000 },
-      { meses: 12, ahorroMensualCents: 100000, rendimientoAnualBp: 0, estrategia: 'invertir' },
-    )
-    assert.equal(p.puntos.length, 13, 'hoy más doce meses')
-    assert.equal(p.puntos[0]!.patrimonioCents, 50000)
-    assert.equal(p.patrimonioFinalCents, 50000 + 12 * 100000)
-    assert.equal(p.aportadoCents, 12 * 100000)
-    assert.equal(p.rendimientoCents, 0)
-  })
-
-  test('doce meses a la tasa anual dan la tasa anual, no un poco más', () => {
-    // Con r/12 nominal, 7 % anual daría 7.23 % al año por capitalizar. Se usa
-    // la conversión efectiva justo para que el número escrito sea el número.
-    const p = proyectar(
-      { ...vacio, inversionesCents: 1_000_000 },
-      { meses: 12, ahorroMensualCents: 0, rendimientoAnualBp: 700, estrategia: 'invertir' },
-    )
-    const esperado = 1_070_000
-    assert.ok(
-      Math.abs(p.patrimonioFinalCents - esperado) <= 12,
-      `esperaba ~${esperado} y dio ${p.patrimonioFinalCents}`,
-    )
-    assert.ok(Math.abs(mensualEfectiva(700) - (Math.pow(1.07, 1 / 12) - 1)) < 1e-12)
-  })
-
-  test('la estrategia de deuda ataca primero la más cara', () => {
-    const inicio = {
-      liquidoCents: 0,
-      inversionesCents: 0,
-      deudas: [
-        { id: 1, nombre: 'Barata', saldoCents: 100000, annualRateBp: 500, pagoMensualCents: 0 },
-        { id: 2, nombre: 'Cara', saldoCents: 100000, annualRateBp: 4500, pagoMensualCents: 0 },
-      ],
-    }
-    const p = proyectar(inicio, {
-      meses: 1,
-      ahorroMensualCents: 50000,
-      rendimientoAnualBp: 0,
-      estrategia: 'deuda',
-    })
-    // Un mes de intereses sobre las dos, y el abono completo a la del 45 %.
-    const interesCara = Math.round((100000 * 4500) / 10_000 / 12)
-    const interesBarata = Math.round((100000 * 500) / 10_000 / 12)
-    assert.equal(p.interesPagadoCents, interesCara + interesBarata)
-    assert.equal(p.puntos[1]!.deudaCents, 200000 + interesCara + interesBarata - 50000)
-    assert.equal(p.puntos[1]!.inversionesCents, 0, 'nada se invirtió: todo fue a la deuda')
-  })
-
-  test('lo que sobra después de liquidar la deuda se invierte', () => {
-    const inicio = {
-      liquidoCents: 0,
-      inversionesCents: 0,
-      deudas: [{ id: 1, nombre: 'Chica', saldoCents: 30000, annualRateBp: 0, pagoMensualCents: 0 }],
-    }
-    const p = proyectar(inicio, {
-      meses: 2,
-      ahorroMensualCents: 50000,
-      rendimientoAnualBp: 0,
-      estrategia: 'deuda',
-    })
-    assert.equal(p.mesSinDeuda, 1)
-    assert.equal(p.puntos[1]!.inversionesCents, 20000, 'los 20 000 que sobraron del primer mes')
-    assert.equal(p.puntos[2]!.inversionesCents, 70000)
-  })
-
-  test('una deuda sin plazo se queda quieta: no se le inventa una cuota', () => {
-    const inicio = {
-      liquidoCents: 0,
-      inversionesCents: 0,
-      deudas: [{ id: 1, nombre: 'Sin plan', saldoCents: 100000, annualRateBp: 0, pagoMensualCents: 0 }],
-    }
-    const p = proyectar(inicio, {
-      meses: 6,
-      ahorroMensualCents: 0,
-      rendimientoAnualBp: 0,
-      estrategia: 'invertir',
-    })
-    assert.equal(p.puntos.at(-1)!.deudaCents, 100000)
-    assert.equal(p.mesSinDeuda, null)
-    assert.equal(p.interesPagadoCents, 0)
-  })
-
-  test('una deuda con cuota se acaba pagando y deja de devengar', () => {
-    const inicio = {
-      liquidoCents: 0,
-      inversionesCents: 0,
-      deudas: [{ id: 1, nombre: 'Con plan', saldoCents: 120000, annualRateBp: 1200, pagoMensualCents: 60000 }],
-    }
-    const p = proyectar(inicio, {
-      meses: 6,
-      ahorroMensualCents: 0,
-      rendimientoAnualBp: 0,
-      estrategia: 'invertir',
-    })
-    assert.ok(p.mesSinDeuda !== null && p.mesSinDeuda <= 3)
-    assert.equal(p.puntos.at(-1)!.deudaCents, 0)
-    // Pagar la deuda sube el patrimonio en exactamente lo que se abonó de
-    // capital, y el interés es lo único que se pierde por el camino.
-    assert.ok(p.interesPagadoCents > 0)
   })
 })

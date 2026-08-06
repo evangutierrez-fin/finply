@@ -22,6 +22,7 @@ export function DebtModal({ onClose, onSaved }: { onClose: () => void; onSaved: 
   const [accountId, setAccountId] = useState(0)
   const [enganche, setEnganche] = useState('')
   const [engancheAccountId, setEngancheAccountId] = useState(0)
+  const [comision, setComision] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
@@ -36,6 +37,8 @@ export function DebtModal({ onClose, onSaved }: { onClose: () => void; onSaved: 
   // vea antes de guardar.
   const centsPrevia = parseAmount(principal)
   const engancheCents = enganche.trim() === '' ? 0 : parseAmount(enganche)
+  // La comisión no se le presta a nadie: solo aparece cuando tú eres quien pide.
+  const comisionCents = direction === 'por_pagar' && comision.trim() !== '' ? parseAmount(comision) : 0
   const bpPrevia = parseTasa(tasa)
   const mesesPrevia = /^\d{1,3}$/.test(plazo.trim()) ? Number(plazo.trim()) : 0
   const previa =
@@ -68,6 +71,12 @@ export function DebtModal({ onClose, onSaved }: { onClose: () => void; onSaved: 
     if (engancheAccountId && downPaymentCents === 0) {
       return setError('Elegiste cuenta para el enganche pero no escribiste su monto')
     }
+    const originationFeeCents =
+      direction === 'por_pagar' && comision.trim() !== '' ? parseAmount(comision) : 0
+    if (originationFeeCents === null) return setError('La comisión no es un monto válido')
+    if (originationFeeCents >= cents) {
+      return setError('La comisión de apertura no puede llegar al monto del crédito')
+    }
     setSaving(true)
     setError(null)
     try {
@@ -84,6 +93,7 @@ export function DebtModal({ onClose, onSaved }: { onClose: () => void; onSaved: 
         accountId: accountId || null,
         downPaymentCents,
         downPaymentAccountId: engancheAccountId || null,
+        originationFeeCents,
       })
       stamp('Apuntada')
       onSaved()
@@ -196,6 +206,21 @@ export function DebtModal({ onClose, onSaved }: { onClose: () => void; onSaved: 
             />
           </label>
         </div>
+        {direction === 'por_pagar' && (
+          <label className="campo">
+            <span className="campo-label">Comisión de apertura (opcional)</span>
+            <div className="monto-wrap">
+              <span className="monto-signo" aria-hidden="true">$</span>
+              <input
+                className="campo-input"
+                inputMode="decimal"
+                placeholder="0.00"
+                value={comision}
+                onChange={(e) => setComision(e.target.value)}
+              />
+            </div>
+          </label>
+        )}
         <label className="campo">
           <span className="campo-label">
             {direction === 'por_cobrar' ? 'Sale de la cuenta' : 'Entra a la cuenta'}
@@ -215,9 +240,17 @@ export function DebtModal({ onClose, onSaved }: { onClose: () => void; onSaved: 
           {accountId ? (
             <>
               Se asienta {direction === 'por_cobrar' ? 'la salida' : 'la entrada'} de{' '}
-              <strong className="cifra-chica">{fmtMoney(centsPrevia ?? 0)}</strong> en esa cuenta,
-              con la fecha de inicio. Si ya registraste ese movimiento a mano, deja
-              «solo apuntar» para no duplicarlo.
+              <strong className="cifra-chica">
+                {fmtMoney((centsPrevia ?? 0) - (comisionCents ?? 0))}
+              </strong>{' '}
+              en esa cuenta, con la fecha de inicio.
+              {comisionCents ? (
+                <>
+                  {' '}Es el monto menos la comisión: eso es lo que de verdad te depositan, aunque
+                  debas {fmtMoney(centsPrevia ?? 0)}.
+                </>
+              ) : null}{' '}
+              Si ya registraste ese movimiento a mano, deja «solo apuntar» para no duplicarlo.
             </>
           ) : (
             <>

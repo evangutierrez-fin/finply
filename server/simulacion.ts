@@ -14,7 +14,7 @@
 import { db, investmentsWithTotals } from './db.ts'
 import { liquidoDe } from './analisis.ts'
 import { tablaAmortizacion } from '../shared/credito.ts'
-import { proyectar, type DeudaSim } from '../shared/simulador.ts'
+import { ahorroParaMeta, proyectar, type DeudaSim } from '../shared/simulador.ts'
 import type { Simulacion } from '../shared/types.ts'
 
 /**
@@ -64,6 +64,12 @@ export interface OpcionesSimulacion {
   meses: number
   ahorroMensualCents: number
   rendimientoAnualBp: number
+  inflacionAnualBp: number
+  /** Hasta qué mes se aporta. Ausente = todo el horizonte, que es lo de siempre. */
+  mesesAporte?: number
+  retiroMensualCents: number
+  /** A cuánto quiere llegar. Cero = no preguntó, y no se le responde de más. */
+  objetivoCents: number
 }
 
 /**
@@ -71,6 +77,11 @@ export interface OpcionesSimulacion {
  * mismo punto de partida y los mismos supuestos. Se devuelven las dos porque
  * la pregunta del usuario nunca es "cuánto tendré", es "cuál de las dos me
  * deja mejor", y esa respuesta depende de su tasa contra la de su deuda.
+ *
+ * La meta se resuelve **para las dos rutas** por la misma razón: cuánto hay que
+ * apartar para juntar $X depende de a dónde va lo que apartas, y la diferencia
+ * entre las dos cifras es exactamente la misma comparación de arriba, dicha por
+ * el otro lado.
  */
 export function simular(profileId: number, opciones: OpcionesSimulacion): Simulacion {
   const liquidoCents = liquidoDe(profileId)
@@ -85,7 +96,27 @@ export function simular(profileId: number, opciones: OpcionesSimulacion): Simula
     meses: opciones.meses,
     ahorroMensualCents: opciones.ahorroMensualCents,
     rendimientoAnualBp: opciones.rendimientoAnualBp,
+    inflacionAnualBp: opciones.inflacionAnualBp,
+    mesesAporte: Math.min(opciones.mesesAporte ?? opciones.meses, opciones.meses),
+    retiroMensualCents: opciones.retiroMensualCents,
   }
+
+  const meta =
+    opciones.objetivoCents > 0
+      ? {
+          objetivoCents: opciones.objetivoCents,
+          invertirCents: ahorroParaMeta(
+            inicio,
+            { ...supuestos, estrategia: 'invertir' },
+            opciones.objetivoCents,
+          ),
+          deudaCents: ahorroParaMeta(
+            inicio,
+            { ...supuestos, estrategia: 'deuda' },
+            opciones.objetivoCents,
+          ),
+        }
+      : null
 
   return {
     inicio: {
@@ -98,5 +129,6 @@ export function simular(profileId: number, opciones: OpcionesSimulacion): Simula
     supuestos,
     invertir: proyectar(inicio, { ...supuestos, estrategia: 'invertir' }),
     deuda: proyectar(inicio, { ...supuestos, estrategia: 'deuda' }),
+    meta,
   }
 }

@@ -412,6 +412,17 @@ input, select { font: inherit; color: inherit; }
   gap: 7px;
   min-width: 230px;
 }
+/* El supuesto de D6, a lo ancho del hero: `flex: 1 0 100%` lo baja a su propio
+   renglón sin sacarlo de la caja donde vive la cifra que explica. */
+.hero-supuesto {
+  flex: 1 0 100%;
+  font-size: 12.5px;
+  color: var(--tinta-2);
+  line-height: 1.6;
+  padding-top: 12px;
+  border-top: 1px solid var(--regla);
+  max-width: 76ch;
+}
 .hero-stats .stat {
   display: flex;
   justify-content: space-between;
@@ -585,12 +596,39 @@ input, select { font: inherit; color: inherit; }
   font-size: 13px;
 }
 .cat-nombre { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* El desglose por subcategoría (Fase 23). Cuelga del renglón del padre y se
+   alinea con sus mismas columnas: la sangría del nombre es lo único que dice
+   "esto está debajo de aquello", y el filete de la izquierda lo dibuja como
+   una llave de libro mayor. */
+.cat-row-grupo { display: flex; flex-direction: column; gap: 5px; }
+.cat-hijos {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0 0 0 12px;
+  padding-left: 12px;
+  border-left: 1px solid var(--regla);
+  list-style: none;
+}
+.cat-hijo {
+  display: grid;
+  grid-template-columns: 1fr auto 38px;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--tinta-2);
+}
+.cat-hijo-nombre { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cat-parte {
   font-family: var(--f-mono);
   font-size: 11px;
   color: var(--tinta-3);
   text-align: right;
 }
+/* El reparto de la cartera (Fase 24) usa las mismas barras, pero su parte va
+   con un decimal —"46.1 %" no cabe en los 38px del gasto por categoría— y su
+   nombre es corto: cabe de sobra en menos. */
+.reparto-bars .cat-row { grid-template-columns: 84px 1fr auto 52px; }
 .cat-riel {
   height: 8px;
   background: var(--papel);
@@ -706,7 +744,14 @@ input, select { font: inherit; color: inherit; }
   white-space: nowrap;
   width: 110px;
 }
-.col-acciones { width: 84px; text-align: right; }
+/* Tres acciones desde la Fase 10 —corregir, duplicar y anular—, así que la
+   columna creció: con 84px la ✕ se caía al renglón de abajo. */
+.col-acciones { width: 108px; text-align: right; }
+/* Varias ligas de texto en la misma celda se leían pegadas ("CerrarEditar").
+   El `gap` de un flex no aplica a texto en línea, así que la separación va en
+   el propio botón. Se vio en el navegador, no leyendo el JSX. */
+.col-acciones .btn-liga { padding: 0 5px; }
+.acciones { display: inline-flex; gap: 2px; white-space: nowrap; }
 .acciones { opacity: 0; transition: opacity 0.12s ease; }
 .libro-fila:hover .acciones,
 .libro-fila:focus-within .acciones { opacity: 1; }
@@ -1169,12 +1214,29 @@ select.campo-input { cursor: pointer; }
 .presup-frase { font-size: 14px; color: var(--tinta-2); margin-top: 6px; }
 .presup-rojo { color: var(--rojo); }
 
+/*
+  La caja va aparte del riel para que la marca del ritmo pueda sobresalir por
+  arriba y por abajo: dentro del riel, que recorta, se vería como un pixel
+  perdido en vez de como una referencia.
+*/
+.presup-riel-caja { position: relative; }
 .presup-riel {
   height: 9px;
   background: var(--papel);
   border: 1px solid var(--regla);
   border-radius: 5px;
   overflow: hidden;
+}
+/* Dónde irías si gastaras parejo. Nunca sola: la frase del ritmo la explica. */
+.presup-marca {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--tinta-2);
+  opacity: 0.75;
 }
 .presup-lleno {
   display: block;
@@ -1196,7 +1258,10 @@ select.campo-input { cursor: pointer; }
   align-items: center;
   margin-bottom: 10px;
 }
-.presup-fila-head h2 { font-size: 14.5px; font-weight: 600; }
+.presup-fila-head h2,
+.presup-fila-head h3 { font-size: 14.5px; font-weight: 600; }
+.presup-fila-head .chip { margin-left: auto; }
+.presup-fila-head .chip + .chip { margin-left: 8px; }
 .presup-cifras { font-size: 13px; color: var(--tinta-2); margin-top: 8px; }
 .presup-cifras strong { color: var(--tinta); }
 .presup-cifras .presup-rojo { color: var(--rojo); }
@@ -1214,6 +1279,51 @@ select.campo-input { cursor: pointer; }
 .presup-nuevo-forma .monto-wrap { flex: 0 0 170px; }
 .presup-nuevo .forma-error { margin-top: 12px; }
 .presup-pie { margin-top: 12px; font-size: 13px; color: var(--tinta-2); }
+
+/*
+  El arrastre lleva la cuenta escrita —tope + traído = techo— porque un techo
+  que cambió solo y no se explica es peor que no tener arrastre.
+*/
+.presup-arrastre {
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--tinta-2);
+  font-family: var(--f-mono);
+}
+.presup-arrastre strong { color: var(--tinta); font-weight: 600; }
+.presup-arrastre .presup-rojo { color: var(--rojo); }
+/* Un techo bajo cero se explica con palabras, no con la resta sola: va en la
+   fuente de la interfaz porque es una frase, no una cifra. */
+.presup-sin-techo { font-family: var(--f-ui); max-width: 62ch; line-height: 1.5; }
+/* El ritmo en palabras: lo mismo que dice la marca, para quien no la ve. */
+.presup-ritmo { font-size: 13px; color: var(--tinta-2); }
+.presup-lista > .rotulo { margin-top: 4px; }
+
+/* ── análisis: los ángulos de la Fase 13 ─────────────────────────────── */
+.analisis-frase { font-size: 15px; line-height: 1.55; margin-bottom: 4px; }
+.analisis-frase .cifra { color: var(--tinta); font-weight: 600; }
+
+.tendencia-grafica { margin: 14px 0 10px; color: var(--acento); }
+.tendencia-grafica svg { width: 100%; height: 96px; display: block; }
+.tendencia-pie { margin-top: 6px; font-size: 12.5px; color: var(--tinta-2); }
+
+/* El salto va pegado al nombre, no en su propia columna: es un matiz del
+   nombre, y una columna más volvería la tabla ilegible en móvil. */
+.disparada-salto {
+  margin-left: 8px;
+  font-family: var(--f-mono);
+  font-size: 12px;
+  color: var(--rojo);
+}
+
+.reportes-comparar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.reportes-medida { display: flex; gap: 24px; flex-wrap: wrap; margin: 4px 0 14px; }
+/* Los cuatro campos de mes tienen ancho propio del navegador y en una pantalla
+   angosta se salen de la hoja: el segundo quedaba fuera de alcance. Se dejan
+   encoger y envolver, que es lo único que un `input[type=month]` respeta. */
+.reportes-medida label { display: flex; flex-direction: column; gap: 6px; flex: 1 1 280px; min-width: 0; }
+.reportes-medida-par { display: flex; gap: 8px; flex-wrap: wrap; }
+.reportes-medida-par .filtro { flex: 1 1 130px; min-width: 0; }
 
 /* ── metas ───────────────────────────────────────────────────────────── */
 .metas-resumen { font-size: 14px; color: var(--tinta-2); }
@@ -1435,6 +1545,38 @@ select.campo-input { cursor: pointer; }
   white-space: nowrap;
 }
 .taxo-editor { flex: 1; }
+/* La jerarquía de un nivel (Fase 23). La sangría y el filete son todo lo que
+   hace falta para leer "esto cuelga de aquello": con un solo nivel no hay
+   árbol que dibujar. */
+.taxo-hija { padding-left: 22px; border-left: 1px solid var(--regla); }
+.taxo-hija .taxo-nombre::before {
+  content: '└ ';
+  color: var(--tinta-3);
+  font-family: var(--f-mono);
+}
+/* Archivada: se ve, se distingue y sigue siendo alcanzable (R17). */
+.taxo-archivada .taxo-nombre { color: var(--tinta-3); font-style: italic; }
+.taxo-archivadas-aviso { margin: 0 0 12px; }
+.taxo-orden {
+  font-family: var(--f-mono);
+  font-size: 11px;
+  color: var(--tinta-3);
+  min-width: 16px;
+}
+.taxo-patron {
+  font-family: var(--f-mono);
+  font-size: 13px;
+  padding: 2px 7px;
+  border: 1px solid var(--regla);
+  border-radius: var(--radio);
+  background: var(--papel);
+}
+.taxo-flecha { color: var(--tinta-3); }
+.taxo-nombre-plano { font-size: 14px; color: var(--tinta); }
+/* La categoría que propuso una regla al importar (Fase 23): se marca para que
+   no se confunda con la que venía en el archivo. */
+.previa-por-regla { border-bottom: 1px dotted var(--regla); }
+.previa-regla { font-size: 11px; color: var(--tinta-3); font-style: italic; }
 .taxo-pendiente {
   margin-bottom: 18px;
   border-color: var(--rojo-borde);
@@ -1744,6 +1886,75 @@ select.campo-input { cursor: pointer; }
   color: var(--tinta);
 }
 .amort-nota { font-size: 12px; color: var(--tinta-2); padding: 10px 12px; }
+.amort-nota strong { color: var(--tinta); }
+
+/* "Si abono de más": el campo y su respuesta, pegados a la tabla del plan. */
+.extra-caja {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px dashed var(--regla);
+  border-radius: var(--radio);
+}
+.extra-caja .campo { margin: 0; }
+.extra-caja .amort-nota { padding: 10px 0 0; }
+
+/* Bola de nieve contra avalancha. Las dos columnas pesan lo mismo a propósito:
+   la que gana se marca, pero ninguna se ve como "la recomendada" (R9). */
+.estrategia { margin-bottom: 24px; }
+.estrategia-intro,
+.estrategia-explica,
+.estrategia-veredicto {
+  font-size: 12.5px;
+  color: var(--tinta-2);
+  line-height: 1.7;
+}
+.estrategia-intro { margin: 8px 0 12px; }
+.estrategia-intro strong,
+.estrategia-veredicto strong { color: var(--tinta); }
+.estrategia-extra { max-width: 220px; margin-bottom: 16px; }
+.estrategia-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+.estrategia-col {
+  border: 1px solid var(--regla);
+  border-radius: var(--radio);
+  padding: 14px;
+}
+.estrategia-gana { border-color: var(--acento); }
+.estrategia-col .rotulo { display: flex; align-items: center; gap: 8px; }
+.estrategia-explica { margin: 6px 0 10px; min-height: 2.6em; }
+.estrategia-cifra { font-size: 14px; margin-bottom: 4px; }
+.estrategia-cifra strong { font-family: var(--f-mono); color: var(--tinta); }
+.estrategia-orden-titulo {
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--tinta-3);
+  margin: 14px 0 0;
+}
+.estrategia-orden {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  border-top: 1px solid var(--regla);
+}
+.estrategia-orden li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  font-size: 12.5px;
+  border-bottom: 1px solid var(--regla);
+}
+.estrategia-nombre { color: var(--tinta-2); }
+.estrategia-veredicto {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--regla);
+}
 
 @media (max-width: 960px) {
   .lomo {
@@ -1773,11 +1984,19 @@ select.campo-input { cursor: pointer; }
   .pagina { margin-left: 0; padding: 22px 18px 80px; }
   .app::before { display: none; }
   .dos-columnas, .dos-columnas-desigual, .deudas-cols { grid-template-columns: 1fr; }
+  .estrategia-cols { grid-template-columns: 1fr; }
+  .estrategia-explica { min-height: 0; }
   .hero { flex-direction: column; align-items: stretch; }
   .campos-2, .campos-3 { grid-template-columns: 1fr; }
   .tarjetas-grid { grid-template-columns: 1fr; }
   .tarjetas-resumen { gap: 24px; }
   .libro { display: block; overflow-x: auto; }
+  /* La rejilla no se vuelve scroll horizontal como las demás tablas: siete
+     columnas angostas siguen siendo un mes, y perder la forma del mes es
+     perder la rejilla. Lo que se encoge es la altura de la celda. */
+  .rejilla { display: table; overflow: visible; }
+  .rejilla-celda { height: auto; padding: 4px 3px; }
+  .rejilla-ev-titulo { font-size: 10px; }
   .acciones { opacity: 1; }
   /* En pantalla angosta cada propuesta se apila y los botones bajan enteros:
      "Asentar" no puede quedar a medias, es el que escribe en el libro. */
@@ -1878,6 +2097,82 @@ select.campo-input { cursor: pointer; }
 .cal-chip-deuda { color: var(--rojo-osc); border-color: var(--rojo-borde); }
 .cal-chip-recurrencia { color: var(--verde-osc); border-color: var(--verde); }
 .cal-chip-msi { color: var(--laton); border-color: var(--laton); }
+
+/* ── la rejilla mensual del calendario ───────────────────────────────────
+   Una tabla de verdad: las columnas son los días de la semana. Todo va a la
+   vista, sin `hover` ni clic para descubrir un dato (R19), y por eso las
+   celdas crecen con lo que llevan en vez de esconderlo detrás de un "+2". */
+.rejillas { display: flex; flex-direction: column; gap: 24px; }
+.rejilla { table-layout: fixed; width: 100%; }
+/* ⚠ `display: flex` en un `<caption>` lo saca de su caja y acaba dibujado
+   debajo del encabezado, no arriba de la tabla. El flex va en un envoltorio
+   adentro; el `<caption>` se queda como bloque. */
+.rejilla-caption {
+  caption-side: top;
+  text-align: left;
+  padding: 0 0 10px;
+}
+.rejilla-caption > span {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.rejilla-mes {
+  font-family: var(--f-display);
+  font-size: 17px;
+  text-transform: capitalize;
+  color: var(--tinta);
+}
+.rejilla-total { font-size: 12px; color: var(--tinta-2); font-family: var(--f-mono); }
+.rejilla th {
+  text-transform: capitalize;
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-align: left;
+}
+.rejilla-celda {
+  vertical-align: top;
+  height: 76px;
+  padding: 6px;
+  border: 1px solid var(--regla);
+}
+.rejilla-fuera { background: color-mix(in srgb, var(--papel) 60%, transparent); }
+.rejilla-fuera .rejilla-dia { color: var(--tinta-3); }
+/* El día de hoy se marca con filete y con la palabra: el color solo no basta. */
+.rejilla-hoy { border-color: var(--acento); }
+.rejilla-dia {
+  display: block;
+  font-family: var(--f-mono);
+  font-size: 11px;
+  color: var(--tinta-2);
+  margin-bottom: 4px;
+}
+.rejilla-hoy-marca { color: var(--acento); font-family: var(--f-ui); }
+.rejilla-ev {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  border-left: 2px solid currentColor;
+  background: none;
+  padding: 1px 0 1px 5px;
+  margin-bottom: 3px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--tinta-2);
+}
+.rejilla-ev-boton { cursor: pointer; }
+.rejilla-ev-boton:hover .rejilla-ev-titulo,
+.rejilla-ev-boton:focus-visible .rejilla-ev-titulo { text-decoration: underline; }
+.rejilla-ev-titulo {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--tinta);
+}
+.rejilla-ev-monto { font-family: var(--f-mono); font-size: 10.5px; color: var(--tinta-2); }
 
 /* ── cierre imprimible ───────────────────────────────────────────────── */
 /* ── alertas del Resumen ─────────────────────────────────────────────────
@@ -2069,7 +2364,15 @@ select.campo-input { cursor: pointer; }
 .ruta-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .ruta-mejor { border-color: var(--acento); }
 .ruta-cifra { display: flex; flex-direction: column; gap: 2px; }
+/* La lectura en pesos de hoy va pegada a la nominal, nunca en su lugar: dos
+   verdades del mismo patrimonio, y se ven las dos (Fase 18). */
+.ruta-real { font-size: 12.5px; color: var(--tinta-2); margin-top: 4px; }
 .chip-acento { color: var(--acento); border-color: var(--acento); }
+
+/* El mes en que la montaña cambia de dirección —dejas de aportar y empiezas a
+   retirar— se marca con una vertical: sin ella, la cima es un cambio de
+   pendiente que hay que adivinar. */
+.grafica-corte { stroke: var(--acento); stroke-width: 1; stroke-dasharray: 3 3; }
 
 /* ── perfil de negocio ───────────────────────────────────────────────── */
 .tabla {
@@ -2095,7 +2398,9 @@ select.campo-input { cursor: pointer; }
 }
 .tabla tr:last-child td { border-bottom: none; }
 .tabla .col-num, .tabla th.col-num { text-align: right; white-space: nowrap; }
-.tabla-sub { font-size: 12px; color: var(--tinta-2); margin-top: 2px; }
+/* El folio debajo del nombre, no pegado a él: en línea se leían como una sola
+   palabra ("Escuela PitágorasCOT-94"). Se vio en el navegador. */
+.tabla-sub { display: block; font-size: 12px; color: var(--tinta-2); margin-top: 2px; }
 /* Archivada o cancelada: se apaga, pero se sigue leyendo. Borrarla de la
    vista escondería justamente lo que el usuario fue a buscar. */
 .fila-archivada td { opacity: 0.55; }
@@ -2227,3 +2532,824 @@ select.campo-input { cursor: pointer; }
 }
 .vista-mes-nav { display: inline-flex; align-items: center; gap: 12px; }
 .stat-rojo { color: var(--rojo-osc); }
+
+/* ── Fase 10 · el libro que cuadra ──────────────────────────────────────────
+   Tres cosas nuevas en el modal y en el libro: el reparto de una partida, la
+   columna de palomeo y la ficha del recibo. Nada estrena color: el reparto usa
+   el mismo chip de las etiquetas y el corte, el rojo de siempre. */
+
+.campo-nota {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--tinta-2);
+}
+.campo-fieldset { border: 0; padding: 0; margin: 0; }
+
+/* Un renglón del reparto: categoría, monto, detalle y la ✕ para quitarlo. */
+.renglon {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) 120px minmax(0, 1.3fr) 28px;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+.renglon-pie {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+}
+/* Lo que falta por repartir. En rojo mientras no cuadre: el servidor exige que
+   los renglones sumen exactamente el movimiento, y enterarse al guardar sería
+   enterarse tarde. */
+.renglon-resta {
+  font-family: var(--f-mono);
+  font-size: 12px;
+  color: var(--rojo-osc);
+}
+.renglon-resta.cuadra { color: var(--acento); }
+
+/* El reparto, ya guardado, en el listado. */
+.mov-reparto {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.chip-renglon {
+  font-size: 10.5px;
+  padding: 1px 7px;
+  background: var(--tinte-verde);
+  border-color: var(--regla);
+  color: var(--tinta-2);
+}
+
+/* Recibos adjuntos. */
+.adjuntos { list-style: none; margin: 8px 0; padding: 0; }
+.adjunto {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--regla);
+  font-size: 13px;
+}
+.adjunto-peso {
+  margin-left: auto;
+  font-family: var(--f-mono);
+  font-size: 11px;
+  color: var(--tinta-3);
+}
+
+/* Conciliación. La columna de palomeo solo existe con el panel abierto: quien
+   no está conciliando no tiene por qué cargar con una casilla por renglón. */
+.col-palomear { width: 32px; text-align: center; }
+.libro-fila.conciliada .col-fecha { color: var(--acento); }
+
+.conciliar {
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  background: var(--hoja);
+  border: 1px solid var(--regla);
+  border-radius: 6px;
+}
+.conciliar-intro { margin: 0 0 12px; font-size: 13px; color: var(--tinta-2); }
+.conciliar-forma,
+.conciliar-elegir {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+.conciliar-tabla { width: 100%; margin-top: 14px; border-collapse: collapse; font-size: 13px; }
+.conciliar-tabla th,
+.conciliar-tabla td { padding: 6px 8px; border-bottom: 1px solid var(--regla); text-align: left; }
+.conciliar-tabla th { font-size: 11px; text-transform: uppercase; color: var(--tinta-3); }
+.conciliar-tabla .col-monto { text-align: right; font-family: var(--f-mono); }
+/* Un corte que no cuadra se marca con el filete rojo del margen, no con el
+   fondo entero: en oscuro un renglón relleno se lee como una alerta grave, y
+   esto no lo es — es una cuenta que todavía no terminas de palomear. */
+.conciliar-tabla tr.descuadra td:first-child { box-shadow: inset 3px 0 0 var(--rojo); }
+.conciliar-tabla tr.descuadra .col-monto:nth-child(5) { color: var(--rojo-osc); }
+.conciliar-ok { color: var(--acento); font-weight: 500; }
+
+@media (max-width: 720px) {
+  .renglon { grid-template-columns: minmax(0, 1fr) 100px 28px; }
+  .renglon input[aria-label^='Detalle'] { grid-column: 1 / -1; }
+}
+
+/* ── Fase 11 · patrimonio completo ──────────────────────────────────────────
+   Bienes, el respaldo de una meta y lo que la Fase 11 le agregó a una cuenta.
+   Nada estrena color: la hoja, el filete rojo y los chips de siempre. */
+
+.bienes { list-style: none; margin: 18px 0 0; padding: 0; display: grid; gap: 14px; }
+.bien {
+  padding: 14px 16px;
+  background: var(--hoja);
+  border: 1px solid var(--regla);
+  border-radius: 6px;
+}
+.bien-cabeza { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.bien-nombre { margin: 0; font-size: 16px; }
+.bien-meta {
+  margin: 2px 0 0;
+  font-family: var(--f-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--tinta-3);
+}
+.bien-cifras {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 24px;
+  margin: 12px 0 0;
+}
+.bien-cifras div { display: flex; flex-direction: column; gap: 2px; }
+.bien-cifras dt { font-size: 11px; text-transform: uppercase; color: var(--tinta-3); }
+.bien-cifras dd { margin: 0; font-family: var(--f-mono); font-size: 14px; }
+
+/* Un bien sin valuar cuenta por lo que costó. Decirlo es la diferencia entre
+   una cifra declarada y una supuesta (R9). */
+.bien-aviso {
+  margin: 10px 0 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--regla-fuerte);
+  font-size: 12px;
+  color: var(--tinta-2);
+}
+.bien-valuaciones { list-style: none; margin: 10px 0 0; padding: 0; font-size: 12.5px; }
+.bien-valuaciones li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--regla);
+}
+.bien-fecha {
+  font-family: var(--f-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--tinta-3);
+  width: 70px;
+}
+.bien-nota { color: var(--tinta-3); font-style: italic; }
+.bien-nota-libre { margin: 10px 0 0; font-size: 12.5px; color: var(--tinta-2); }
+
+/* H1: cuánto de la meta es dinero movido y cuánto es un apunte. */
+.meta-respaldo { margin: 6px 0 0; font-size: 12px; color: var(--tinta-2); }
+
+/* Aviso de la cuenta: bajó del mínimo, o lleva otra moneda que la del libro. */
+.cuenta-aviso {
+  margin: 8px 0 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--rojo);
+  font-size: 12px;
+  color: var(--tinta-2);
+}
+.cuenta-serie { margin-top: 10px; color: var(--acento); }
+.cuenta-serie svg { display: block; width: 100%; height: 24px; opacity: 0.7; }
+.cuenta-serie-pie {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--f-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--tinta-3);
+}
+
+/* El encabezado de cifras de Bienes. Cuatro columnas en pantalla ancha, dos en
+   angosta: son totales de lectura, no una tabla. */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  background: var(--hoja);
+  border: 1px solid var(--regla);
+  border-radius: 6px;
+}
+.stat-label {
+  font-family: var(--f-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--tinta-3);
+}
+.stat-valor { font-size: 17px; }
+
+@media (max-width: 720px) {
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* ── flujo proyectado ─────────────────────────────────────────────────────
+   La vista contesta una pregunta, así que el veredicto manda: cifra grande,
+   fecha con nombre y la cuenta debajo. El rojo aparece **solo** cuando de
+   verdad hay un día en rojo; si no, esta hoja se ve como cualquier otra. */
+/* Mismo reparto que el hero del Resumen: la respuesta a la izquierda, la
+   cuenta que la sostiene a la derecha. */
+.flujo-veredicto {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 30px;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+}
+.flujo-veredicto-texto {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 280px;
+}
+.flujo-veredicto.en-rojo {
+  border-left: 3px solid var(--rojo);
+  background: var(--rojo-tinte);
+}
+.flujo-titular {
+  font-family: var(--f-display);
+  font-size: clamp(24px, 3.2vw, 32px);
+  line-height: 1.15;
+  color: var(--rojo-osc);
+}
+.flujo-titular strong { font-weight: 650; }
+.flujo-sub { font-size: 13.5px; color: var(--tinta-2); max-width: 66ch; line-height: 1.55; }
+.flujo-stats { min-width: 240px; }
+.flujo-cuenta { font-size: 12.5px; color: var(--tinta-3); font-family: var(--f-mono); }
+
+.flujo-dias { display: flex; flex-direction: column; gap: 14px; margin-top: 6px; }
+.flujo-dia-cabeza {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--regla);
+}
+.flujo-dia-fecha { font-family: var(--f-mono); font-size: 13.5px; font-weight: 600; }
+.flujo-dia-cuando { font-size: 12px; color: var(--tinta-3); }
+/* El saldo del día al final del renglón: es la columna que hace auditable la
+   curva —cada día dice con cuánto se queda la caja, no solo qué se movió. */
+.flujo-dia-saldo { margin-left: auto; font-size: 12.5px; color: var(--tinta-2); }
+.flujo-eventos { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+.flujo-evento {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 10px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.flujo-evento:hover { background: var(--hoja-hover); }
+.flujo-evento-textos { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.flujo-evento-titulo { font-weight: 600; font-size: 14px; }
+.flujo-evento-detalle { font-size: 12.5px; color: var(--tinta-2); }
+.flujo-evento-monto { font-size: 14px; white-space: nowrap; }
+.cal-chip-movimiento { color: var(--tinta-2); border-color: var(--regla-fuerte); }
+.cal-chip-factura { color: var(--acento); border-color: var(--acento); }
+
+/* Lo que el módulo apagado se lleva: se dice, no se calla (R17). */
+.flujo-falta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 13.5px;
+  color: var(--tinta-2);
+  margin-top: 18px;
+}
+.flujo-falta strong { color: var(--tinta); }
+
+/* El tramo bajo cero y la marca del día del cruce. El color no va solo: el
+   veredicto de arriba dice la misma fecha con palabras (R19). */
+.serie-rojo { stroke: var(--rojo); }
+.grafica-marca-rojo {
+  stroke: var(--rojo);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+
+/* La cifra del Resumen: la caja proyectada no es el total de arriba —la
+   tarjeta no es dinero tuyo—, y por eso lleva su propio rótulo. */
+.fin-de-mes {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+}
+.fin-de-mes.en-rojo { border-left: 3px solid var(--rojo); background: var(--rojo-tinte); }
+.fin-de-mes-cifra { display: flex; flex-direction: column; gap: 2px; }
+.fin-de-mes-nota {
+  flex: 1;
+  min-width: 260px;
+  font-size: 13px;
+  color: var(--tinta-2);
+  line-height: 1.55;
+  max-width: 62ch;
+}
+
+.negocio-liga {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.negocio-liga .hoja-titulo { margin-bottom: 4px; }
+.negocio-liga .reportes-nota { margin-top: 0; max-width: 60ch; }
+
+@media (max-width: 720px) {
+  .flujo-evento { grid-template-columns: auto 1fr; }
+  .flujo-evento-monto { grid-column: 2; text-align: left; }
+  .flujo-dia-saldo { margin-left: 0; width: 100%; }
+}
+
+/* ── Resumen más denso ────────────────────────────────────────────────────
+   Tres cosas que la vista más visitada no decía: contra qué se compara el
+   total, cómo viene cada cuenta y de qué está hecho el patrimonio. */
+.hero-delta {
+  font-size: 12.5px;
+  color: var(--tinta-2);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  margin-top: 8px;
+}
+/* El signo no va solo en el color: la flecha y el signo de la cifra dicen lo
+   mismo con forma, para quien no distingue verde de rojo (R10). */
+.delta-sube { color: var(--verde-osc); }
+.delta-baja { color: var(--rojo-osc); }
+.hero-delta .cifra { color: inherit; }
+
+.cuenta-mini-cambio {
+  font-size: 11.5px;
+  color: var(--tinta-3);
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.cuenta-mini-cambio .cifra { color: inherit; }
+.spark { width: 100%; height: 22px; margin-top: 2px; overflow: visible; }
+.spark-linea {
+  fill: none;
+  stroke: var(--acento);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.spark-baja { stroke: var(--rojo); }
+.spark-punta { fill: var(--acento); }
+.spark-baja + .spark-punta { fill: var(--rojo); }
+
+/* La composición: dos barras a la misma escala, lo que tienes y lo que debes.
+   Los segmentos se separan por claridad —la misma tinta, distinta densidad—,
+   que es la codificación que sobrevive a cualquier daltonismo (R10). */
+.composicion { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+.composicion-fila { display: flex; align-items: center; gap: 10px; }
+.composicion-rotulo {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--tinta-3);
+  width: 46px;
+  flex-shrink: 0;
+}
+.composicion-riel {
+  flex: 1;
+  display: flex;
+  height: 14px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--tinte-neutro);
+}
+.composicion-parte { display: block; height: 100%; }
+.composicion-parte + .composicion-parte { border-left: 1px solid var(--hoja); }
+.parte-0 { background: var(--acento); }
+.parte-1 { background: var(--acento); opacity: 0.7; }
+.parte-2 { background: var(--acento); opacity: 0.46; }
+.parte-3 { background: var(--acento); opacity: 0.26; }
+/* Lo que debes va rayado además de rojo: la textura es la codificación
+   secundaria que el color por sí solo no da. */
+.parte-debes {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--rojo) 0 3px,
+    var(--rojo-tinte) 3px 6px
+  );
+}
+
+/* La muestra que ata cada renglón de la lista con su tramo de la barra. */
+.muestra-parte {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  margin-right: 7px;
+  vertical-align: baseline;
+  background: var(--acento);
+}
+.muestra-parte.parte-1 { opacity: 0.7; }
+.muestra-parte.parte-2 { opacity: 0.46; }
+.muestra-parte.parte-3 { opacity: 0.26; }
+.muestra-parte.parte-debes { background: var(--rojo); }
+.deudas-mini-lista dt { display: flex; align-items: center; }
+
+/* ── Fase 14 · Negocio II ────────────────────────────────────────────────
+   Retenciones, notas de crédito, anticipos, cobranza y lo que cuesta pagar
+   solo el mínimo de la tarjeta. Nada de esto pinta con color a secas: lo
+   vencido lleva además su cifra escrita al lado, y el aviso de límite dice con
+   todas sus letras que es un aviso. */
+
+.cobranza-vencida td:first-child > strong { color: var(--rojo-osc); }
+.cobranza-vencida { background: var(--rojo-tinte); }
+
+.contraparte-sobre-limite { color: var(--rojo-osc); }
+
+/* La lista de anticipos: el monto y el botón de aplicar, juntos a la derecha. */
+.anticipos li { align-items: flex-start; padding: 8px 0; }
+.anticipo-accion {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  white-space: nowrap;
+}
+
+/* El cambio contra el periodo anterior va bajo su cifra, no a un lado: en el
+   estado de resultados la columna de la derecha ya es la cifra. */
+.negocio-delta {
+  display: block;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--tinta-2);
+  margin-top: 2px;
+}
+.negocio-delta.stat-in { color: var(--verde); }
+.negocio-delta-label { color: var(--tinta-2); }
+
+.tarjeta-minimo {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--regla);
+}
+.tarjeta-nunca { color: var(--rojo-osc); }
+
+/* Cuatro acciones por factura no caben en la columna angosta de siempre, y
+   pegadas se leen como una sola palabra ("CobrarAnticipo"). Aquí envuelven con
+   su separación, alineadas a la derecha como el resto de la columna. */
+.facturas-acciones {
+  width: 150px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px 12px;
+}
+
+/* ── Módulos de giro (Fase 15) ─────────────────────────────────────────────
+   Los tres son opt-in y ninguno inventa un componente nuevo: reusan .hoja,
+   .tabla y .hero-stats. Lo que sí hace falta es que sus acciones se vean sin
+   pasar el ratón —viven en tablas normales, no en .libro-fila, donde la regla
+   de .acciones las deja invisibles. */
+.giro-acciones { display: inline-flex; gap: 2px; white-space: nowrap; }
+/* Cuando lo de dentro son ligas de texto y no botones de un carácter, hay que
+   separarlas: sin esto, "Facturar Editar Perdida Borrar" se leía como una
+   sola tira y no se distinguía dónde acababa cada una. */
+.giro-acciones .btn-liga { padding: 0 6px; }
+
+/* ── Fase 19 · cotizaciones ──────────────────────────────────────────── */
+/* La que se pasó de vigencia sin respuesta. Se apaga como una archivada pero
+   marcada en rojo por el canto: sigue viva y sigue esperando, y esa es la
+   diferencia con una que ya se contestó. */
+.fila-vencida td:first-child { box-shadow: inset 2px 0 0 var(--rojo); }
+/* El renglón chico bajo una cifra de la tira: dice de qué está hecha. */
+.stat-pie { font-size: 11.5px; color: var(--tinta-3); }
+
+/* El tablero de una contraparte, desplegado dentro de su propio renglón. */
+.fila-tablero td { background: var(--papel); padding: 4px 14px 18px; }
+.tablero { display: flex; flex-direction: column; gap: 14px; }
+.tablero .stats { margin-top: 0; }
+
+/* La tira de cifras de Bienes, pero con un número variable de columnas: estas
+   secciones tienen tres o cuatro según lo que haya que decir, y una rejilla
+   fija de cuatro dejaría un hueco cuando son tres. */
+.stats-auto { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+
+/* Inmuebles: una carta por contrato, en dos columnas cuando caben. */
+.rentas-lista {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 16px;
+}
+.renta-carta { animation: aparecer 0.35s ease-out backwards; }
+.renta-sub {
+  font-size: 13px;
+  color: var(--tinta-2);
+  margin: -4px 0 16px;
+}
+.renta-acciones { display: inline-flex; gap: 14px; }
+/* Las cifras de la carta van en línea, no en cajas: la caja ya es la carta. */
+.renta-cifras {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 28px;
+  margin: 14px 0 0;
+}
+.renta-cifras div { display: flex; flex-direction: column; gap: 2px; }
+.renta-cifras dt { font-size: 11px; text-transform: uppercase; color: var(--tinta-3); }
+.renta-cifras dd { margin: 0; font-family: var(--f-mono); font-size: 14px; }
+.renta-pie {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--regla);
+}
+/* Sin chips no hay pie que dibujar: la regla sola se lee como un renglón vacío. */
+.renta-pie:empty { display: none; }
+
+/* Inventario: el historial cuelga de su producto, así que se sangra y se
+   apaga un poco para no competir con la tabla del almacén. */
+.alm-historial {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--regla-fuerte);
+}
+.alm-historial th, .alm-historial td { font-size: 13px; }
+.tabla tfoot td {
+  padding-top: 12px;
+  border-top: 1px solid var(--regla-fuerte);
+  border-bottom: none;
+  font-family: var(--f-mono);
+  font-size: 12.5px;
+  color: var(--tinta-2);
+}
+
+@media (max-width: 720px) {
+  .rentas-lista { grid-template-columns: 1fr; }
+  .giro-acciones { opacity: 1; }
+}
+
+/* ── Fase 20 · registrar rápido y secciones que se hablan ──────────────── */
+
+/* La barra de registro rápido. Todo en una línea porque esa es la promesa:
+   lo que cambia entre un ticket y el siguiente es el monto y el concepto, y
+   lo demás viene propuesto de la última vez. En pantalla chica se apila, que
+   es lo único que puede hacer sin dejar campos fuera de la vista — y dejar un
+   campo fuera de la vista en un formulario que guarda dinero no es opción. */
+.barra-rapida {
+  background: var(--hoja);
+  border: 1px solid var(--regla);
+  border-radius: var(--radio);
+  padding: 10px 12px;
+  margin-bottom: 16px;
+}
+.barra-rapida-forma {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.barra-rapida-forma .campo-input { padding: 7px 10px; font-size: 13.5px; }
+.barra-rapida-tipo { flex-shrink: 0; }
+.barra-rapida-monto { width: 130px; flex-shrink: 0; }
+.barra-rapida-monto .monto { font-size: 15px; }
+.barra-rapida-concepto { flex: 1 1 180px; min-width: 130px; }
+.barra-rapida-select { flex: 0 1 145px; min-width: 105px; }
+/* `.campo-input` es `width: 100%`, así que sin base propia la fecha se comía
+   el renglón entero y empujaba el botón a una tercera línea. Se vio en el
+   navegador; el ancho es el que pide 'DD/MM/AAAA' con su calendario. */
+.barra-rapida-fecha { flex: 0 0 132px; }
+/* Siete controles no siempre caben en un renglón, y estrecharlos hasta que
+   quepan sería cortar la fecha. Cuando el renglón se parte, el botón se va al
+   extremo: así el corte se lee como una decisión y no como un descuido. */
+.barra-rapida-forma > .btn { margin-left: auto; }
+.barra-rapida-pie {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.barra-rapida-nota { font-size: 12px; color: var(--tinta-3); }
+.barra-rapida kbd { margin: 0 1px; }
+
+/* La acción al lado de una alerta. El aviso decía cuánto y para cuándo, y
+   hacerle caso costaba tres clics y volver a teclear la cifra que estaba
+   arriba. El cuerpo sigue llevando a su sección; el botón abre el formulario
+   ya lleno. Son dos botones hermanos y no uno dentro de otro, que además de
+   inválido dejaría al lector de pantalla sin saber qué hace cada uno. */
+.alerta { display: flex; align-items: stretch; gap: 8px; }
+.alerta-accion { flex-shrink: 0; align-self: center; }
+
+/* Lo mismo en el calendario, donde el renglón ya no es solo un recordatorio. */
+.cal-evento-accion { flex-shrink: 0; }
+
+/* La nota atada a una partida, en el renglón del libro. */
+.chip-nota {
+  font-size: 10.5px;
+  padding: 1px 7px;
+  margin-left: 8px;
+  background: var(--tinte-neutro);
+  border-color: var(--regla);
+  color: var(--tinta-2);
+  cursor: pointer;
+}
+.chip-nota:hover { border-color: var(--acento); color: var(--acento); }
+
+/* De qué habla una nota, en la libreta. */
+.nota-ata {
+  display: block;
+  padding: 0 14px 8px;
+  font-size: 11.5px;
+  color: var(--tinta-3);
+  text-align: left;
+}
+button.nota-ata:hover { color: var(--acento); }
+
+/* Las notas del mes, en el Resumen. */
+.notas-mes-lista { display: flex; flex-direction: column; gap: 8px; }
+.nota-liga {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  text-align: left;
+  background: var(--tinte-neutro);
+  border: 1px solid var(--regla);
+  border-radius: var(--radio);
+  cursor: pointer;
+}
+.nota-liga:hover { border-color: var(--acento); }
+.nota-liga-titulo { font-weight: 620; font-size: 13px; }
+.nota-liga-texto {
+  font-size: 12.5px;
+  color: var(--tinta-2);
+  white-space: pre-wrap;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+/* La lista de atajos. */
+.atajos { display: flex; flex-direction: column; gap: 18px; }
+.atajos-titulo {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--tinta-3);
+  margin-bottom: 8px;
+}
+.atajos-lista { display: flex; flex-direction: column; gap: 6px; }
+.atajos-lista > div {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.atajos-lista dt { flex: 0 0 84px; display: flex; gap: 4px; }
+.atajos-lista dd { font-size: 13.5px; color: var(--tinta-2); }
+kbd {
+  display: inline-block;
+  min-width: 20px;
+  padding: 2px 6px;
+  font-family: var(--f-mono);
+  font-size: 11.5px;
+  text-align: center;
+  background: var(--tinte-neutro);
+  border: 1px solid var(--regla-fuerte);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  color: var(--tinta);
+}
+
+@media (max-width: 720px) {
+  .barra-rapida-monto, .barra-rapida-concepto, .barra-rapida-select { flex: 1 1 100%; }
+  .alerta { flex-direction: column; }
+  .alerta-accion { align-self: flex-start; }
+}
+
+/* ── Fase 21 · personalización ─────────────────────────────────────────── */
+
+/* Ajustes partido en dos: lo del libro y lo de la máquina. La intro de cada
+   pestaña dice cuál es cuál, que era justo lo que faltaba cuando el respaldo
+   —que reemplaza TODOS los perfiles— vivía junto a los módulos de uno solo. */
+.ajustes-intro { max-width: 680px; margin-bottom: 18px; }
+.ajustes-sub {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--regla);
+}
+.ajustes-sub-titulo {
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--tinta-3);
+  margin-bottom: 10px;
+}
+
+/* Campos propios y plantillas: la misma lista con acciones a la derecha. */
+.campos-lista {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 14px;
+}
+.campo-fila {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--regla);
+}
+.campo-fila:last-child { border-bottom: none; }
+.campo-fila.archivado { opacity: 0.55; }
+.campo-fila-datos { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.campo-fila-sub { font-size: 12px; color: var(--tinta-2); }
+.campo-fila-acciones { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.campo-fila-acciones .btn-liga { padding: 0 5px; }
+.campos-forma {
+  margin-top: 12px;
+  padding-top: 14px;
+  border-top: 1px solid var(--regla);
+}
+
+/* El orden del lomo, con sus flechas. Se numera porque el orden **es** el
+   dato: una lista sin número no dice en qué lugar quedó lo que subiste. El
+   número va en su propio `<span>` y no como marcador de lista: un `li` que es
+   flex no dibuja su marcador, y la lista salía sin numerar. Se vio en el
+   navegador, como siempre. */
+.orden-lomo {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-bottom: 12px;
+  max-width: 380px;
+}
+.orden-lomo li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 8px;
+  font-size: 13.5px;
+  background: var(--tinte-neutro);
+  border-radius: var(--radio);
+}
+.orden-nombre { flex: 1; }
+.orden-num {
+  flex: 0 0 18px;
+  font-family: var(--f-mono);
+  font-size: 11px;
+  color: var(--tinta-3);
+  text-align: right;
+}
+
+/* Las plantillas, como chips debajo de la barra rápida. */
+.barra-rapida-plantillas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+.chip-plantilla {
+  font-size: 11.5px;
+  padding: 2px 9px;
+  background: var(--tinte-verde);
+  border-color: var(--regla);
+  color: var(--tinta-2);
+  cursor: pointer;
+}
+.chip-plantilla:hover { border-color: var(--acento); color: var(--acento); }
+
+/* Una casilla suelta dentro de un campo con etiqueta propia. */
+.campo-casilla-suelta { display: inline-flex; align-items: center; gap: 7px; padding-top: 6px; }
+
+/* Los radios del formato van en columna: cada uno lleva su ejemplo al lado y
+   en fila se leerían como una sola frase larga. */
+.radios-columna { flex-direction: column; align-items: flex-start; gap: 8px; }
+
+@media (max-width: 720px) {
+  .campo-fila { flex-direction: column; align-items: flex-start; }
+}

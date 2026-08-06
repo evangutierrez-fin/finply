@@ -48,6 +48,18 @@ export interface ReglaRecurrencia {
   startDate: string
   /** Sin fin mientras sea `null`. */
   endDate: string | null
+  /**
+   * Ventana de pausa, inclusiva por los dos lados. Lo que cae dentro **no
+   * propone nunca**: no es un atraso que se acumule, es un hueco que el
+   * usuario declaró. Las dos van juntas o ninguna.
+   */
+  pausadaDesde?: string | null
+  pausadaHasta?: string | null
+  /**
+   * Termina tras tantas ocurrencias. Cuenta las que de verdad caen, así que
+   * una pausa en medio corre el final en vez de comerse dos.
+   */
+  maxOcurrencias?: number | null
 }
 
 export interface Ocurrencia {
@@ -80,6 +92,11 @@ export function normalizarRegla(regla: ReglaRecurrencia): ReglaRecurrencia {
     weekday: regla.frequency === 'semanal' ? (regla.weekday ?? diaSemanaISO(regla.startDate)) : null,
     startDate: regla.startDate,
     endDate: regla.endDate,
+    // Una pausa a medias no es una pausa: hacen falta las dos fechas para
+    // saber qué hueco se está declarando.
+    pausadaDesde: regla.pausadaDesde && regla.pausadaHasta ? regla.pausadaDesde : null,
+    pausadaHasta: regla.pausadaDesde && regla.pausadaHasta ? regla.pausadaHasta : null,
+    maxOcurrencias: regla.maxOcurrencias && regla.maxOcurrencias > 0 ? regla.maxOcurrencias : null,
   }
 }
 
@@ -91,6 +108,9 @@ export interface Ventana {
   max?: number
 }
 
+/** Techo del calendario. Sirve para buscar la enésima ocurrencia sin ventana. */
+const FIN_DE_LOS_TIEMPOS = '9999-12-31'
+
 /**
  * Las ocurrencias de una plantilla dentro de una ventana, en orden de fecha.
  *
@@ -98,8 +118,45 @@ export interface Ventana {
  * de cada mes es el día 15 de cada mes, se haya empezado en enero o en marzo.
  * Por eso se puede arrancar la generación desde cualquier fecha sin recorrer
  * el histórico completo, que es lo que hace barato el calendario.
+ *
+ * La pausa y el tope de ocurrencias se resuelven **antes** de generar, no
+ * filtrando después: el tope se traduce a una fecha de fin (`finEfectivo`) y la
+ * pausa se salta dentro del recorrido. Filtrar después habría roto la única
+ * propiedad que hace barato esto — poder empezar desde cualquier fecha —,
+ * porque para saber si una ocurrencia es la número doce hay que haber contado
+ * las once anteriores.
  */
 export function ocurrencias(
+  regla: ReglaRecurrencia,
+  ventana: Ventana,
+): { lista: Ocurrencia[]; truncado: boolean } {
+  const fin = finEfectivo(regla)
+  return generar(
+    fin === null ? regla : { ...regla, endDate: fin },
+    ventana,
+  )
+}
+
+/**
+ * Hasta cuándo propone de verdad esta plantilla: su fecha de fin, o el día de
+ * su enésima ocurrencia si tiene tope, lo que llegue primero.
+ *
+ * Se calcula generando desde el principio con `max` en el tope, que corta el
+ * recorrido en cuanto lo alcanza — no recorre hasta el año 9999. `null` es
+ * "no termina".
+ */
+export function finEfectivo(regla: ReglaRecurrencia): string | null {
+  const r = normalizarRegla(regla)
+  if (!r.maxOcurrencias) return r.endDate
+  const { lista } = generar(r, { hasta: FIN_DE_LOS_TIEMPOS, max: r.maxOcurrencias })
+  const ultima = lista[lista.length - 1]
+  // Menos ocurrencias que el tope significa que algo más ya la terminaba: su
+  // propia fecha de fin manda y el tope nunca se alcanza.
+  if (!ultima || lista.length < r.maxOcurrencias) return r.endDate
+  return r.endDate && r.endDate < ultima.fecha ? r.endDate : ultima.fecha
+}
+
+function generar(
   regla: ReglaRecurrencia,
   ventana: Ventana,
 ): { lista: Ocurrencia[]; truncado: boolean } {
@@ -115,9 +172,14 @@ export function ocurrencias(
   /**
    * Devuelve false cuando ya no cabe nada más. El tope se revisa **antes** de
    * agregar: así una lista de exactamente `max` no se reporta como recortada.
+   *
+   * Lo que cae dentro de la pausa se salta sin contar: no ocupa lugar en el
+   * tope ni marca la lista como recortada, porque no es una ocurrencia que se
+   * quedó fuera — es una que el usuario dijo que no existe.
    */
   const agregar = (periodo: string, fecha: string): boolean => {
     if (fecha < desde || fecha > hasta) return true
+    if (r.pausadaDesde && fecha >= r.pausadaDesde && fecha <= r.pausadaHasta!) return true
     if (lista.length >= max) {
       truncado = true
       return false

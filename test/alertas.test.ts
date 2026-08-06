@@ -37,7 +37,7 @@ describe('presupuesto excedido', () => {
     await c.post('/api/budgets', {
       profileId: perfil.id,
       categoryId: gasto.id,
-      month: '2026-07',
+      period: '2026-07',
       amountCents: 100000,
     })
 
@@ -298,7 +298,7 @@ describe('las alertas no son un estado', () => {
     await c.post('/api/budgets', {
       profileId: perfil.id,
       categoryId: categorias.find((k: any) => k.kind === 'gasto').id,
-      month: '2026-07',
+      period: '2026-07',
       amountCents: 100,
     })
     await c.post('/api/transactions', {
@@ -368,7 +368,7 @@ describe('R11: el costo no crece con el libro', () => {
     await c.post('/api/budgets', {
       profileId: perfil.id,
       categoryId: gasto.id,
-      month: '2026-07',
+      period: '2026-07',
       amountCents: 1000,
     })
     for (let i = 0; i < n; i++) {
@@ -455,9 +455,11 @@ describe('R11: el costo no crece con el libro', () => {
       )
       assert.equal(nGrande, nChico, 'el costo es el mismo: ninguna consulta es por fila')
       // El modo de fallar que R11 nombra por su nombre: "diez consultas por
-      // carga del Resumen". Hoy son nueve: ocho agregadas más la de los
-      // módulos del perfil, que resuelve tipo y overrides en un solo LEFT JOIN
-      // justamente para no costar dos.
+      // carga del Resumen". Hoy son diez: ocho agregadas, la de los módulos del
+      // perfil —que resuelve tipo y overrides en un solo LEFT JOIN justamente
+      // para no costar dos— y la del tope total del mes, que no puede ir en la
+      // misma consulta que los topes por categoría porque vive en otra tabla.
+      // El arrastre no aparece aquí: sin una categoría que ruede no se consulta.
       assert.ok(nGrande < 12, `son ${nGrande} consultas, no una por cosa`)
     } finally {
       ;(db as any).prepare = original

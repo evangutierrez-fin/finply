@@ -2,6 +2,7 @@
 //   npm run seed   → dos perfiles demo con tres meses de movimientos
 //   npm run reset  → borra todo y deja un perfil vacío para empezar de cero
 import { db, inTransaction, seedCategories } from './db.ts'
+import { porOmision } from '../shared/modulos.ts'
 
 const empty = process.argv.includes('--empty')
 
@@ -26,13 +27,46 @@ function wipe(): void {
     DELETE FROM investment_entries;
     DELETE FROM investments;
     DELETE FROM budgets;
+    DELETE FROM budget_totals;
     DELETE FROM goal_entries;
     DELETE FROM goals;
+    DELETE FROM tx_templates;
+    DELETE FROM profile_fields;
     DELETE FROM notes;
+    DELETE FROM quotes;
+    DELETE FROM invoice_credit_notes;
+    DELETE FROM invoice_recurrence_runs;
+    DELETE FROM invoice_recurrences;
+    DELETE FROM invoices;
+    DELETE FROM counterparties;
+    DELETE FROM cost_centers;
+    DELETE FROM stock_moves;
+    DELETE FROM products;
+    DELETE FROM time_entries;
+    DELETE FROM rentals;
+    DELETE FROM asset_valuations;
+    DELETE FROM assets;
+    DELETE FROM import_rules;
     DELETE FROM categories;
     DELETE FROM accounts;
     DELETE FROM profiles;
   `)
+}
+
+/**
+ * Enciende módulos que **no vienen por omisión**. Los tres de giro nacen
+ * apagados para todo el mundo (Fase 15), así que el demo tiene que pedirlos
+ * explícitamente o sus secciones no aparecen en el lomo.
+ *
+ * Ojo con R17: una fila explícita manda sobre el juego del tipo, así que hay
+ * que escribir **todas** las del perfil, no solo las nuevas — si no, encender
+ * Inmuebles apagaría todo lo demás.
+ */
+function encenderModulos(profileId: number, modulos: string[]): void {
+  const stmt = db.prepare(
+    'INSERT OR REPLACE INTO profile_modules (profile_id, module, enabled) VALUES (?, ?, 1)',
+  )
+  for (const m of modulos) stmt.run(profileId, m)
 }
 
 function createProfile(name: string, kind: 'personal' | 'negocio', accent: string): number {
@@ -49,10 +83,35 @@ function createAccount(
   name: string,
   type: string,
   openingPesos: number,
+  tarjeta?: {
+    limitePesos: number
+    corte: number
+    pago: number
+    /** Tasa anual y pago mínimo en puntos base, como los escribiría el usuario. */
+    tasaBp: number
+    minimoBp: number
+    pisoPesos: number
+  },
 ): number {
   const result = db
-    .prepare('INSERT INTO accounts (profile_id, name, type, opening_cents) VALUES (?, ?, ?, ?)')
-    .run(profileId, name, type, Math.round(openingPesos * 100))
+    .prepare(
+      `INSERT INTO accounts
+        (profile_id, name, type, opening_cents, credit_limit_cents, cut_day, due_day,
+         annual_rate_bp, min_payment_bp, min_payment_floor_cents)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      profileId,
+      name,
+      type,
+      Math.round(openingPesos * 100),
+      tarjeta ? Math.round(tarjeta.limitePesos * 100) : null,
+      tarjeta?.corte ?? null,
+      tarjeta?.pago ?? null,
+      tarjeta?.tasaBp ?? null,
+      tarjeta?.minimoBp ?? null,
+      tarjeta ? Math.round(tarjeta.pisoPesos * 100) : null,
+    )
   return Number(result.lastInsertRowid)
 }
 
@@ -63,6 +122,29 @@ function categoryId(profileId: number, name: string, kind: 'ingreso' | 'gasto'):
   return row.id
 }
 
+/**
+ * Una subcategoría del demo (Fase 23). Existe para que el libro enseñe la
+ * jerarquía sin que nadie tenga que crearla a mano: con dos hijas colgando de
+ * "Comida", el reporte deja de tener cinco renglones sueltos y el desglose
+ * tiene algo que desglosar.
+ */
+function subcategoria(profileId: number, name: string, padreId: number): number {
+  const r = db
+    .prepare(
+      "INSERT INTO categories (profile_id, name, kind, parent_id) VALUES (?, ?, 'gasto', ?)",
+    )
+    .run(profileId, name, padreId)
+  return Number(r.lastInsertRowid)
+}
+
+/** Una regla que propone categoría al importar. Propone: no asienta nada. */
+function reglaImport(profileId: number, pattern: string, catId: number, position: number): void {
+  db.prepare(
+    'INSERT INTO import_rules (profile_id, pattern, category_id, position) VALUES (?, ?, ?, ?)',
+  ).run(profileId, pattern, catId, position)
+}
+
+/** Asienta la partida y devuelve su id, para poder ligarla a una plantilla. */
 function tx(
   profileId: number,
   accountId: number,
@@ -72,11 +154,14 @@ function tx(
   catId: number | null,
   note: string,
   transferAccountId: number | null = null,
-): void {
-  db.prepare(
-    `INSERT INTO transactions (profile_id, account_id, type, amount_cents, date, category_id, note, transfer_account_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(profileId, accountId, type, cents, date, catId, note, transferAccountId)
+): number {
+  const r = db
+    .prepare(
+      `INSERT INTO transactions (profile_id, account_id, type, amount_cents, date, category_id, note, transfer_account_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(profileId, accountId, type, cents, date, catId, note, transferAccountId)
+  return Number(r.lastInsertRowid)
 }
 
 function day(month: string, d: number): string {
@@ -97,6 +182,16 @@ inTransaction(() => {
   const efectivo = createAccount(personal, 'Efectivo', 'efectivo', 1800)
   const banco = createAccount(personal, 'BBVA Nómina', 'banco', 24500)
   const ahorro = createAccount(personal, 'Ahorro', 'ahorro', 52000)
+  // La tarjeta trae su contrato completo desde la Fase 14: sin tasa ni mínimo,
+  // Finply solo podía decir cuánto debes, no cuánto te cuesta deberlo.
+  const tarjeta = createAccount(personal, 'Tarjeta Nu', 'tarjeta', 0, {
+    limitePesos: 45000,
+    corte: 5,
+    pago: 25,
+    tasaBp: 4590,
+    minimoBp: 500,
+    pisoPesos: 300,
+  })
 
   const cSuper = categoryId(personal, 'Súper', 'gasto')
   const cComida = categoryId(personal, 'Comida', 'gasto')
@@ -107,38 +202,175 @@ inTransaction(() => {
   const cSueldo = categoryId(personal, 'Sueldo', 'ingreso')
   const cOtrosIn = categoryId(personal, 'Otros', 'ingreso')
 
-  const months = ['2026-05', '2026-06', '2026-07']
-  const lastDay = { '2026-05': 31, '2026-06': 30, '2026-07': 24 } as Record<string, number>
+  // Fase 23: dos subcategorías colgando de Comida. Es exactamente el caso que
+  // la jerarquía viene a resolver —antes se escribían "Comida · restaurante" a
+  // mano y ningún reporte las sumaba juntas— y sin ellas el desglose del
+  // reporte no tendría nada que desglosar.
+  const cRestaurante = subcategoria(personal, 'Restaurante', cComida)
+  const cCafe = subcategoria(personal, 'Café', cComida)
 
-  for (const m of months) {
+  // Catorce meses, no tres. El libro demo tenía un trimestre y con eso no se
+  // puede enseñar una tendencia (hacen falta tres meses cerrados), ni la
+  // estacionalidad (hace falta el mismo mes del año pasado), ni un promedio
+  // por categoría contra el que medir un mes disparado. Julio queda a medias a
+  // propósito: es el mes en curso.
+  const months: string[] = []
+  for (let i = 14; i >= 0; i--) {
+    const total = 2026 * 12 + 6 - i
+    months.push(`${Math.floor(total / 12)}-${String((total % 12) + 1).padStart(2, '0')}`)
+  }
+  const lastDay = Object.fromEntries(
+    months.map((m) => {
+      const [y, mo] = m.split('-').map(Number)
+      return [m, m === '2026-07' ? 24 : new Date(Date.UTC(y!, mo!, 0)).getUTCDate()]
+    }),
+  ) as Record<string, number>
+
+  // El gasto sube despacio, como en la vida: un 1.2 % al mes acumulado. Sin
+  // esa deriva la tendencia sería plana y la sección de "¿voy subiendo?" no
+  // tendría nada que enseñar; con ella, sube sin que se note mes a mes, que es
+  // justo el caso que la recta existe para detectar.
+  const deriva = (i: number) => 1 + i * 0.012
+
+  // Lo que se repite todos los meses se guarda con su periodo para poder
+  // ligarlo después a su plantilla: un libro demo en el que la renta lleva
+  // quince meses registrada **a mano** haría creer que nadie usa recurrencias,
+  // y dejaría el gasto recurrente del análisis en cero (D11).
+  const asentado: { plantilla: string; periodo: string; txId: number }[] = []
+
+  months.forEach((m, i) => {
     const limit = lastDay[m]!
-    tx(personal, banco, 'gasto', 450000, day(m, 1), cRenta, 'Renta depto')
-    tx(personal, banco, 'ingreso', 850000, day(m, 15), cSueldo, 'Quincena')
-    if (limit >= 28) tx(personal, banco, 'ingreso', 850000, day(m, limit === 31 ? 30 : 28), cSueldo, 'Quincena')
-    tx(personal, banco, 'gasto', 49900, day(m, 8), cServicios, 'Internet')
-    if (m !== '2026-06') tx(personal, banco, 'gasto', between(320, 460), day(m, 5), cServicios, 'Luz CFE')
+    const sube = (pesos: number) => Math.round(pesos * deriva(i))
+    // El sueldo también sube, pero solo una vez al año: el aumento llega en
+    // enero, no repartido en doce.
+    const sueldo = m >= '2026-01' ? 890000 : 850000
+
+    const renta = tx(personal, banco, 'gasto', m >= '2026-01' ? 470000 : 450000, day(m, 1), cRenta, 'Renta depto')
+    asentado.push({ plantilla: 'renta', periodo: m, txId: renta })
+    const q1 = tx(personal, banco, 'ingreso', sueldo, day(m, 15), cSueldo, 'Quincena')
+    asentado.push({ plantilla: 'quincena', periodo: `${m}-Q1`, txId: q1 })
+    if (limit >= 28) {
+      const q2 = tx(personal, banco, 'ingreso', sueldo, day(m, limit === 31 ? 30 : 28), cSueldo, 'Quincena')
+      asentado.push({ plantilla: 'quincena', periodo: `${m}-Q2`, txId: q2 })
+    }
+    const internet = tx(personal, banco, 'gasto', 49900, day(m, 8), cServicios, 'Internet')
+    asentado.push({ plantilla: 'internet', periodo: m, txId: internet })
+    // El recibo de luz **nunca llega igual**, y por eso lleva quince meses
+    // registrado a mano. Es el caso que la Fase 25 viene a resolver: su
+    // plantilla propone el promedio de las últimas tres, no un fijo que
+    // siempre hay que corregir. Junio falta a propósito: un hueco en el
+    // historial no puede romper el promedio.
+    if (m !== '2026-06') {
+      const luz = tx(personal, banco, 'gasto', sube(between(320, 460)), day(m, 5), cServicios, 'Luz CFE')
+      asentado.push({ plantilla: 'luz', periodo: m, txId: luz })
+    }
     if (limit >= 16) tx(personal, banco, 'transferencia', 150000, day(m, 16), null, 'Apartado mensual', ahorro)
     // retiros de cajero: el efectivo sale del banco, nunca de la nada
     tx(personal, banco, 'transferencia', 200000, day(m, 2), null, 'Retiro de cajero', efectivo)
     if (limit >= 18) tx(personal, banco, 'transferencia', 200000, day(m, 18), null, 'Retiro de cajero', efectivo)
     for (const d of [3, 10, 17, 24]) {
       if (d > limit) continue
-      tx(personal, pick([efectivo, banco]), 'gasto', between(420, 980), day(m, d), cSuper, pick(['Súper semanal', 'Despensa', 'Súper y farmacia']))
+      tx(personal, pick([efectivo, banco]), 'gasto', sube(between(420, 980)), day(m, d), cSuper, pick(['Súper semanal', 'Despensa', 'Súper y farmacia']))
     }
     for (let i = 0; i < 7; i++) {
       const d = 1 + Math.floor(rnd() * limit)
-      tx(personal, efectivo, 'gasto', between(38, 120), day(m, d), cTransporte, pick(['Metro', 'Gasolina', 'Uber', 'Estacionamiento']))
+      tx(personal, efectivo, 'gasto', sube(between(38, 120)), day(m, d), cTransporte, pick(['Metro', 'Gasolina', 'Uber', 'Estacionamiento']))
     }
+    // Comer se reparte entre la categoría y sus dos hijas: así el reporte
+    // enseña "Comida" con su desglose y no tres renglones que nadie suma.
+    const comidas: [number, string][] = [
+      [cComida, 'Tacos'],
+      [cComida, 'Comida corrida'],
+      [cRestaurante, 'Cena fuera'],
+      [cRestaurante, 'Restaurante del centro'],
+      [cCafe, 'Café'],
+    ]
     for (let i = 0; i < 5; i++) {
       const d = 1 + Math.floor(rnd() * limit)
-      tx(personal, pick([efectivo, banco]), 'gasto', between(95, 420), day(m, d), cComida, pick(['Tacos', 'Café', 'Comida corrida', 'Cena fuera']))
+      const elegida = pick(comidas)
+      tx(personal, pick([efectivo, banco]), 'gasto', sube(between(95, 420)), day(m, d), elegida[0], elegida[1])
     }
     for (let i = 0; i < 2; i++) {
       const d = 1 + Math.floor(rnd() * limit)
       tx(personal, banco, 'gasto', between(150, 600), day(m, d), cOcio, pick(['Cine', 'Streaming', 'Salida', 'Libros']))
     }
-  }
+    // La tarjeta se usa y se abona, pero nunca completa: así es como se junta
+    // un saldo revolvente, que es de lo que trata el pago mínimo.
+    if (m >= '2026-02') {
+      for (let i = 0; i < 3; i++) {
+        const d = 1 + Math.floor(rnd() * limit)
+        tx(personal, tarjeta, 'gasto', sube(between(380, 1900)), day(m, d), pick([cSuper, cOcio, cComida]), pick(['Compra con tarjeta', 'Farmacia', 'Restaurante', 'Ropa']))
+      }
+      if (limit >= 25) {
+        tx(personal, banco, 'transferencia', between(1500, 2600), day(m, 25), null, 'Pago tarjeta', tarjeta)
+      }
+    }
+    // Diciembre cuesta más. Es el caso que la estacionalidad viene a mostrar y
+    // el que un "mes contra el anterior" nunca puede explicar.
+    if (m.endsWith('-12')) {
+      tx(personal, banco, 'gasto', between(3800, 5200), day(m, 18), cOcio, 'Regalos de diciembre')
+      tx(personal, banco, 'gasto', between(1800, 2600), day(m, 24), cComida, 'Cena de Navidad')
+      tx(personal, banco, 'ingreso', 1200000, day(m, 12), cOtrosIn, 'Aguinaldo')
+    }
+  })
   tx(personal, banco, 'ingreso', 240000, '2026-06-20', cOtrosIn, 'Proyecto freelance')
+
+  // ── Un inmueble rentado (Fase 15) ─────────────────────────────────────
+  //
+  // Vive en el perfil personal porque así es como se tiene: un depto heredado
+  // que se renta. El bien va en Bienes —ahí es donde suma al patrimonio— y el
+  // contrato solo le pone inquilino, renta y depósito.
+  const depto = Number(
+    db
+      .prepare(
+        `INSERT INTO assets (profile_id, name, kind, cost_cents, acquired_date, note)
+         VALUES (?, 'Depto de Narvarte', 'inmueble', 165000000, '2019-03-15', ?)`,
+      )
+      .run(personal, 'Se renta desde 2021').lastInsertRowid,
+  )
+  db.prepare(
+    `INSERT INTO asset_valuations (asset_id, date, value_cents, note)
+     VALUES (?, '2026-01-10', 218000000, 'Lo que piden por uno igual en la misma calle')`,
+  ).run(depto)
+  const contrato = Number(
+    db
+      .prepare(
+        `INSERT INTO rentals (profile_id, asset_id, tenant, rent_cents, deposit_cents,
+           payment_day, start_date, end_date, note)
+         VALUES (?, ?, 'Familia Robles', 1450000, 1450000, 5, '2025-09-01', '2026-08-31', ?)`,
+      )
+      .run(personal, depto, 'Contrato a un año, renovable').lastInsertRowid,
+  )
+
+  /** Un movimiento del contrato: es el papel lo que decide si cuenta o no. */
+  const movInmueble = (
+    type: 'ingreso' | 'gasto',
+    cents: number,
+    date: string,
+    role: string,
+    note: string,
+  ) =>
+    db
+      .prepare(
+        `INSERT INTO transactions (profile_id, account_id, type, amount_cents, date,
+           category_id, note, rental_id, rental_role)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(personal, banco, type, cents, date, type === 'ingreso' ? cOtrosIn : cServicios, note, contrato, role)
+
+  // El depósito entró al empezar el contrato y sigue en la cuenta: se ve en el
+  // saldo, no en el ingreso. Es la cifra que este módulo existe para separar.
+  movInmueble('ingreso', 1450000, '2025-09-01', 'deposito', 'Depósito en garantía')
+  for (const m of months.filter((m) => m >= '2025-09')) {
+    movInmueble('ingreso', 1450000, day(m, 5), 'renta', 'Renta Narvarte')
+  }
+  movInmueble('gasto', 620000, '2026-02-18', 'mantenimiento', 'Boiler nuevo')
+  movInmueble('gasto', 185000, '2026-05-09', 'mantenimiento', 'Pintura y plomería')
+  // Y con el contrato venciendo el 31 de agosto, la alerta tiene de qué hablar.
+  encenderModulos(personal, [...porOmision('personal'), 'inmuebles'])
+  // El mes disparado: junio se fue de viaje. Sirve a tres secciones a la vez —
+  // se sale de su promedio, separa la mediana del promedio y no es hormiga.
+  tx(personal, banco, 'gasto', 1450000, '2026-06-12', cOcio, 'Vuelos y hotel Oaxaca')
 
   // ── Perfil 2: negocio ─────────────────────────────────────────────────
   const negocio = createProfile('Negocio', 'negocio', 'laton')
@@ -151,9 +383,11 @@ inTransaction(() => {
   const nRenta = categoryId(negocio, 'Renta', 'gasto')
   const nServicios = categoryId(negocio, 'Servicios', 'gasto')
 
+  const asentadoNeg: { plantilla: string; periodo: string; txId: number }[] = []
   for (const m of ['2026-06', '2026-07']) {
     const limit = lastDay[m]!
-    tx(negocio, bancoNeg, 'gasto', 350000, day(m, 1), nRenta, 'Renta local')
+    const rentaLocal = tx(negocio, bancoNeg, 'gasto', 350000, day(m, 1), nRenta, 'Renta local')
+    asentadoNeg.push({ plantilla: 'renta', periodo: m, txId: rentaLocal })
     tx(negocio, bancoNeg, 'gasto', between(280, 520), day(m, 6), nServicios, 'Luz y agua')
     tx(negocio, bancoNeg, 'gasto', 380000, day(m, 15), nNomina, 'Nómina quincena')
     if (limit >= 30) tx(negocio, bancoNeg, 'gasto', 380000, day(m, 30), nNomina, 'Nómina quincena')
@@ -170,28 +404,366 @@ inTransaction(() => {
     }
   }
 
+  // ── Recurrencias ──────────────────────────────────────────────────────
+  // La renta, el sueldo y el internet llevan meses cayendo igual: son
+  // plantillas, y lo ya registrado se liga a su periodo (`recurrence_runs`)
+  // para que la bandeja no proponga quince meses que el libro ya tiene. La
+  // suscripción es la excepción a propósito: nace este mes y sin historial,
+  // así que deja una propuesta esperando confirmación —que es lo que la Fase 5
+  // viene a enseñar— y su próxima ocurrencia alimenta el flujo proyectado.
+  const insertRec = db.prepare(
+    `INSERT INTO recurrences
+      (profile_id, account_id, type, amount_cents, category_id, note, frequency,
+       day_of_month, day_of_month_2, start_date, amount_mode, paused_from, paused_until,
+       max_occurrences)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  )
+  /** Los cuatro campos de la Fase 25, en su orden, con lo de siempre por omisión. */
+  type ExtraRec = {
+    modo?: 'fijo' | 'promedio'
+    pausaDesde?: string
+    pausaHasta?: string
+    veces?: number
+  }
+  const rec = (
+    profileId: number,
+    accountId: number,
+    tipo: 'ingreso' | 'gasto',
+    cents: number,
+    catId: number | null,
+    nota: string,
+    frecuencia: 'mensual' | 'quincenal' | 'semanal' | 'anual',
+    dia: number,
+    dia2: number | null,
+    desde: string,
+    extra: ExtraRec = {},
+  ) =>
+    Number(
+      insertRec.run(
+        profileId, accountId, tipo, cents, catId, nota, frecuencia, dia, dia2, desde,
+        extra.modo ?? 'fijo', extra.pausaDesde ?? null, extra.pausaHasta ?? null,
+        extra.veces ?? null,
+      ).lastInsertRowid,
+    )
+  const insertRun = db.prepare(
+    `INSERT INTO recurrence_runs (recurrence_id, period, status, tx_id)
+     VALUES (?, ?, 'asentado', ?)`,
+  )
+  const ligar = (
+    recId: number,
+    plantilla: string,
+    filas: { plantilla: string; periodo: string; txId: number }[],
+  ) => {
+    for (const f of filas) if (f.plantilla === plantilla) insertRun.run(recId, f.periodo, f.txId)
+  }
+
+  ligar(rec(personal, banco, 'gasto', 470000, cRenta, 'Renta depto', 'mensual', 1, null, `${months[0]}-01`), 'renta', asentado)
+  ligar(rec(personal, banco, 'ingreso', 890000, cSueldo, 'Quincena', 'quincenal', 15, 30, `${months[0]}-01`), 'quincena', asentado)
+  ligar(rec(personal, banco, 'gasto', 49900, cServicios, 'Internet', 'mensual', 8, null, `${months[0]}-01`), 'internet', asentado)
+
+  // La luz, **de monto variable** (Fase 25): propone el promedio de las tres
+  // últimas asentadas en vez de un fijo que nunca acierta. Su historial es el
+  // que ya estaba en el libro, mes a mes y siempre distinto.
+  ligar(
+    rec(personal, banco, 'gasto', 40000, cServicios, 'Luz CFE', 'mensual', 5, null, `${months[0]}-05`, {
+      modo: 'promedio',
+    }),
+    'luz',
+    asentado,
+  )
+
+  insertRec.run(personal, banco, 'gasto', 29900, cOcio, 'Suscripción de música', 'mensual', 20, null, '2026-07-01', 'fijo', null, null, null)
+
+  // La colegiatura **en pausa el verano** (Fase 25). No es que se archive: en
+  // julio y agosto no hay clases, y esos dos meses no son dos colegiaturas
+  // atrasadas. Al volver septiembre propone otra vez, sin arrastrar el hueco.
+  rec(personal, banco, 'gasto', 320000, null, 'Colegiatura', 'mensual', 5, null, '2026-06-05', {
+    pausaDesde: '2026-07-01',
+    pausaHasta: '2026-08-31',
+  })
+
+  // Un curso que **son doce y ya**: el tope existe para que el número trece no
+  // aparezca nunca en la bandeja.
+  rec(personal, banco, 'gasto', 145000, cOcio, 'Curso de inglés', 'mensual', 12, null, '2026-08-12', {
+    veces: 12,
+  })
+
+  ligar(rec(negocio, bancoNeg, 'gasto', 350000, nRenta, 'Renta local', 'mensual', 1, null, '2026-06-01'), 'renta', asentadoNeg)
+
+  // ── Contrapartes y facturas ───────────────────────────────────────────
+  // Cada una está para enseñar una cosa distinta de la Fase 14:
+  //
+  //   · Oficinas Mérida factura con **retención**: el documento dice $46,400 y
+  //     lo que va a llegar son $41,266.67. Sin esa resta, la antigüedad de
+  //     saldos prometía cobrar un dinero que nunca iba a llegar.
+  //   · Café del Puerto tiene una **nota de crédito**: se canceló media
+  //     factura sin borrar el documento y sin mover un peso.
+  //   · Escuela Pitágoras pagó un **anticipo**: el dinero ya entró y todavía
+  //     no hay factura que lo reclame.
+  //   · La iguala de Oficinas Mérida es una **plantilla**: propone y espera.
+  const insertContraparte = db.prepare(
+    `INSERT INTO counterparties (profile_id, name, role, tax_id, note, contact, credit_days, credit_limit_cents)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  )
+  const contraparte = (
+    name: string,
+    role: string,
+    taxId: string,
+    contact: string,
+    creditDays: number | null,
+    limitePesos: number | null,
+  ) =>
+    Number(
+      insertContraparte.run(
+        negocio,
+        name,
+        role,
+        taxId,
+        '',
+        contact,
+        creditDays,
+        limitePesos === null ? null : Math.round(limitePesos * 100),
+      ).lastInsertRowid,
+    )
+
+  const merida = contraparte('Oficinas Mérida', 'cliente', 'OME260101AB1', 'compras@oficinasmerida.mx', 30, 60000)
+  const puerto = contraparte('Café del Puerto', 'cliente', '', 'Sra. Rangel · 999 123 4567', 15, 20000)
+  const pitagoras = contraparte('Escuela Pitágoras', 'cliente', '', 'direccion@pitagoras.edu.mx', 30, null)
+  const espiga = contraparte('Proveedor La Espiga', 'proveedor', 'ESP240315QW9', 'ventas@laespiga.mx', 15, null)
+
+  const insertCentro = db.prepare('INSERT INTO cost_centers (profile_id, name) VALUES (?, ?)')
+  const mostrador = Number(insertCentro.run(negocio, 'Mostrador').lastInsertRowid)
+  const eventos = Number(insertCentro.run(negocio, 'Eventos').lastInsertRowid)
+
+  const insertFactura = db.prepare(
+    `INSERT INTO invoices
+      (profile_id, counterparty_id, direction, folio, concept, issue_date, due_date,
+       subtotal_cents, tax_cents, withheld_tax_cents, withheld_income_cents, cost_center_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  )
+  const factura = (
+    cp: number,
+    direction: 'emitida' | 'recibida',
+    folio: string,
+    concept: string,
+    issue: string,
+    due: string | null,
+    subtotal: number,
+    impuesto: number,
+    retImpuesto = 0,
+    retRenta = 0,
+    centro: number | null = null,
+  ) =>
+    Number(
+      insertFactura.run(
+        negocio, cp, direction, folio, concept, issue, due,
+        subtotal, impuesto, retImpuesto, retRenta, centro,
+      ).lastInsertRowid,
+    )
+
+  // Con retención: $40,000 + $6,400 de impuesto, de los que retienen
+  // $4,266.67 de impuesto y $866.66 de renta. Cobrables: $41,266.67.
+  const fMerida = factura(merida, 'emitida', 'A-118', 'Pedido corporativo julio', '2026-07-10', '2026-08-09', 4000000, 640000, 426667, 86666, eventos)
+  // Cobrada a medias, para que se vea el saldo y el impuesto proporcional.
+  db.prepare(
+    `INSERT INTO transactions
+      (profile_id, account_id, type, amount_cents, date, category_id, note, invoice_id,
+       counterparty_id, cost_center_id, tax_cents)
+     VALUES (?, ?, 'ingreso', ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(negocio, bancoNeg, 2000000, '2026-07-22', nVentas, 'Folio A-118 · abono', fMerida, merida, eventos, 310160)
+
+  // Con nota de crédito: se facturaron $12,000 + IVA y se canceló la mitad.
+  const fPuerto = factura(puerto, 'emitida', 'A-121', 'Pan para evento', '2026-07-18', '2026-08-02', 1200000, 192000, 0, 0, eventos)
+  db.prepare(
+    `INSERT INTO invoice_credit_notes (invoice_id, date, folio, concept, amount_cents)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).run(fPuerto, '2026-07-24', 'NC-7', 'Se canceló la mitad del pedido', 696000)
+
+  factura(pitagoras, 'emitida', 'A-124', 'Desayunos escolares agosto', '2026-07-28', '2026-08-27', 1800000, 288000, 0, 0, mostrador)
+  // Una vencida de hace rato: es la que la lista de cobranza pone hasta arriba,
+  // y sin ninguna así la sección no enseñaría para qué sirve.
+  factura(puerto, 'emitida', 'A-102', 'Pan de mayo', '2026-05-08', '2026-05-23', 300000, 48000, 0, 0, mostrador)
+  factura(espiga, 'recibida', 'E-9012', 'Harina y empaques', '2026-07-12', '2026-07-27', 450000, 72000)
+
+  // ── Cotizaciones y órdenes (Fase 19) ─────────────────────────────────
+  // El ciclo entero en cuatro documentos: una ganada —con su factura ligada—,
+  // una que se venció sin respuesta (la que dispara la alerta), una que sigue
+  // en la calle y una orden de compra al proveedor. Sin las cuatro, la sección
+  // no enseña ni para qué sirve ni qué es cada estado.
+  const insertCot = db.prepare(
+    `INSERT INTO quotes
+      (profile_id, counterparty_id, direction, folio, concept, issue_date, valid_until,
+       subtotal_cents, tax_cents, cost_center_id, status, invoice_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  )
+  const cotizacion = (
+    cp: number,
+    direction: 'emitida' | 'recibida',
+    folio: string,
+    concept: string,
+    issue: string,
+    vigencia: string | null,
+    subtotal: number,
+    impuesto: number,
+    centro: number | null = null,
+    status: 'enviada' | 'aceptada' | 'perdida' = 'enviada',
+    facturaId: number | null = null,
+  ) =>
+    Number(
+      insertCot.run(
+        negocio, cp, direction, folio, concept, issue, vigencia,
+        subtotal, impuesto, centro, status, facturaId,
+      ).lastInsertRowid,
+    )
+
+  // La que se ganó: es la cotización de la que salió la factura A-118, y la
+  // liga entre las dos es lo que hace que "aceptada" signifique algo.
+  cotizacion(merida, 'emitida', 'COT-88', 'Pedido corporativo julio', '2026-06-28', '2026-07-15', 4000000, 640000, eventos, 'aceptada', fMerida)
+  // La que se venció sin respuesta: dispara la alerta de severidad alta.
+  cotizacion(puerto, 'emitida', 'COT-91', 'Barra de postres para boda', '2026-06-20', '2026-07-05', 2800000, 448000, eventos)
+  // La que sigue viva y esperando.
+  cotizacion(pitagoras, 'emitida', 'COT-94', 'Desayunos del ciclo escolar', '2026-07-26', '2026-08-20', 9600000, 1536000, mostrador)
+  // Y una perdida, sin la cual la tasa de éxito no tendría nada que dividir.
+  cotizacion(puerto, 'emitida', 'COT-77', 'Pan para posadas', '2026-05-30', '2026-06-15', 1500000, 240000, eventos, 'perdida')
+  // La orden de compra: el otro lado, lo que ya le encargaste al proveedor.
+  cotizacion(espiga, 'recibida', 'OC-31', 'Harina de temporada alta', '2026-07-20', '2026-08-10', 1750000, 280000)
+
+  // El anticipo: Escuela Pitágoras adelantó dinero antes de que hubiera
+  // factura. Ya es ingreso de julio (D14) y no lo reclama ningún documento.
+  db.prepare(
+    `INSERT INTO transactions
+      (profile_id, account_id, type, amount_cents, date, category_id, note, counterparty_id)
+     VALUES (?, ?, 'ingreso', ?, ?, ?, ?, ?)`,
+  ).run(negocio, bancoNeg, 500000, '2026-07-20', nVentas, 'Anticipo para el pedido de agosto', pitagoras)
+
+  // La plantilla: una iguala mensual que propone y espera. Nace en junio y
+  // nadie ha emitido nada, así que deja dos periodos en la bandeja.
+  db.prepare(
+    `INSERT INTO invoice_recurrences
+      (profile_id, counterparty_id, direction, concept, subtotal_cents, tax_cents,
+       withheld_tax_cents, withheld_income_cents, cost_center_id, credit_days,
+       frequency, day_of_month, start_date)
+     VALUES (?, ?, 'emitida', ?, ?, ?, ?, ?, ?, ?, 'mensual', 1, '2026-06-01')`,
+  ).run(negocio, merida, 'Iguala mensual de pan', 800000, 128000, 85333, 17333, eventos, 30)
+
+  // ── Horas facturables e inventario (Fase 15) ──────────────────────────
+  //
+  // La panadería también da cursos, y eso se cobra por hora. Lo que el demo
+  // tiene que enseñar es el hueco: hay horas de julio **sin facturar** y una
+  // tanda de junio que ya se facturó, para ver la diferencia entre "trabajado"
+  // y "cobrable".
+  const insertHora = db.prepare(
+    `INSERT INTO time_entries (profile_id, date, minutes, rate_cents, counterparty_id,
+       cost_center_id, note, invoice_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  )
+  const fCurso = factura(
+    pitagoras, 'emitida', 'A-121', 'Curso de repostería · junio',
+    '2026-06-30', '2026-07-30', 900000, 144000, 0, 0, mostrador,
+  )
+  for (const [d, min] of [[3, 180], [10, 180], [17, 180], [24, 180]] as const) {
+    insertHora.run(negocio, day('2026-06', d), min, 75000, pitagoras, mostrador, 'Curso de repostería', fCurso)
+  }
+  // Julio: trabajado y sin facturar. Dos clientes, para que el panel tenga que
+  // agrupar, y una tarifa distinta en cada uno — la tarifa vive en el renglón.
+  for (const [d, min] of [[2, 180], [9, 180], [16, 240]] as const) {
+    insertHora.run(negocio, day('2026-07', d), min, 75000, pitagoras, mostrador, 'Curso de repostería', null)
+  }
+  for (const [d, min] of [[7, 120], [21, 90]] as const) {
+    insertHora.run(negocio, day('2026-07', d), min, 95000, merida, eventos, 'Asesoría de menú', null)
+  }
+
+  // El almacén. La harina entra a dos precios distintos para que el promedio
+  // ponderado tenga algo que promediar, y los empaques quedan bajo su mínimo
+  // para que la alerta tenga de qué hablar.
+  const insertProducto = db.prepare(
+    `INSERT INTO products (profile_id, sku, name, unit, min_qty_milli) VALUES (?, ?, ?, ?, ?)`,
+  )
+  const insertMov = db.prepare(
+    `INSERT INTO stock_moves (product_id, date, kind, qty_milli, unit_cost_cents, note)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  )
+  const harina = Number(insertProducto.run(negocio, 'HAR-01', 'Harina de trigo', 'kg', 50_000).lastInsertRowid)
+  insertMov.run(harina, '2026-06-02', 'entrada', 120_000, 2450, 'La Espiga')
+  insertMov.run(harina, '2026-06-20', 'salida', 78_000, 0, 'Producción de junio')
+  insertMov.run(harina, '2026-07-06', 'entrada', 100_000, 2780, 'La Espiga · subió el precio')
+  insertMov.run(harina, '2026-07-18', 'salida', 64_000, 0, 'Producción de julio')
+
+  const cafe = Number(insertProducto.run(negocio, 'CAF-01', 'Café en grano', 'kg', 8_000).lastInsertRowid)
+  insertMov.run(cafe, '2026-07-03', 'entrada', 24_000, 38_000, 'Tostador Casa Torres')
+  insertMov.run(cafe, '2026-07-19', 'salida', 9_500, 0, 'Barra')
+
+  const cajas = Number(insertProducto.run(negocio, 'EMP-01', 'Caja para pastel', 'pieza', 200_000).lastInsertRowid)
+  insertMov.run(cajas, '2026-06-11', 'entrada', 500_000, 1150, 'Empaques del Centro')
+  insertMov.run(cajas, '2026-07-14', 'salida', 340_000, 0, 'Pedidos de julio')
+  // Un conteo que no cuadró: se valúa al promedio y **no** es costo de ventas.
+  insertMov.run(cajas, '2026-07-22', 'ajuste', -18_000, 0, 'Conteo: cajas mojadas')
+
+  encenderModulos(negocio, [...porOmision('negocio'), 'horas', 'inventario'])
+
   // ── Deudas y retornos ─────────────────────────────────────────────────
   const insertDebt = db.prepare(
-    `INSERT INTO debts (profile_id, direction, counterparty, concept, principal_cents, start_date, due_date)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO debts (profile_id, direction, counterparty, concept, principal_cents, start_date,
+      due_date, annual_rate_bp, term_months, origination_fee_cents)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
+  const deuda = (
+    profileId: number,
+    direction: 'por_cobrar' | 'por_pagar',
+    counterparty: string,
+    concept: string,
+    principalCents: number,
+    startDate: string,
+    dueDate: string | null,
+    extra: { tasaBp?: number; meses?: number; comisionCents?: number } = {},
+  ) =>
+    Number(
+      insertDebt.run(
+        profileId, direction, counterparty, concept, principalCents, startDate, dueDate,
+        extra.tasaBp ?? 0, extra.meses ?? null, extra.comisionCents ?? 0,
+      ).lastInsertRowid,
+    )
   const insertPayment = db.prepare(
     'INSERT INTO debt_payments (debt_id, amount_cents, date, note) VALUES (?, ?, ?, ?)',
   )
 
-  const luis = Number(
-    insertDebt.run(personal, 'por_cobrar', 'Luis', 'Préstamo personal', 250000, '2026-05-10', '2026-09-30').lastInsertRowid,
-  )
+  const luis = deuda(personal, 'por_cobrar', 'Luis', 'Préstamo personal', 250000, '2026-05-10', '2026-09-30')
   insertPayment.run(luis, 50000, '2026-06-12', 'Primer abono')
   insertPayment.run(luis, 50000, '2026-07-14', 'Segundo abono')
 
-  const nu = Number(
-    insertDebt.run(personal, 'por_pagar', 'Tarjeta Nu', 'Corte de junio', 380000, '2026-07-02', '2026-08-05').lastInsertRowid,
-  )
-  insertPayment.run(nu, 100000, '2026-07-18', 'Pago parcial')
+  // Tres deudas por pagar con tasa y plazo, elegidas para que bola de nieve y
+  // avalancha **no den lo mismo**: la más chica (la lavadora, a meses sin
+  // intereses) es la más barata, y la más cara (la tarjeta, al 45 %) tiene el
+  // saldo de en medio. Si la chica fuera también la cara, las dos rutas la
+  // atacarían primero, darían la misma cifra y el demo no enseñaría nada.
+  const nu = deuda(personal, 'por_pagar', 'Tarjeta Nu', 'Corte de junio', 3800000, '2026-07-02', '2026-08-05', {
+    tasaBp: 4500,
+    meses: 12,
+  })
+  insertPayment.run(nu, 1000000, '2026-07-18', 'Pago parcial')
 
-  insertDebt.run(negocio, 'por_pagar', 'Proveedor La Espiga', 'Harina y empaques', 520000, '2026-07-05', '2026-07-30')
-  insertDebt.run(negocio, 'por_cobrar', 'Oficinas Mérida', 'Pedido corporativo', 240000, '2026-07-10', '2026-08-15')
+  // El auto trae **comisión de apertura**: se deben $240,000 y el banco
+  // depositó $235,200. Su movimiento lo dice, que es de lo que trata D30.
+  const auto = deuda(personal, 'por_pagar', 'Banco Azteca', 'Crédito de auto', 24000000, '2026-03-05', null, {
+    tasaBp: 1350,
+    meses: 48,
+    comisionCents: 480000,
+  })
+  insertPayment.run(auto, 649832, '2026-04-05', 'Mensualidad')
+  insertPayment.run(auto, 649832, '2026-05-05', 'Mensualidad')
+  insertPayment.run(auto, 649832, '2026-06-05', 'Mensualidad')
+  db.prepare(
+    `INSERT INTO transactions (profile_id, account_id, type, amount_cents, date, note, debt_id, debt_role)
+     VALUES (?, ?, 'ingreso', ?, ?, ?, ?, 'desembolso')`,
+  ).run(personal, banco, 24000000 - 480000, '2026-03-05', 'Crédito de auto', auto)
+
+  deuda(personal, 'por_pagar', 'Mueblería', 'Sala a 18 meses sin intereses', 1800000, '2026-05-20', null, {
+    tasaBp: 0,
+    meses: 18,
+  })
+
+  deuda(negocio, 'por_pagar', 'Proveedor La Espiga', 'Harina y empaques', 520000, '2026-07-05', '2026-07-30')
+  deuda(negocio, 'por_cobrar', 'Oficinas Mérida', 'Pedido corporativo', 240000, '2026-07-10', '2026-08-15')
 
   // ── Inversiones ───────────────────────────────────────────────────────
   const insertInvestment = db.prepare(
@@ -216,20 +788,57 @@ inTransaction(() => {
   insertEntry.run(btc, 'aporte', 300000, '2026-06-10', '')
   insertEntry.run(btc, 'valuacion', 274500, '2026-07-18', '')
 
+  // Acciones con un **retiro con ganancia**: es lo único que parte la ganancia
+  // en dos —lo ya cobrado y lo que sigue en papel—, y sin un caso así la
+  // distinción de la Fase 24 no se ve en ningún lado del libro demo.
+  const acciones = Number(
+    insertInvestment.run(personal, 'Acciones GAP', 'acciones', 'Casa de bolsa').lastInsertRowid,
+  )
+  insertEntry.run(acciones, 'aporte', 800000, '2026-04-08', 'Compra inicial')
+  insertEntry.run(acciones, 'valuacion', 1000000, '2026-06-20', '')
+  insertEntry.run(acciones, 'retiro', 400000, '2026-06-22', 'Venta parcial')
+  insertEntry.run(acciones, 'valuacion', 655000, '2026-07-20', '')
+
+  // Y una plantilla que **aporta** a una inversión: el aporte mensual al fondo
+  // indexado, que propone y espera como cualquier otra (R4). Va aquí y no con
+  // las demás porque necesita que la inversión ya exista.
+  db.prepare(
+    `INSERT INTO recurrences
+      (profile_id, account_id, type, amount_cents, note, frequency, day_of_month, start_date,
+       investment_id)
+     VALUES (?, ?, 'gasto', ?, ?, 'mensual', ?, ?, ?)`,
+  ).run(personal, banco, 200000, 'Aporte al fondo indexado', 10, '2026-07-01', fondo)
+
   // ── Presupuestos ──────────────────────────────────────────────────────
   // Un tope por categoría y por mes: julio afloja en Ocio y aprieta en Súper,
   // como pasa de verdad cuando ajustas el plan sobre la marcha.
   const insertBudget = db.prepare(
-    'INSERT INTO budgets (profile_id, category_id, month, amount_cents) VALUES (?, ?, ?, ?)',
+    `INSERT INTO budgets (profile_id, category_id, period, period_kind, amount_cents, rollover)
+     VALUES (?, ?, ?, ?, ?, ?)`,
   )
+  const topeMes = (profileId: number, categoryId: number, mes: string, cents: number, rueda = 0) =>
+    insertBudget.run(profileId, categoryId, mes, 'mes', cents, rueda)
+
   for (const m of months) {
-    insertBudget.run(personal, cSuper, m, m === '2026-07' ? 320000 : 350000)
-    insertBudget.run(personal, cComida, m, 90000)
-    insertBudget.run(personal, cTransporte, m, 90000)
-    insertBudget.run(personal, cOcio, m, m === '2026-07' ? 120000 : 80000)
-    insertBudget.run(negocio, nInsumos, m, 1500000)
-    insertBudget.run(negocio, nServicios, m, 120000)
+    topeMes(personal, cSuper, m, m === '2026-07' ? 320000 : 350000)
+    topeMes(personal, cComida, m, 90000)
+    topeMes(personal, cTransporte, m, 90000)
+    // Ocio arrastra: es la categoría donde el sobrante de un mes tranquilo
+    // paga el concierto del siguiente, que es justo para lo que sirve.
+    topeMes(personal, cOcio, m, m === '2026-07' ? 120000 : 80000, 1)
+    topeMes(negocio, nInsumos, m, 1500000)
+    topeMes(negocio, nServicios, m, 120000)
   }
+
+  // Un tope anual para lo que no es mensual. Transporte carga la tenencia y el
+  // seguro: pensarlos por mes no dice nada; pensarlos por año, todo.
+  insertBudget.run(personal, cTransporte, '2026', 'anio', 1400000, 0)
+
+  // Y el techo de todo el mes, que incluye lo que no tiene tope.
+  const insertTotal = db.prepare(
+    'INSERT INTO budget_totals (profile_id, month, amount_cents) VALUES (?, ?, ?)',
+  )
+  for (const m of months) insertTotal.run(personal, m, 3800000)
 
   // ── Etiquetas ─────────────────────────────────────────────────────────
   // Cruzan categorías: el mismo viaje lleva comida, transporte y hospedaje.
@@ -265,6 +874,33 @@ inTransaction(() => {
   etiquetarPor(negocio, 'Insumos cocina', tProveedor)
   etiquetarPor(negocio, 'Nómina', tDeducible)
   etiquetarPor(negocio, 'Renta local', tDeducible)
+
+  // ── Recibos ───────────────────────────────────────────────────────────
+  // El adjunto existe desde la Fase 10 y el demo no traía ni uno, así que no
+  // se veía ni en la partida ni en el respaldo. Lo pide sobre todo la Fase 26:
+  // el export saca los recibos como archivos de verdad dentro del .zip, y sin
+  // uno solo esa carpeta no aparecía nunca. Un PNG de un píxel basta —lo que
+  // se enseña es el camino, no la foto— y así el libro demo no engorda.
+  const PIXEL_PNG =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+  const insertAdjunto = db.prepare(
+    `INSERT INTO tx_attachments (tx_id, filename, mime, size_bytes, data_b64)
+     VALUES (?, ?, 'image/png', ?, ?)`,
+  )
+  const adjuntarA = (profileId: number, like: string, nombre: string) => {
+    const fila = db
+      .prepare(
+        'SELECT id FROM transactions WHERE profile_id = ? AND note LIKE ? ORDER BY date DESC LIMIT 1',
+      )
+      .get(profileId, `%${like}%`) as { id: number } | undefined
+    // El tamaño se deduce del base64 igual que en el validador, relleno
+    // incluido: 72 en vez de 70 dejaría al demo mintiendo por dos bytes.
+    const relleno = PIXEL_PNG.endsWith('==') ? 2 : PIXEL_PNG.endsWith('=') ? 1 : 0
+    const bytes = Math.floor((PIXEL_PNG.length * 3) / 4) - relleno
+    if (fila) insertAdjunto.run(fila.id, nombre, bytes, PIXEL_PNG)
+  }
+  adjuntarA(personal, 'Súper', 'ticket-super.png')
+  adjuntarA(negocio, 'Insumos cocina', 'factura-insumos.png')
 
   // ── Metas ─────────────────────────────────────────────────────────────
   const insertGoal = db.prepare(
@@ -313,7 +949,108 @@ inTransaction(() => {
     1,
   )
 
+  // Las dos ligas de la Fase 20, para que la demo enseñe que la libreta ya se
+  // habla con el libro: una nota que explica **una partida** y otra que habla
+  // de **todo un mes**. Sin ellas, la función solo se ve creándola a mano.
+  const insertNotaAtada = db.prepare(
+    'INSERT INTO notes (profile_id, title, body, pinned, tx_id, period) VALUES (?, ?, ?, 0, ?, ?)',
+  )
+  // El gasto más caro de junio del perfil personal: el viaje. Es la partida
+  // que cualquiera abriría a preguntarse "¿y esto qué fue?".
+  const caraDeJunio: any = db
+    .prepare(
+      `SELECT id FROM transactions
+       WHERE profile_id = ? AND type = 'gasto' AND substr(date, 1, 7) = '2026-06'
+       ORDER BY amount_cents DESC LIMIT 1`,
+    )
+    .get(personal)
+  if (caraDeJunio) {
+    insertNotaAtada.run(
+      personal,
+      'Por qué fue tan caro',
+      'Boletos para los cuatro y el hotel completo por adelantado. Se pagó de una en junio, ' +
+        'pero cubre el viaje entero: no compararlo contra un mes normal.',
+      caraDeJunio.id,
+      null,
+    )
+  }
+  insertNotaAtada.run(
+    personal,
+    'Junio se pasó, y se sabe por qué',
+    'El viaje y lo que se adelantó del seguro. Julio vuelve a lo de siempre: si el promedio ' +
+      'del año sale alto, es este mes.',
+    null,
+    '2026-06',
+  )
+
+  // ── Personalización (Fase 21) ─────────────────────────────────────────
+  //
+  // Un campo propio y dos plantillas en cada libro: sin ellos, la función solo
+  // se ve creándola a mano, y lo que hay que enseñar es cómo se **usa**.
+  const insertCampo = db.prepare(
+    'INSERT INTO profile_fields (profile_id, label, kind, options, position) VALUES (?, ?, ?, ?, ?)',
+  )
+  // En el personal, un dato que Finply no tiene por qué entender: con quién.
+  const conQuien = Number(
+    insertCampo.run(personal, 'Con quién', 'texto', '', 0).lastInsertRowid,
+  )
+  // En el de negocio, la dimensión que un taller sí necesita y ningún reporte
+  // de Finply sabe leer.
+  insertCampo.run(negocio, 'Número de obra', 'texto', '', 0)
+  insertCampo.run(
+    negocio,
+    'Turno',
+    'lista',
+    'Mañana\nTarde',
+    1,
+  )
+
+  // El campo contestado en un par de partidas, para que se vea en el libro y
+  // salga en el CSV.
+  const cenas: any[] = db
+    .prepare(
+      `SELECT id FROM transactions
+       WHERE profile_id = ? AND note LIKE 'Restaurante%' ORDER BY date DESC LIMIT 2`,
+    )
+    .all(personal)
+  const insertValor = db.prepare(
+    'INSERT INTO tx_field_values (tx_id, field_id, value) VALUES (?, ?, ?)',
+  )
+  for (const [i, fila] of cenas.entries()) {
+    insertValor.run(fila.id, conQuien, i === 0 ? 'Bere' : 'Los del trabajo')
+  }
+
+  const insertPlantilla = db.prepare(
+    `INSERT INTO tx_templates
+      (profile_id, name, type, account_id, category_id, amount_cents, note, position)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  )
+  // La gasolina va sin monto —nunca cuesta lo mismo— y la suscripción con el
+  // suyo: es exactamente la diferencia que la plantilla viene a respetar.
+  insertPlantilla.run(personal, 'Gasolina', 'gasto', banco, cTransporte, null, 'Gasolina', 0)
+  insertPlantilla.run(personal, 'Despensa', 'gasto', efectivo, cSuper, null, 'Súper semanal', 1)
+  insertPlantilla.run(negocio, 'Harina', 'gasto', bancoNeg, null, null, 'Harina de la semana', 0)
+
+  // Reglas de import (Fase 23). La primera que case gana, así que la más
+  // específica va arriba: "starbucks" antes que "café" no cambiaría nada aquí,
+  // pero el orden **es** el dato y el demo tiene que enseñarlo. Una apunta a
+  // una subcategoría, que es donde la jerarquía y las reglas se encuentran.
+  reglaImport(personal, 'OXXO', cSuper, 0)
+  reglaImport(personal, 'Starbucks', cCafe, 1)
+  reglaImport(personal, 'Uber', cTransporte, 2)
+  reglaImport(personal, 'CFE', cServicios, 3)
+  reglaImport(negocio, 'Harina', nInsumos, 0)
+
   console.log(
-    '[finply] Libro demo listo: 2 perfiles, 5 cuentas, ~240 movimientos, deudas, inversiones, presupuestos, metas y notas.',
+    '[finply] Libro demo listo: 2 perfiles, 6 cuentas (una tarjeta con su tasa), ' +
+      'quince meses de movimientos, tres deudas con tasa y plazo —una con comisión ' +
+      'de apertura—, cuatro inversiones (una con retiro y ganancia ya cobrada) y una ' +
+      'plantilla que aporta a un fondo, presupuestos, metas, ' +
+      'notas —una atada a su partida y otra a su mes—, un recibo adjunto en cada libro, ' +
+      'campos propios y plantillas, ' +
+      'facturas con retención, nota de crédito, anticipo y plantilla, ' +
+      'cinco cotizaciones que cubren los cuatro estados y una orden de compra, ' +
+      'dos subcategorías de Comida con cinco reglas de import, ' +
+      'y los tres módulos de giro: un depto rentado, horas sin facturar y un almacén.',
   )
 })

@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react'
-import type { Profile, Tx } from '../shared/types.ts'
+import type { BorradorTx, Profile, Tx } from '../shared/types.ts'
 
 export interface AppState {
   profile: Profile
@@ -8,14 +8,30 @@ export interface AppState {
   bump: () => void
   /** Muestra el sello de tinta (p. ej. "REGISTRADO"). */
   stamp: (text: string) => void
-  /** Abre el formulario de movimiento; con `tx` entra en modo edición. */
-  openTx: (tx?: Tx) => void
+  /**
+   * Abre el formulario de movimiento. Con `tx` entra en modo edición; con
+   * `borrador` abre uno nuevo **con campos puestos**, que es lo que permite
+   * pagar la tarjeta desde su alerta o asentar una renta desde el calendario
+   * sin volver a teclear lo que Finply ya sabe (Fase 20).
+   *
+   * Rellenar no es registrar (R4): el formulario se abre, el usuario confirma.
+   */
+  openTx: (tx?: Tx | null, borrador?: BorradorTx) => void
   /**
    * Abre la ficha del perfil abierto. Los módulos se editan ahí y no en dos
    * lados: Ajustes y la sección apagada son dos puertas al mismo formulario,
    * para que no puedan decir cosas distintas.
    */
   editProfile: () => void
+  /**
+   * Reemplaza en memoria el perfil que se acaba de guardar (Fase 21).
+   *
+   * `bump()` no basta: invalida los datos de las **vistas**, pero la lista de
+   * perfiles vive en App y se pide una sola vez al arrancar. Sin esto, cambiar
+   * el orden del lomo o el formato guardaba bien en la base y no se veía hasta
+   * recargar — que es exactamente como se ve un ajuste que no funciona.
+   */
+  perfilGuardado: (profile: Profile) => void
 }
 
 export const AppCtx = createContext<AppState | null>(null)

@@ -1,9 +1,28 @@
 import { useState } from 'react'
-import type { Propuesta } from '../../shared/types.ts'
 import { api } from '../api.ts'
 import { parseAmount } from '../format.ts'
 import { useApp } from '../context.ts'
 import { Modal } from './Modal.tsx'
+
+/**
+ * Lo que hace falta para asentar un periodo, y nada más.
+ *
+ * Era `Propuesta` entera hasta la Fase 20, cuando el calendario tuvo que abrir
+ * este mismo modal desde un renglón que **no** viene de la bandeja: un
+ * vencimiento futuro no está ahí —la bandeja solo llega hasta hoy— y armar una
+ * `Propuesta` completa con campos inventados para que encajara habría sido
+ * meter una mentira en el tipo. Una `Propuesta` cumple esta forma tal cual.
+ */
+export interface ParaAsentar {
+  recurrenceId: number
+  periodo: string
+  fecha: string
+  amountCents: number
+  note: string
+  descripcion: string
+  accountName?: string
+  categoryName?: string | null
+}
 
 /**
  * Corregir una propuesta antes de asentarla: el recibo de luz nunca llega
@@ -15,7 +34,7 @@ export function PropuestaModal({
   onClose,
   onSaved,
 }: {
-  propuesta: Propuesta
+  propuesta: ParaAsentar
   onClose: () => void
   onSaved: () => void
 }) {
@@ -51,9 +70,16 @@ export function PropuestaModal({
   return (
     <Modal title="Ajustar antes de asentar" onClose={onClose}>
       <form className="forma" onSubmit={submit}>
+        {/*
+          Se arma juntando lo que hay, no encadenando separadores: llegando
+          desde el calendario no vienen ni la cuenta ni la categoría —el
+          renglón ya las decía— y el encabezado abría con un "·" suelto. Se vio
+          en el navegador, como siempre.
+        */}
         <p className="forma-nota">
-          {propuesta.accountName}
-          {propuesta.categoryName && ` · ${propuesta.categoryName}`} · {propuesta.descripcion}
+          {[propuesta.accountName, propuesta.categoryName, propuesta.descripcion]
+            .filter(Boolean)
+            .join(' · ')}
         </p>
 
         <label className="campo campo-monto">

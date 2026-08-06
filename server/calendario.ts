@@ -9,8 +9,9 @@
 
 import { db, modulosDe } from './db.ts'
 import type { ModuloId } from '../shared/modulos.ts'
+import { SALDO_FACTURA } from './facturas.ts'
 import { estadoTarjetas } from './tarjetas.ts'
-import { reglaDe } from './recurrencias.ts'
+import { montoPropuesto, promediosDe, reglaDe } from './recurrencias.ts'
 import { tablaAmortizacion } from '../shared/credito.ts'
 import { hoyISO, proximoDiaDelMes, siguienteDiaDelMes, sumarDias } from '../shared/fechas.ts'
 import { describirRecurrencia, ocurrencias } from '../shared/recurrencias.ts'
@@ -39,6 +40,11 @@ function deRecurrencias(profileId: number, desde: string, hasta: string): Evento
     ).map((f) => `${f.recurrence_id}·${f.period}`),
   )
 
+  // El monto que se anuncia tiene que ser **el que la bandeja va a proponer**,
+  // no la columna: con monto variable son distintos, y dos pantallas que
+  // enseñan la misma partida no pueden decir dos cifras (D14).
+  const promedios = promediosDe(ids)
+
   const eventos: EventoCalendario[] = []
   for (const row of rows) {
     const regla = reglaDe(row)
@@ -49,7 +55,7 @@ function deRecurrencias(profileId: number, desde: string, hasta: string): Evento
         tipo: 'recurrencia',
         titulo: row.note || (row.type === 'ingreso' ? 'Ingreso recurrente' : 'Gasto recurrente'),
         detalle: `${row.account_name} · ${describirRecurrencia(regla)}`,
-        montoCents: row.amount_cents,
+        montoCents: montoPropuesto(row, promedios.get(row.id)),
         refId: row.id,
         direccion: row.type === 'ingreso' ? 'entra' : 'sale',
         periodo: o.periodo,
@@ -221,12 +227,14 @@ function deMSI(profileId: number, desde: string, hasta: string): EventoCalendari
  * cobros en JS (R11).
  */
 function deFacturas(profileId: number, desde: string, hasta: string): EventoCalendario[] {
+  // Lo que va a caer es lo **cobrable**, no el total del documento: lo
+  // retenido no lo va a pagar el cliente y lo cancelado con una nota de
+  // crédito ya no se debe. Proyectarlo entero inflaría el flujo con dinero que
+  // nadie va a mandar.
   const filas: any[] = db
     .prepare(
       `SELECT f.id, f.direction, f.folio, f.concept, f.due_date,
-        f.subtotal_cents + f.tax_cents
-          - COALESCE((SELECT SUM(t.amount_cents) FROM transactions t WHERE t.invoice_id = f.id), 0)
-          AS saldo,
+        ${SALDO_FACTURA} AS saldo,
         c.name AS contraparte
        FROM invoices f
        JOIN counterparties c ON c.id = f.counterparty_id
@@ -249,13 +257,61 @@ function deFacturas(profileId: number, desde: string, hasta: string): EventoCale
     }))
 }
 
+/**
+ * Las rentas que caen en la ventana. Entran por lo mismo que las facturas y
+ * las deudas (D9): el calendario junta lo que Finply **ya sabe** que va a caer,
+ * y una renta pactada es de lo más seguro que hay.
+ *
+ * ⚠ Si el usuario además guardó la renta como recurrencia, saldrá dos veces:
+ * son dos cosas que él escribió y Finply no puede saber que hablan del mismo
+ * dinero. Lo mismo pasa ya entre facturas y recurrencias.
+ */
+function deRentas(profileId: number, desde: string, hasta: string): EventoCalendario[] {
+  const filas: any[] = db
+    .prepare(
+      `SELECT r.id, r.tenant, r.rent_cents, r.payment_day, r.start_date, r.end_date,
+        a.name AS bien
+       FROM rentals r
+       JOIN assets a ON a.id = r.asset_id
+       WHERE r.profile_id = ? AND r.archived = 0 AND r.rent_cents > 0
+         AND r.start_date <= ? AND (r.end_date IS NULL OR r.end_date >= ?)`,
+    )
+    .all(profileId, hasta, desde)
+
+  const eventos: EventoCalendario[] = []
+  for (const r of filas) {
+    // Se recorren los cobros que caen dentro de la ventana. Son pocos —una
+    // ventana de 90 días son tres— así que no hace falta consulta por mes.
+    let fecha = proximoDiaDelMes(desde > r.start_date ? desde : r.start_date, r.payment_day)
+    while (fecha <= hasta) {
+      if (fecha >= desde && (r.end_date === null || fecha <= r.end_date)) {
+        eventos.push({
+          fecha,
+          tipo: 'renta' as const,
+          titulo: `Cobrar la renta de ${r.bien}`,
+          detalle: r.tenant || 'Sin inquilino apuntado',
+          montoCents: r.rent_cents as number,
+          refId: r.id as number,
+          direccion: 'entra' as const,
+        })
+      }
+      fecha = proximoDiaDelMes(sumarDias(fecha, 1), r.payment_day)
+    }
+  }
+  return eventos
+}
+
 const ORDEN: Record<EventoCalendario['tipo'], number> = {
   pago_tarjeta: 0,
   deuda: 1,
   factura: 2,
+  renta: 3,
   recurrencia: 3,
   msi: 4,
   corte: 5,
+  // El calendario nunca genera uno: lo que ya está asentado no está por
+  // confirmar. Lo agrega el flujo proyectado, que sí tiene que contarlo.
+  movimiento: 6,
 }
 
 /**
@@ -277,6 +333,7 @@ export function calendario(profileId: number, hoy = hoyISO(), dias = 30): Calend
     ...(con('deudas') ? deDeudas(profileId, hoy, hasta) : []),
     ...(con('tarjetas') ? deMSI(profileId, hoy, hasta) : []),
     ...(con('negocio') ? deFacturas(profileId, hoy, hasta) : []),
+    ...(con('inmuebles') ? deRentas(profileId, hoy, hasta) : []),
   ]
   // Dentro de un mismo día manda lo que cuesta dinero si se te pasa.
   eventos.sort(

@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import type { ModuloId, Profile, ProfileKind, Tx } from '../shared/types.ts'
+import type { BorradorTx, ModuloId, Profile, ProfileKind, Tx } from '../shared/types.ts'
 import { MODULOS, moduloDeVista, porOmision, vistaVisible } from '../shared/modulos.ts'
 import { api } from './api.ts'
+import { usarFormato } from './format.ts'
 import { AppCtx } from './context.ts'
+import { useAtajos } from './atajos.ts'
 import { Sidebar, type ThemePref, type View } from './components/Sidebar.tsx'
+import { Atajos } from './components/Atajos.tsx'
 import { TxModal } from './components/TxModal.tsx'
 import { ModulosPicker } from './components/ModulosPicker.tsx'
 import { ProfileModal } from './components/ProfileModal.tsx'
@@ -19,13 +22,19 @@ import { Cuentas } from './views/Cuentas.tsx'
 import { Reportes } from './views/Reportes.tsx'
 import { Tarjetas } from './views/Tarjetas.tsx'
 import { Deudas } from './views/Deudas.tsx'
+import { Bienes } from './views/Bienes.tsx'
 import { Inversiones } from './views/Inversiones.tsx'
 import { Recurrencias } from './views/Recurrencias.tsx'
 import { Calendario } from './views/Calendario.tsx'
+import { Flujo } from './views/Flujo.tsx'
 import { Presupuestos } from './views/Presupuestos.tsx'
 import { Metas } from './views/Metas.tsx'
 import { Notas } from './views/Notas.tsx'
+import { Cotizaciones } from './views/Cotizaciones.tsx'
 import { Ajustes } from './views/Ajustes.tsx'
+import { Inmuebles } from './views/Inmuebles.tsx'
+import { Horas } from './views/Horas.tsx'
+import { Inventario } from './views/Inventario.tsx'
 import { Taxonomia } from './views/Taxonomia.tsx'
 import { Importar } from './views/Importar.tsx'
 
@@ -33,14 +42,20 @@ import { Importar } from './views/Importar.tsx'
 // donde uno la busca.
 const VIEWS: View[] = [
   'resumen', 'movimientos', 'cuentas', 'taxonomia', 'reportes', 'analisis', 'importar', 'tarjetas',
-  'deudas', 'inversiones', 'simulador', 'contrapartes', 'facturas', 'negocio', 'recurrencias', 'calendario', 'presupuestos', 'metas', 'notas', 'ajustes',
+  'deudas', 'bienes', 'inversiones', 'simulador', 'contrapartes', 'cotizaciones', 'facturas', 'negocio', 'inmuebles', 'horas', 'inventario', 'recurrencias', 'calendario', 'flujo', 'presupuestos', 'metas', 'notas', 'ajustes',
 ]
 
 const THEME_CYCLE: Record<ThemePref, ThemePref> = { claro: 'oscuro', oscuro: 'auto', auto: 'claro' }
 
-function viewFromHash(): View {
+/**
+ * La vista del hash, o `null` si no hay ninguna. **Nulo no es "resumen"**: es
+ * "el usuario no pidió nada", y desde la Fase 21 eso lo contesta la sección de
+ * inicio del perfil. Un hash que apunte a una vista que no existe también cae
+ * aquí, para no dejar la app en una pantalla en blanco.
+ */
+function viewFromHash(): View | null {
   const hash = window.location.hash.replace('#/', '')
-  return (VIEWS as string[]).includes(hash) ? (hash as View) : 'resumen'
+  return (VIEWS as string[]).includes(hash) ? (hash as View) : null
 }
 
 function Onboarding({ onCreated }: { onCreated: (profile: Profile) => void }) {
@@ -182,10 +197,15 @@ export default function App() {
     const stored = localStorage.getItem('finply.theme')
     return stored === 'claro' || stored === 'oscuro' || stored === 'auto' ? stored : 'auto'
   })
-  const [view, setView] = useState<View>(viewFromHash)
+  const [view, setView] = useState<View | null>(viewFromHash)
   const [refreshKey, setRefreshKey] = useState(0)
   const [stampText, setStampText] = useState<string | null>(null)
-  const [txModal, setTxModal] = useState<{ open: boolean; tx: Tx | null }>({ open: false, tx: null })
+  const [ayuda, setAyuda] = useState(false)
+  const [txModal, setTxModal] = useState<{
+    open: boolean
+    tx: Tx | null
+    borrador?: BorradorTx
+  }>({ open: false, tx: null })
   const [profileModal, setProfileModal] = useState<{ open: boolean; profile: Profile | null }>({
     open: false,
     profile: null,
@@ -227,6 +247,34 @@ export default function App() {
     return profiles.find((p) => p.id === currentId) ?? profiles[0]!
   }, [profiles, currentId])
 
+  /**
+   * La convención de este libro (Fase 21): cómo se ven sus fechas y si enseña
+   * los centavos. Se fija **antes de pintar** —en el render, no en un efecto—
+   * porque `fmtMoney` y `fmtDate` se llaman durante el propio render de las
+   * vistas: hacerlo después dejaría el primer pintado con el formato anterior.
+   */
+  if (profile) {
+    usarFormato({
+      fecha: profile.dateFormat,
+      sinCentavos: profile.hideCents,
+      inicioSemana: profile.weekStart,
+    })
+  }
+
+  /**
+   * Qué sección se ve. El hash manda siempre; sin hash manda la sección de
+   * inicio del perfil, y si esa está apagada —o el perfil no eligió ninguna—
+   * el Resumen, que es núcleo y no se apaga nunca.
+   */
+  const vista: View = useMemo(() => {
+    if (view) return view
+    const inicio = profile?.homeView
+    if (inicio && (VIEWS as string[]).includes(inicio) && vistaVisible(inicio, profile!.modules)) {
+      return inicio as View
+    }
+    return 'resumen'
+  }, [view, profile])
+
   const selectProfile = useCallback((id: number) => {
     setCurrentId(id)
     localStorage.setItem('finply.profile', String(id))
@@ -245,7 +293,42 @@ export default function App() {
     stampTimer.current = setTimeout(() => setStampText(null), 1000)
   }, [])
 
-  const openTx = useCallback((tx?: Tx) => setTxModal({ open: true, tx: tx ?? null }), [])
+  const openTx = useCallback(
+    (tx?: Tx | null, borrador?: BorradorTx) =>
+      setTxModal({ open: true, tx: tx ?? null, borrador }),
+    [],
+  )
+
+  const perfilGuardado = useCallback((guardado: Profile) => {
+    setProfiles((prev) => (prev ?? []).map((p) => (p.id === guardado.id ? guardado : p)))
+  }, [])
+
+  /**
+   * Los atajos de la app entera. `b` y `r` no están aquí: son de la barra de
+   * registro rápido y solo significan algo donde hay una barra (Resumen y
+   * Movimientos). Desde cualquier otra vista, `b` lleva al libro, que es donde
+   * está la barra.
+   *
+   * Ninguno escribe: `n` abre el formulario y guardar sigue siendo un clic
+   * (R4). La navegación respeta los módulos apagados —mandar a una sección que
+   * no está en el lomo sería peor que no hacer nada (R17)—.
+   */
+  const conBarra = vista === 'resumen' || vista === 'movimientos'
+  useAtajos({
+    nuevo: () => openTx(),
+    ayuda: () => setAyuda(true),
+    ...(conBarra ? {} : { barra: () => nav('movimientos') }),
+    'ir-resumen': () => nav('resumen'),
+    'ir-movimientos': () => nav('movimientos'),
+    'ir-cuentas': () => nav('cuentas'),
+    'ir-flujo': () => irSiSeVe('flujo'),
+    'ir-presupuestos': () => irSiSeVe('presupuestos'),
+    'ir-notas': () => irSiSeVe('notas'),
+  })
+
+  function irSiSeVe(destino: View) {
+    if (profile && vistaVisible(destino, profile.modules)) nav(destino)
+  }
 
   if (profiles === null) {
     return (
@@ -286,6 +369,7 @@ export default function App() {
         stamp,
         openTx,
         editProfile: () => setProfileModal({ open: true, profile }),
+        perfilGuardado,
       }}
     >
       <div
@@ -297,7 +381,7 @@ export default function App() {
         <Sidebar
           profiles={profiles}
           profile={profile}
-          view={view}
+          view={vista}
           theme={theme}
           onCycleTheme={() => setTheme((t) => THEME_CYCLE[t])}
           onNav={nav}
@@ -306,35 +390,41 @@ export default function App() {
           onEditProfile={(p) => setProfileModal({ open: true, profile: p })}
           onRegister={() => openTx()}
         />
-        <main className="pagina" key={`${profile.id}-${view}`}>
-          {!vistaVisible(view, profile.modules) && (
+        <main className="pagina" key={`${profile.id}-${vista}`}>
+          {!vistaVisible(vista, profile.modules) && (
             <ModuloApagado
-              vista={view}
+              vista={vista}
               onEncender={() => setProfileModal({ open: true, profile })}
             />
           )}
-          {vistaVisible(view, profile.modules) && (
+          {vistaVisible(vista, profile.modules) && (
           <>
-          {view === 'resumen' && <Resumen onNav={nav} />}
-          {view === 'movimientos' && <Movimientos />}
-          {view === 'cuentas' && <Cuentas />}
-          {view === 'taxonomia' && <Taxonomia />}
-          {view === 'importar' && <Importar onVerMovimientos={() => nav('movimientos')} />}
-          {view === 'reportes' && <Reportes />}
-          {view === 'analisis' && <Analisis />}
-          {view === 'tarjetas' && <Tarjetas />}
-          {view === 'deudas' && <Deudas />}
-          {view === 'inversiones' && <Inversiones />}
-          {view === 'simulador' && <Simulador />}
-          {view === 'contrapartes' && <Contrapartes />}
-          {view === 'facturas' && <Facturas />}
-          {view === 'negocio' && <Negocio />}
-          {view === 'recurrencias' && <Recurrencias />}
-          {view === 'calendario' && <Calendario />}
-          {view === 'presupuestos' && <Presupuestos />}
-          {view === 'metas' && <Metas />}
-          {view === 'notas' && <Notas />}
-          {view === 'ajustes' && <Ajustes />}
+          {vista === 'resumen' && <Resumen onNav={nav} />}
+          {vista === 'movimientos' && <Movimientos />}
+          {vista === 'cuentas' && <Cuentas />}
+          {vista === 'taxonomia' && <Taxonomia />}
+          {vista === 'importar' && <Importar onVerMovimientos={() => nav('movimientos')} />}
+          {vista === 'reportes' && <Reportes />}
+          {vista === 'analisis' && <Analisis />}
+          {vista === 'tarjetas' && <Tarjetas />}
+          {vista === 'deudas' && <Deudas />}
+          {vista === 'bienes' && <Bienes />}
+          {vista === 'inversiones' && <Inversiones />}
+          {vista === 'simulador' && <Simulador />}
+          {vista === 'contrapartes' && <Contrapartes />}
+          {vista === 'cotizaciones' && <Cotizaciones />}
+          {vista === 'facturas' && <Facturas />}
+          {vista === 'negocio' && <Negocio onNav={nav} />}
+          {vista === 'inmuebles' && <Inmuebles onNav={nav} />}
+          {vista === 'horas' && <Horas onNav={nav} />}
+          {vista === 'inventario' && <Inventario onNav={nav} />}
+          {vista === 'recurrencias' && <Recurrencias />}
+          {vista === 'calendario' && <Calendario />}
+          {vista === 'flujo' && <Flujo onNav={nav} />}
+          {vista === 'presupuestos' && <Presupuestos />}
+          {vista === 'metas' && <Metas />}
+          {vista === 'notas' && <Notas />}
+          {vista === 'ajustes' && <Ajustes />}
           </>
           )}
         </main>
@@ -342,10 +432,13 @@ export default function App() {
         {txModal.open && (
           <TxModal
             tx={txModal.tx}
+            borrador={txModal.borrador}
             onClose={() => setTxModal({ open: false, tx: null })}
             onSaved={bump}
           />
         )}
+
+        {ayuda && <Atajos onClose={() => setAyuda(false)} />}
 
         {profileModal.open && (
           <ProfileModal

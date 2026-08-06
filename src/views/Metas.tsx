@@ -3,6 +3,7 @@ import { api } from '../api.ts'
 import { useApp } from '../context.ts'
 import { useFetch } from '../hooks.ts'
 import { fmtDate, fmtMoney, parseAmount, todayISO } from '../format.ts'
+import type { Account } from '../../shared/types.ts'
 import { Money } from '../components/Money.tsx'
 import { Modal } from '../components/Modal.tsx'
 import type { Goal } from '../../shared/types.ts'
@@ -21,8 +22,10 @@ function GoalModal({
   const [target, setTarget] = useState(goal ? (goal.targetCents / 100).toFixed(2) : '')
   const [dueDate, setDueDate] = useState(goal?.dueDate ?? '')
   const [note, setNote] = useState(goal?.note ?? '')
+  const [accountId, setAccountId] = useState<number>(goal?.accountId ?? 0)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const { data: cuentas } = useFetch(() => api.accounts.list(profile.id), [profile.id])
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -38,6 +41,7 @@ function GoalModal({
           targetCents: cents,
           dueDate: dueDate || null,
           note: note.trim(),
+          accountId: accountId || null,
         })
       } else {
         await api.goals.create({
@@ -46,6 +50,7 @@ function GoalModal({
           targetCents: cents,
           dueDate: dueDate || null,
           note: note.trim(),
+          accountId: accountId || null,
         })
       }
       stamp(goal ? 'Actualizada' : 'Apuntada')
@@ -90,8 +95,23 @@ function GoalModal({
           </label>
         </div>
         <label className="campo">
-          <span className="campo-label">Nota</span>
-          <input className="campo-input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Opcional" />
+          <span className="campo-label">¿Dónde vive este dinero?</span>
+          <select
+            className="campo-input"
+            value={accountId}
+            onChange={(e) => setAccountId(Number(e.target.value))}
+          >
+            <option value={0}>En ningún lado todavía (solo apuntar)</option>
+            {(cuentas ?? [])
+              .filter((a: Account) => !a.archived)
+              .map((a: Account) => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+          </select>
+          <span className="campo-ayuda">
+            Con una cuenta, cada aporte mueve el dinero de verdad. Sin ella, la meta es un
+            apunte: llevas la cuenta mentalmente y Finply te lo dice así.
+          </span>
         </label>
         {error && <p className="forma-error" role="alert">{error}</p>}
         <footer className="forma-pie">
@@ -114,13 +134,17 @@ function GoalEntryModal({
   onClose: () => void
   onSaved: () => void
 }) {
-  const { stamp } = useApp()
+  const { profile, stamp } = useApp()
   const remaining = Math.max(0, goal.targetCents - goal.savedCents)
-  const [amount, setAmount] = useState(remaining > 0 ? (remaining / 100).toFixed(2) : '')
+  const [amount, setAmount] = useState(
+    goal.porMesCents ? (goal.porMesCents / 100).toFixed(2) : remaining > 0 ? (remaining / 100).toFixed(2) : '',
+  )
   const [date, setDate] = useState(todayISO())
   const [note, setNote] = useState('')
+  const [origenId, setOrigenId] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const { data: cuentas } = useFetch(() => api.accounts.list(profile.id), [profile.id])
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -129,7 +153,12 @@ function GoalEntryModal({
     setSaving(true)
     setError(null)
     try {
-      const updated = await api.goals.addEntry(goal.id, { amountCents: cents, date, note: note.trim() })
+      const updated = await api.goals.addEntry(goal.id, {
+        amountCents: cents,
+        date,
+        note: note.trim(),
+        accountId: origenId || null,
+      })
       stamp(updated.status === 'cumplida' && goal.status !== 'cumplida' ? '¡Meta cumplida!' : 'Aportado')
       onSaved()
       onClose()
@@ -145,6 +174,9 @@ function GoalEntryModal({
         <p className="forma-nota">
           Llevas <strong className="cifra-chica">{fmtMoney(goal.savedCents)}</strong> de{' '}
           {fmtMoney(goal.targetCents)}.
+          {goal.porMesCents !== null && goal.porMesCents > 0 && (
+            <> Para llegar a tiempo hacen falta {fmtMoney(goal.porMesCents)} al mes.</>
+          )}
         </p>
         <div className="campos-2">
           <label className="campo">
@@ -165,6 +197,27 @@ function GoalEntryModal({
             <input type="date" className="campo-input" value={date} onChange={(e) => setDate(e.target.value)} />
           </label>
         </div>
+        <label className="campo">
+          <span className="campo-label">¿De qué cuenta sale?</span>
+          <select
+            className="campo-input"
+            value={origenId}
+            onChange={(e) => setOrigenId(Number(e.target.value))}
+            disabled={!goal.accountId}
+          >
+            <option value={0}>De ninguna (solo apuntarlo)</option>
+            {(cuentas ?? [])
+              .filter((a: Account) => !a.archived && a.id !== goal.accountId)
+              .map((a: Account) => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+          </select>
+          <span className="campo-ayuda">
+            {goal.accountId
+              ? `Se asienta un traspaso a ${goal.accountName}. Sin cuenta, el aporte es solo un apunte.`
+              : 'Esta meta todavía no dice dónde vive su dinero: elígela al editarla para poder moverlo.'}
+          </span>
+        </label>
         <label className="campo">
           <span className="campo-label">Nota</span>
           <input className="campo-input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Opcional" />
@@ -235,6 +288,28 @@ function GoalCard({ goal, index }: { goal: Goal; index: number }) {
         {goal.status !== 'cumplida' && <> · faltan {fmtMoney(remaining)}</>}
         <span className="cifra-chica"> · {pct.toFixed(0)} %</span>
       </p>
+      {/*
+        H1. Antes, lo apartado no salía de ningún lado y el mismo peso se
+        contaba dos veces entre esta vista y la de Cuentas. Ahora se dice
+        cuánto de esto es dinero movido de verdad y cuánto es un apunte.
+      */}
+      {goal.status !== 'cumplida' && (
+        <p className="meta-respaldo">
+          {goal.accountId === null ? (
+            <>Es un apunte: este dinero no sale de ninguna cuenta.</>
+          ) : goal.respaldadoCents >= goal.savedCents ? (
+            <>Respaldado en {goal.accountName}.</>
+          ) : (
+            <>
+              Solo <Money cents={goal.respaldadoCents} className="cifra-chica" /> salieron de
+              una cuenta; el resto es apunte.
+            </>
+          )}
+          {goal.porMesCents !== null && goal.porMesCents > 0 && (
+            <> Para llegar a tiempo: <Money cents={goal.porMesCents} className="cifra-chica" /> al mes.</>
+          )}
+        </p>
+      )}
 
       <footer className="deuda-pie">
         {goal.status !== 'cumplida' && (

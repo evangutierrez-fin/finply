@@ -17,12 +17,16 @@ import type { ProfileKind } from './types.ts'
 export type ModuloId =
   | 'tarjetas'
   | 'deudas'
+  | 'bienes'
   | 'inversiones'
   | 'recurrencias'
   | 'presupuestos'
   | 'metas'
   | 'notas'
   | 'negocio'
+  | 'inmuebles'
+  | 'horas'
+  | 'inventario'
 
 export interface Modulo {
   id: ModuloId
@@ -56,6 +60,13 @@ export const MODULOS: readonly Modulo[] = [
     label: 'Deudas y préstamos',
     descripcion: 'Lo que debes y lo que te deben, con tasa, plazo y tabla de amortización.',
     vistas: ['deudas'],
+    omision: TODOS,
+  },
+  {
+    id: 'bienes',
+    label: 'Bienes',
+    descripcion: 'La casa, el auto o la herramienta: lo que costaron y lo que valen hoy.',
+    vistas: ['bienes'],
     omision: TODOS,
   },
   {
@@ -99,9 +110,44 @@ export const MODULOS: readonly Modulo[] = [
     id: 'negocio',
     label: 'Negocio',
     descripcion:
-      'Clientes y proveedores, facturas con vencimiento, antigüedad de saldos, estado de resultados y flujo proyectado.',
-    vistas: ['contrapartes', 'facturas', 'negocio'],
+      'Clientes y proveedores, cotizaciones, facturas con vencimiento, antigüedad de saldos, estado de resultados y flujo proyectado.',
+    vistas: ['contrapartes', 'cotizaciones', 'facturas', 'negocio'],
     omision: ['negocio'],
+  },
+  // ── Módulos de giro (Fase 15) ─────────────────────────────────────────
+  //
+  // Los tres nacen **apagados para todo el mundo** (`omision` vacía), y esa es
+  // toda la diferencia con los de arriba: cada uno es inútil para casi
+  // cualquiera y decisivo para algunos. Un libro personal no tiene por qué
+  // cargar con un almacén, y una panadería no tiene por qué cargar con horas
+  // facturables.
+  //
+  // Nacer apagados no los esconde: aparecen con su descripción en el alta del
+  // perfil y en Ajustes, que es donde se encienden. Y encenderlos no exige
+  // migración porque las tablas ya existen (D16).
+  {
+    id: 'inmuebles',
+    label: 'Inmuebles en renta',
+    descripcion:
+      'Inquilino, renta, depósito y mantenimiento de una propiedad que ya llevas como bien, y cuánto deja de verdad.',
+    vistas: ['inmuebles'],
+    omision: [],
+  },
+  {
+    id: 'horas',
+    label: 'Horas facturables',
+    descripcion:
+      'Horas por cliente con su tarifa, cuánto llevas trabajado sin cobrar, y de ahí la factura.',
+    vistas: ['horas'],
+    omision: [],
+  },
+  {
+    id: 'inventario',
+    label: 'Inventario simple',
+    descripcion:
+      'Entradas, salidas, qué vale lo que tienes y cuánto costó lo que vendiste, a costo promedio.',
+    vistas: ['inventario'],
+    omision: [],
   },
 ]
 
@@ -120,6 +166,11 @@ export const VISTAS_NUCLEO: readonly string[] = [
   'reportes',
   'analisis',
   'importar',
+  // "¿Llego a fin de mes?" no es de un módulo: se contesta con las cuentas, que
+  // son núcleo. Los módulos la **alimentan** —recurrencias, tarjetas, deudas,
+  // facturas— y cuando el que más aporta está apagado, la vista lo dice en vez
+  // de proyectar sobre nada.
+  'flujo',
   'ajustes',
 ]
 
