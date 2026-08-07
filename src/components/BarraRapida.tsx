@@ -5,7 +5,7 @@ import { rotuloCategoria } from '../../shared/taxonomia.ts'
 import { api } from '../api.ts'
 import { useApp } from '../context.ts'
 import { useAtajos } from '../atajos.ts'
-import { fmtDate, fmtMoney, parseAmount, todayISO } from '../format.ts'
+import { fmtDate, fmtMoney, mensajeMonto, parseAmount, todayISO } from '../format.ts'
 
 /**
  * Registrar en una línea.
@@ -139,7 +139,7 @@ export function BarraRapida() {
   const registrar = async (e: React.FormEvent) => {
     e.preventDefault()
     const cents = parseAmount(amount)
-    if (!cents) return setError('Escribe un monto, por ejemplo 250 o 1,250.50')
+    if (!cents) return setError(mensajeMonto(amount, 'Escribe un monto, por ejemplo 250 o 1,250.50'))
     if (!accountId) return setError('Elige de qué cuenta salió')
     if (enVuelo.current) return
     enVuelo.current = true

@@ -83,6 +83,10 @@ export const MUESTRAS_PROMEDIO = 3
 export function promediosDe(ids: number[]): Map<number, { cents: number; muestras: number }> {
   const mapa = new Map<number, { cents: number; muestras: number }>()
   if (ids.length === 0) return mapa
+  // Con la lista vacía no se consulta nada, y por eso los llamadores le pasan
+  // **solo las plantillas de monto variable**: quien no usa el promedio no
+  // paga su consulta (R11), y quien sí lo usa no puede recibir la columna fija
+  // en su lugar (D14).
   const filas = db
     .prepare(
       `SELECT recurrence_id, CAST(ROUND(AVG(amount_cents)) AS INTEGER) AS cents,
@@ -207,6 +211,16 @@ function filas(profileId: number): any[] {
 }
 
 /**
+ * Las plantillas cuyo monto sale del promedio. Es lo único que hay que
+ * consultar: para una de monto fijo, `montoPropuesto` devuelve la columna sin
+ * mirar el historial, así que pedirlo sería una consulta que no cambia nada. En
+ * un libro sin monto variable —la mayoría— la lista va vacía y no se consulta.
+ */
+function variables(rows: any[]): number[] {
+  return rows.filter((r) => r.amount_mode === 'promedio').map((r) => r.id as number)
+}
+
+/**
  * Las plantillas del perfil, cada una con lo que le falta por confirmar y con
  * su próxima fecha. Las cuentas de periodos se hacen en JS, no en SQL, por la
  * misma razón que las inversiones en los reportes: no es una suma, es una
@@ -219,14 +233,20 @@ export function listar(
 ): Recurrencia[] {
   const rows = filas(profileId)
   const recs = rows.map(mapRecurrencia)
-  // Las alertas del Resumen no enseñan etiquetas ni montos propuestos, así que
-  // no los piden: dos consultas menos por carga, que es de lo que trata R11.
-  // La misma bandera cubre las dos porque las dos las pide la misma vista.
-  const completo = opciones.etiquetas !== false
-  if (completo) adjuntarEtiquetas(recs)
+  // Las alertas del Resumen no enseñan etiquetas, así que no las piden: una
+  // consulta menos por carga, que es de lo que trata R11.
+  //
+  // ⚠ El **promedio ya no cuelga de esa bandera**. Colgaba, y entonces
+  // `montoPropuestoCents` de una plantilla de monto variable se quedaba en la
+  // columna fija justo para quien llamaba con `etiquetas: false`: la bandeja y
+  // el calendario anunciaban $900 y la alerta del Resumen sumaba $100 por
+  // partida. Es lo que D14 prohíbe —dos pantallas no pueden decir dos cifras de
+  // la misma partida—, y ahorrarse una consulta no lo justifica. Lo que sí se
+  // conserva es no pagarla cuando no sirve: solo se consultan las variables.
+  if (opciones.etiquetas !== false) adjuntarEtiquetas(recs)
   const ids = recs.map((r) => r.id)
   const resueltos = resueltosDe(ids)
-  const promedios = completo ? promediosDe(ids) : new Map()
+  const promedios = promediosDe(variables(rows))
   const horizonte = sumarDias(hoy, HORIZONTE_DIAS)
 
   recs.forEach((rec, i) => {
@@ -290,7 +310,7 @@ export function bandeja(
   adjuntarEtiquetas(recs)
   const ids = recs.map((r) => r.id)
   const resueltos = resueltosDe(ids)
-  const promedios = promediosDe(ids)
+  const promedios = promediosDe(variables(rows))
 
   const todas: Propuesta[] = []
   let truncado = false
@@ -598,7 +618,8 @@ export function asentar(
   // Sin ajuste manda lo que la bandeja propuso, que con monto variable **no**
   // es `amount_cents`. Si aquí se leyera la columna, la vista enseñaría el
   // promedio y el libro guardaría el fijo: dos cifras para la misma partida.
-  const amountCents = ajustes.amountCents ?? montoPropuesto(row, promediosDe([id]).get(id))
+  const amountCents =
+    ajustes.amountCents ?? montoPropuesto(row, promediosDe(variables([row])).get(id))
   const etiquetas =
     ajustes.tagIds ??
     (

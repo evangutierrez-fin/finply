@@ -311,6 +311,9 @@ export function describirRecurrencia(regla: ReglaRecurrencia): string {
     case 'semanal':
       return `Cada semana, los ${DIAS_SEMANA[r.weekday! - 1]}`
     case 'anual':
-      return `Cada año, el ${r.dayOfMonth} de ${MESES_LARGOS[r.monthOfYear! - 1]}`
+      // Con `diaTexto`, como las otras tres: el día 31 se recorta al último del
+      // mes al generar la fecha, así que anunciar "el 31 de febrero" describía
+      // un día que la propia plantilla nunca propone.
+      return `Cada año, ${diaTexto(r.dayOfMonth!)} de ${MESES_LARGOS[r.monthOfYear! - 1]}`
   }
 }

@@ -353,3 +353,128 @@ describe('respaldo', () => {
     assert.deepEqual(traducirError(new Error('tronó')), { status: 500, error: 'tronó' })
   })
 })
+
+/**
+ * Lo que el respaldo trae dentro y la base sí acepta.
+ *
+ * La segunda vuelta de la auditoría dejó esto escrito como hueco conocido, y la
+ * decisión de fondo no cambió: **se restaura**. Negarse a restaurar el respaldo
+ * de alguien es peor que restaurarlo con un renglón torcido — ese archivo puede
+ * ser lo único que le queda. Lo que cambió es que deja de ser un hueco callado,
+ * y que lo único que no entra tal cual es lo que dejaría el libro sin abrir.
+ *
+ * ⚠ Cada prueba arranca su propio libro: el respaldo se lleva **todos** los
+ * perfiles, así que un archivo exportado aquí trae también lo que dejaron las
+ * pruebas de arriba. Por eso el renglón que se tuerce se busca por su concepto
+ * y no por su posición.
+ */
+describe('el respaldo dice qué traía dentro', () => {
+  const CONCEPTO = 'Renglón a torcer'
+
+  /** Un respaldo real con un renglón conocido, torcido a mano como uno viejo. */
+  async function respaldoCon(nombre: string, torcer: (fila: any) => void) {
+    const { perfil, cuenta, categorias } = await libroBase(c, nombre)
+    const gasto = categorias.find((cat: any) => cat.kind === 'gasto')
+    await c.post('/api/transactions', {
+      profileId: perfil.id, accountId: cuenta.id, type: 'gasto',
+      amountCents: 12_345, date: '2026-07-10', categoryId: gasto.id, note: CONCEPTO,
+    })
+    const respaldo = (await c.get('/api/respaldo')).body
+    const fila = respaldo.tables.transactions.find(
+      (t: any) => t.profile_id === perfil.id && t.note === CONCEPTO,
+    )
+    assert.ok(fila, 'no se encontró el renglón recién creado en el respaldo')
+    torcer(fila)
+    return { respaldo, perfil }
+  }
+
+  /** El renglón conocido, ya restaurado. */
+  async function elRenglon(perfilId: number) {
+    const movs = (await c.get(`/api/transactions?profileId=${perfilId}`)).body
+    return movs.find((t: any) => t.note === CONCEPTO)
+  }
+
+  test('un respaldo sano no inventa hallazgos', async () => {
+    const { respaldo } = await respaldoCon('Sano', () => {})
+    const res = await c.post('/api/respaldo/restaurar', respaldo)
+    assert.equal(res.status, 200)
+    assert.deepEqual(res.body.revision, { fechas: 0, montos: 0, ejemplos: [] })
+  })
+  test('las marcas de tiempo no cuentan como fecha torcida', async () => {
+    // `created_at` lleva hora y no es un día del calendario: contarlo habría
+    // marcado como sospechoso cada renglón de todo respaldo sano.
+    const { respaldo } = await respaldoCon('Marcas', () => {})
+    assert.ok(String(respaldo.tables.profiles[0].created_at).includes(':'))
+    assert.equal((await c.post('/api/respaldo/restaurar', respaldo)).body.revision.fechas, 0)
+  })
+  test('una fecha que no existe se restaura tal cual, se cuenta y se señala', async () => {
+    // El 30 de febrero: cumple la forma, ordena como texto y se vuelve el 2 de
+    // marzo en cuanto algo cuenta días con ella. Entraba a los libros antes del
+    // hallazgo 4 y el validador de hoy ya no la deja pasar.
+    const { respaldo, perfil } = await respaldoCon('FechaVieja', (f) => {
+      f.date = '2026-02-30'
+    })
+    const res = await c.post('/api/respaldo/restaurar', respaldo)
+    assert.equal(res.status, 200, 'se negó a restaurar, que es lo que no debe hacer')
+
+    const suyo = res.body.revision.ejemplos.filter(
+      (h: any) => h.motivo === 'fecha' && h.valor === '2026-02-30',
+    )
+    assert.equal(suyo.length, 1)
+    assert.equal(suyo[0].tabla, 'transactions')
+    assert.equal(suyo[0].columna, 'date')
+    assert.ok(res.body.revision.fechas >= 1)
+
+    // Y se restauró **tal cual**: la fecha de verdad solo la sabe el usuario.
+    const renglon = await elRenglon(perfil.id)
+    assert.ok(renglon, 'el movimiento no sobrevivió a la restauración')
+    assert.equal(renglon.date, '2026-02-30')
+    assert.equal(renglon.amountCents, 12_345, 'el monto no se tocó')
+  })
+  test('una cifra que el libro no puede releer entra en un centavo', async () => {
+    const { respaldo, perfil } = await respaldoCon('MontoViejo', (f) => {
+      f.amount_cents = Number.MAX_SAFE_INTEGER + 2
+    })
+    const res = await c.post('/api/respaldo/restaurar', respaldo)
+    assert.equal(res.status, 200)
+
+    const suyo = res.body.revision.ejemplos.filter((h: any) => h.motivo === 'monto')
+    assert.equal(suyo.length, 1)
+    assert.equal(suyo[0].tabla, 'transactions')
+    assert.equal(suyo[0].columna, 'amount_cents')
+    assert.equal(suyo[0].valor, String(Number.MAX_SAFE_INTEGER + 2), 'no dice lo que decía')
+
+    // La fila entera se conserva; solo el monto se aparta.
+    const renglon = await elRenglon(perfil.id)
+    assert.ok(renglon, 'la fila se perdió, que es lo que no debe pasar')
+    assert.equal(renglon.amountCents, 1, 'no quedó en un centavo')
+    assert.equal(renglon.date, '2026-07-10', 'lo demás del renglón sigue ahí')
+    assert.equal(renglon.note, CONCEPTO)
+  })
+
+  /**
+   * La razón de fondo del centavo, y la única que importa: con la cifra tal
+   * cual, `exportSnapshot` tronaba y el usuario se quedaba **sin puerta de
+   * salida** — un libro que no abre y del que ya no se puede sacar nada.
+   */
+  test('el libro restaurado se puede volver a respaldar', async () => {
+    const { respaldo } = await respaldoCon('SigueAbriendo', (f) => {
+      f.amount_cents = Number.MAX_SAFE_INTEGER + 2
+    })
+    assert.equal((await c.post('/api/respaldo/restaurar', respaldo)).status, 200)
+    assert.equal((await c.get('/api/respaldo')).status, 200, 'ya no se puede respaldar')
+  })
+  test('los ejemplos se recortan y el total no', async () => {
+    const { respaldo } = await respaldoCon('Muchos', () => {})
+    // Doce fechas imposibles en el mismo libro: más que los ejemplos que se
+    // devuelven, para ver que la cuenta grande no se recorta con ellos.
+    for (const t of respaldo.tables.transactions) t.date = '2026-13-01'
+    const total = respaldo.tables.transactions.length
+    assert.ok(total >= 12, `hacían falta doce renglones y hay ${total}`)
+
+    const res = await c.post('/api/respaldo/restaurar', respaldo)
+    assert.equal(res.status, 200)
+    assert.equal(res.body.revision.fechas, total, 'la cuenta grande se recortó')
+    assert.equal(res.body.revision.ejemplos.length, 8, 'un aviso no es un volcado')
+  })
+})

@@ -17,6 +17,7 @@
 // no se reescribe. Hay una prueba que cuenta las consultas.
 
 import { db, modulosDe } from './db.ts'
+import { almacen, mesDe as mesDeInventario } from './inventario.ts'
 import { presupuestosDelMes } from './presupuestos.ts'
 import type { ModuloId } from '../shared/modulos.ts'
 import { estadoTarjetas } from './tarjetas.ts'
@@ -194,7 +195,12 @@ function deRecurrencias(profileId: number, hoy: string): Alerta[] {
   const conPendientes = recs.filter((r) => r.pendientes > 0)
   const pendientes = conPendientes.reduce((s, r) => s + r.pendientes, 0)
   if (pendientes > 0) {
-    const monto = conPendientes.reduce((s, r) => s + r.pendientes * r.amountCents, 0)
+    // `montoPropuestoCents` y no `amountCents`: con monto variable son cifras
+    // distintas —la columna es el fijo de la plantilla y lo propuesto es el
+    // promedio de lo asentado—, y la que vale es la que la bandeja va a
+    // proponer. Con la columna, el Resumen anunciaba $500 de un atraso que el
+    // calendario y la bandeja valuaban en $4,500 (D14).
+    const monto = conPendientes.reduce((s, r) => s + r.pendientes * r.montoPropuestoCents, 0)
     alertas.push({
       tipo: 'recurrencia',
       severidad: 'media',
@@ -216,7 +222,7 @@ function deRecurrencias(profileId: number, hoy: string): Alerta[] {
       diasEntre(hoy, r.proximaFecha) <= DIAS_AVISO_RECURRENCIA,
   )
   if (proximas.length > 0) {
-    const monto = proximas.reduce((s, r) => s + r.amountCents, 0)
+    const monto = proximas.reduce((s, r) => s + r.montoPropuestoCents, 0)
     const una = proximas.length === 1 ? proximas[0]! : null
     alertas.push({
       tipo: 'recurrencia',
@@ -454,29 +460,28 @@ function deCotizaciones(profileId: number, hoy: string): Alerta[] {
 /**
  * El anaquel que se está vaciando. Solo habla de productos con mínimo puesto:
  * sin él, Finply no tiene forma de saber cuánto es poco para ese negocio.
+ *
+ * ⚠ La existencia sale de `almacen`, la misma que pinta la vista, y no de un
+ * `SUM` propio. Aquí había una segunda aritmética, y se separó en cuanto
+ * `recorrerExistencias` puso el piso en cero: con un libro que salió negativo
+ * —por un respaldo viejo o por borrar la entrada que surtía una salida— la
+ * vista decía "0 kg" y esta alerta decía "−10 kg" del mismo producto. Dos
+ * cifras de la misma cosa, que es justo lo que este archivo evita reusando
+ * `estadoTarjetas` y `listar` en vez de reescribirlos.
  */
-function deExistencias(profileId: number): Alerta[] {
-  const filas: any[] = db
-    .prepare(
-      `SELECT p.id, p.name, p.unit, p.min_qty_milli AS minimo,
-        COALESCE((SELECT SUM(CASE WHEN m.kind = 'salida' THEN -m.qty_milli ELSE m.qty_milli END)
-          FROM stock_moves m WHERE m.product_id = p.id), 0) AS existencia
-       FROM products p
-       WHERE p.profile_id = ? AND p.archived = 0 AND p.min_qty_milli IS NOT NULL
-       ORDER BY p.name ASC`,
-    )
-    .all(profileId)
-
-  return filas
-    .filter((p) => p.existencia < p.minimo)
+function deExistencias(profileId: number, hoy: string): Alerta[] {
+  const { desde, hasta } = mesDeInventario(hoy)
+  return almacen(profileId, desde, hasta)
+    .productos.filter((p) => !p.archived && p.bajoMinimo)
+    .sort((a, b) => a.name.localeCompare(b.name))
     .map((p) => ({
       tipo: 'existencias' as const,
-      severidad: p.existencia <= 0 ? ('alta' as const) : ('media' as const),
+      severidad: p.cantidadMilli <= 0 ? ('alta' as const) : ('media' as const),
       titulo:
-        p.existencia <= 0 ? `Te quedaste sin ${p.name}` : `Queda poco ${p.name}`,
+        p.cantidadMilli <= 0 ? `Te quedaste sin ${p.name}` : `Queda poco ${p.name}`,
       detalle:
-        `${cantidadTexto(p.existencia)} ${p.unit} contra un mínimo de ` +
-        `${cantidadTexto(p.minimo)}`,
+        `${cantidadTexto(p.cantidadMilli)} ${p.unit} contra un mínimo de ` +
+        `${cantidadTexto(p.minQtyMilli ?? 0)}`,
       montoCents: null,
       refId: p.id,
       vista: 'inventario' as const,
@@ -556,7 +561,7 @@ export function alertas(profileId: number, hoy = hoyISO()): Alerta[] {
     ...(con('recurrencias') ? deRecurrencias(profileId, hoy) : []),
     ...(con('metas') ? deMetas(profileId, hoy) : []),
     ...(con('inmuebles') ? deArrendamientos(profileId, hoy) : []),
-    ...(con('inventario') ? deExistencias(profileId) : []),
+    ...(con('inventario') ? deExistencias(profileId, hoy) : []),
     ...(con('negocio') ? deCotizaciones(profileId, hoy) : []),
   ].filter((a) => {
     const modulo = MODULO_DE[a.tipo]

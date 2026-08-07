@@ -15,6 +15,7 @@ const ETIQUETA: Record<TipoEvento, string> = {
   deuda: 'Deuda',
   msi: 'A meses',
   factura: 'Factura',
+  factura_recurrente: 'Factura por emitir',
   renta: 'Renta',
   // Aquí no aparece nunca: el calendario es lo que está **por confirmar**, y
   // un movimiento con fecha futura ya está asentado. Lo cuenta el flujo.

@@ -174,11 +174,24 @@ export function estadoDeResultados(
   // movimiento entero, así que sumarlo sobre las filas del reparto lo
   // multiplicaría por el número de renglones: un ticket dividido en tres
   // trasladaría el triple de IVA. Solo los montos se leen por renglón.
+  //
+  // ⚠ Y va con la regla de D6, no con `t.type` pelón. Una **devolución** es
+  // dinero que entra y cuenta del lado del gasto: su impuesto no es IVA que
+  // cobraste, es el IVA acreditable de la compra que se está deshaciendo.
+  // Sumándolo por el tipo, devolver una compra de $1,160 con $160 de IVA
+  // dejaba $160 trasladados y $160 acreditables donde lo correcto es cero y
+  // cero — el neto salía bien y los dos renglones que el estado de resultados
+  // enseña por separado estaban inflados los dos. Es el mismo `TIPO_OPERATIVO`
+  // que ya decide el lado de los montos, con el signo que le corresponde.
+  const IMPUESTO_OPERATIVO = `
+    CASE WHEN t.refund_of_id IS NOT NULL THEN -t.tax_cents ELSE t.tax_cents END`
   const impuestos: any = db
     .prepare(
       `SELECT
-        COALESCE(SUM(CASE WHEN t.type = 'ingreso' THEN t.tax_cents END), 0) AS trasladado,
-        COALESCE(SUM(CASE WHEN t.type = 'gasto' THEN t.tax_cents END), 0) AS acreditable
+        COALESCE(SUM(CASE WHEN ${TIPO_OPERATIVO} = 'ingreso' THEN ${IMPUESTO_OPERATIVO} END), 0)
+          AS trasladado,
+        COALESCE(SUM(CASE WHEN ${TIPO_OPERATIVO} = 'gasto' THEN ${IMPUESTO_OPERATIVO} END), 0)
+          AS acreditable
        FROM transactions t
        WHERE t.profile_id = ? AND t.date BETWEEN ? AND ?`,
     )

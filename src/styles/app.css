@@ -875,6 +875,10 @@ input, select { font: inherit; color: inherit; }
   align-items: center;
   gap: 10px;
 }
+/* h2 y h3 se ven igual: el nivel lo decide la estructura de cada vista —Metas
+   cuelga sus tarjetas del título, Deudas e Inversiones de un encabezado de
+   sección— y el tamaño no tiene por qué delatar esa diferencia. */
+.deuda-head h2,
 .deuda-head h3 {
   font-family: var(--f-display);
   font-size: 17px;
@@ -1610,6 +1614,28 @@ select.campo-input { cursor: pointer; }
 .ajustes-confirma-forma { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .ajustes-confirma-forma .campo-input { flex: 0 0 180px; }
 .ajustes-ok { margin-top: 14px; font-size: 14px; color: var(--verde); }
+
+/* Lo que el respaldo traía dentro. No es un error —se restauró todo— así que
+   no va en rojo: va en el ámbar de lo que conviene mirar. */
+.ajustes-revision {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--laton);
+  border-left-width: 3px;
+  border-radius: 8px;
+  background: var(--hoja-hover);
+}
+.ajustes-revision .ajustes-texto { margin: 0; }
+.ajustes-revision-lista {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--tinta-2);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ajustes-revision-lista code { font-size: 12.5px; }
 
 .vacio {
   display: flex;
@@ -2821,6 +2847,10 @@ select.campo-input { cursor: pointer; }
 .flujo-evento-monto { font-size: 14px; white-space: nowrap; }
 .cal-chip-movimiento { color: var(--tinta-2); border-color: var(--regla-fuerte); }
 .cal-chip-factura { color: var(--acento); border-color: var(--acento); }
+/* La que aún no se emite: el mismo tono con el borde punteado, porque es la
+   misma cosa en un estado anterior y no una categoría nueva. La forma del
+   borde carga la diferencia además del texto del chip, que ya la dice (R10). */
+.cal-chip-factura_recurrente { color: var(--acento); border-color: var(--acento); border-style: dashed; }
 
 /* Lo que el módulo apagado se lleva: se dice, no se calla (R17). */
 .flujo-falta {

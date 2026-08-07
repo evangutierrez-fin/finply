@@ -618,3 +618,158 @@ describe('aislamiento entre perfiles', () => {
     assert.deepEqual((await c.get(`/api/notes?profileId=${perfil.id}`)).body, [])
   })
 })
+
+/**
+ * Una fecha que no existe en el calendario no puede entrar al libro.
+ *
+ * No es un capricho de validador: las fechas de Finply son texto y **ordenan
+ * como texto**. Un movimiento con fecha '2026-13-45' baja el saldo de su
+ * cuenta y no cae en ningún mes del año, así que desaparece del reporte anual
+ * sin desaparecer del saldo — el libro deja de cuadrar y nada lo grita. Y
+ * '2026-02-30' se convierte en el 2 de marzo en cuanto alguien cuenta días con
+ * él, de modo que la misma partida cae en dos meses según quién la mire.
+ */
+describe('fechas que no existen', () => {
+  const imposibles = ['2026-13-45', '2026-00-10', '2026-02-30', '2025-02-29', '0026-01-01']
+
+  test('el mes 13, el día 45 y el 30 de febrero se rechazan', async () => {
+    const { perfil, cuenta } = await libroBase(c, 'Calendario')
+    for (const date of imposibles) {
+      const r = await c.post('/api/transactions', {
+        profileId: perfil.id, accountId: cuenta.id, type: 'gasto',
+        amountCents: 100, date, note: date,
+      })
+      assert.equal(r.status, 400, `${date} no debería entrar`)
+    }
+    // Y el libro sigue sin un solo movimiento raro dentro.
+    assert.deepEqual((await c.get(`/api/transactions?profileId=${perfil.id}`)).body, [])
+  })
+
+  test('el 29 de febrero de un bisiesto sí entra', async () => {
+    const { perfil, cuenta } = await libroBase(c, 'Bisiesto')
+    const r = await c.post('/api/transactions', {
+      profileId: perfil.id, accountId: cuenta.id, type: 'gasto',
+      amountCents: 100, date: '2028-02-29',
+    })
+    assert.equal(r.status, 201, '2028 es bisiesto: ese día existe')
+  })
+
+  test('la puerta es la misma para todo lo que lleva fecha', async () => {
+    const { perfil, cuenta } = await libroBase(c, 'Puertas')
+    const meta = (await c.post('/api/goals', { profileId: perfil.id, name: 'M', targetCents: 1000 })).body
+    const inv = (await c.post('/api/investments', { profileId: perfil.id, name: 'F', kind: 'fondo' })).body
+
+    const puertas: [string, unknown][] = [
+      [`/api/goals/${meta.id}/entries`, { amountCents: 100, date: '2026-02-31' }],
+      [`/api/investments/${inv.id}/entries`, {
+        profileId: perfil.id, type: 'aporte', amountCents: 100, date: '2026-02-31',
+      }],
+      ['/api/debts', {
+        profileId: perfil.id, direction: 'por_pagar', counterparty: 'X', concept: 'Y',
+        principalCents: 1000, startDate: '2026-02-31',
+      }],
+      ['/api/budgets', { profileId: perfil.id, categoryId: 1, period: '2026-13', amountCents: 1000 }],
+    ]
+    for (const [ruta, cuerpo] of puertas) {
+      const r = await c.post(ruta, cuerpo)
+      assert.equal(r.status, 400, `${ruta} dejó pasar una fecha imposible`)
+    }
+    assert.equal(cuenta.id > 0, true)
+  })
+})
+
+/**
+ * Tercera vuelta de la auditoría. Cinco hallazgos, cada uno reproducido por
+ * HTTP antes de tocar el código, y cada prueba corrida contra la versión sin
+ * arreglar para comprobar que ahí falla.
+ */
+describe('el techo del dinero', () => {
+  /**
+   * El peor modo de fallar que hay: el INSERT no se queja, la partida queda
+   * dentro del libro, y a partir de ahí `node:sqlite` se niega a devolver un
+   * entero que JavaScript no puede representar exacto. Ninguna pantalla puede
+   * enseñarla y ningún formulario puede corregirla.
+   */
+  test('una cifra por encima del entero seguro se rechaza, no se escribe', async () => {
+    const { perfil, cuenta, categorias } = await libroBase(c, 'Techo')
+    const gasto = categorias.find((k: any) => k.kind === 'gasto')
+    const r = await c.post('/api/transactions', {
+      profileId: perfil.id,
+      accountId: cuenta.id,
+      type: 'gasto',
+      amountCents: Number.MAX_SAFE_INTEGER + 2,
+      date: '2026-08-03',
+      categoryId: gasto.id,
+    })
+    assert.equal(r.status, 400, 'pasó una cifra que el libro no puede releer')
+
+    // Y el libro sigue legible, que es la mitad que importa.
+    const listado = await c.get(`/api/transactions?profileId=${perfil.id}`)
+    assert.equal(listado.status, 200)
+    assert.equal(listado.body.length, 0)
+    const cuentas = await c.get(`/api/accounts?profileId=${perfil.id}`)
+    assert.equal(cuentas.body[0].balanceCents, cuenta.openingCents)
+  })
+
+  test('el techo cubre las demás puertas de dinero, no solo el movimiento', async () => {
+    const { perfil, cuenta } = await libroBase(c, 'Techo2')
+    const enorme = Number.MAX_SAFE_INTEGER + 2
+    const puertas: [string, unknown][] = [
+      ['/api/accounts', { profileId: perfil.id, name: 'Gorda', type: 'banco', openingCents: enorme }],
+      ['/api/debts', {
+        profileId: perfil.id, direction: 'por_pagar', counterparty: 'X',
+        principalCents: enorme, startDate: '2026-01-01',
+      }],
+      ['/api/goals', { profileId: perfil.id, name: 'Meta', targetCents: enorme }],
+      [`/api/tarjetas/msi`, {
+        profileId: perfil.id, accountId: cuenta.id, totalCents: enorme,
+        months: 12, purchaseDate: '2026-01-01',
+      }],
+    ]
+    for (const [ruta, cuerpo] of puertas) {
+      const r = await c.post(ruta, cuerpo)
+      assert.equal(r.status, 400, `${ruta} dejó pasar una cifra imposible`)
+    }
+  })
+
+  /**
+   * El import escribe **sin pasar por el validador de la API**, así que tiene
+   * que traer el techo puesto. Sin él, `parseMonto` devolvía `1e22` —finito, no
+   * entero seguro— y el saldo de la cuenta dejaba de ser un entero de centavos.
+   */
+  test('el CSV tampoco cuela una cifra que rompa el saldo', async () => {
+    const { perfil, cuenta } = await libroBase(c, 'TechoCsv')
+    const csv = 'fecha,monto,concepto\n2026-08-03,99999999999999999999,gordo\n'
+    const cuerpo = {
+      profileId: perfil.id,
+      csv,
+      cuentaPorOmision: cuenta.id,
+      crearCategorias: false,
+      crearEtiquetas: false,
+      omitirDuplicadas: true,
+    }
+    const previa = await c.post('/api/importaciones/previsualizar', cuerpo)
+    assert.equal(previa.status, 200)
+    assert.equal(previa.body.filas[0].estado, 'error', 'la vista previa la dio por buena')
+    assert.match(previa.body.filas[0].motivo, /Monto ilegible/)
+
+    const escrito = await c.post('/api/importaciones', { ...cuerpo, huella: previa.body.huella })
+    assert.equal(escrito.status, 400, 'no había nada legible que importar')
+    const cuentas = await c.get(`/api/accounts?profileId=${perfil.id}`)
+    assert.equal(cuentas.body[0].balanceCents, cuenta.openingCents, 'el saldo se movió')
+  })
+
+  test('un millón de pesos —una cifra grande de verdad— sigue entrando', async () => {
+    const { perfil, cuenta, categorias } = await libroBase(c, 'TechoOk')
+    const gasto = categorias.find((k: any) => k.kind === 'gasto')
+    const r = await c.post('/api/transactions', {
+      profileId: perfil.id,
+      accountId: cuenta.id,
+      type: 'gasto',
+      amountCents: 1_000_000_00,
+      date: '2026-08-03',
+      categoryId: gasto.id,
+    })
+    assert.equal(r.status, 201, 'el techo no puede estorbarle a un libro real')
+  })
+})

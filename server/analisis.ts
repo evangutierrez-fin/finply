@@ -32,7 +32,7 @@ import {
   ingresoPorCategoriaAgrupado,
   tasaDeAhorro,
 } from './reportes.ts'
-import { hoyISO } from '../shared/fechas.ts'
+import { correrMesTexto, hoyISO, mesesEntreTexto } from '../shared/fechas.ts'
 import { mediana, tendencia } from '../shared/estadistica.ts'
 import type { Analisis } from '../shared/types.ts'
 
@@ -51,20 +51,6 @@ export const TIPOS_LIQUIDOS = new Set(['efectivo', 'banco', 'ahorro'])
  * y la cifra elegida va escrita junto al resultado.
  */
 export const UMBRAL_HORMIGA_CENTS = 20_000
-
-/** Mueve un 'AAAA-MM' N meses. */
-function correrMes(month: string, delta: number): string {
-  const [y, m] = month.split('-').map(Number)
-  const total = y! * 12 + (m! - 1) + delta
-  return `${Math.floor(total / 12)}-${String((((total % 12) + 12) % 12) + 1).padStart(2, '0')}`
-}
-
-/** Meses entre dos 'AAAA-MM', contando los dos extremos. */
-function mesesEntre(desde: string, hasta: string): number {
-  const [ya, ma] = desde.split('-').map(Number)
-  const [yb, mb] = hasta.split('-').map(Number)
-  return (yb! * 12 + mb!) - (ya! * 12 + ma!) + 1
-}
 
 /**
  * Gasto operativo partido por origen: el que nació de una recurrencia contra
@@ -258,8 +244,8 @@ export function analisis(
   hoy = hoyISO(),
   umbralHormigaCents = UMBRAL_HORMIGA_CENTS,
 ): Analisis {
-  const hasta = correrMes(hoy.slice(0, 7), -1)
-  const pedido = correrMes(hasta, -(meses - 1))
+  const hasta = correrMesTexto(hoy.slice(0, 7), -1)
+  const pedido = correrMesTexto(hasta, -(meses - 1))
   const primero = primerMes(profileId)
 
   const liquidoCents = liquidoDe(profileId)
@@ -294,7 +280,7 @@ export function analisis(
   }
 
   const desde = primero > pedido ? primero : pedido
-  const cerrados = mesesEntre(desde, hasta)
+  const cerrados = mesesEntreTexto(desde, hasta)
 
   const porMes = ingresoGastoPorMes(profileId, desde, hasta)
   let incomeCents = 0
@@ -315,7 +301,7 @@ export function analisis(
   // La serie mes a mes, con los huecos en cero: un mes sin movimiento existió
   // igual, y saltárselo movería la recta como si el tiempo no hubiera pasado.
   const serie = []
-  for (let m = desde; m <= hasta; m = correrMes(m, 1)) {
+  for (let m = desde; m <= hasta; m = correrMesTexto(m, 1)) {
     const { ingreso, gasto } = porMes.get(m) ?? { ingreso: 0, gasto: 0 }
     serie.push({ month: m, incomeCents: ingreso, expenseCents: gasto })
   }

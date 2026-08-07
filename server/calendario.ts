@@ -10,10 +10,17 @@
 import { db, modulosDe } from './db.ts'
 import type { ModuloId } from '../shared/modulos.ts'
 import { SALDO_FACTURA } from './facturas.ts'
+import { reglaDe as reglaDeFactura } from './facturas-recurrentes.ts'
 import { estadoTarjetas } from './tarjetas.ts'
 import { montoPropuesto, promediosDe, reglaDe } from './recurrencias.ts'
 import { tablaAmortizacion } from '../shared/credito.ts'
-import { hoyISO, proximoDiaDelMes, siguienteDiaDelMes, sumarDias } from '../shared/fechas.ts'
+import {
+  hoyISO,
+  partesFecha,
+  proximoDiaDelMes,
+  siguienteDiaDelMes,
+  sumarDias,
+} from '../shared/fechas.ts'
 import { describirRecurrencia, ocurrencias } from '../shared/recurrencias.ts'
 import type { Calendario, EventoCalendario } from '../shared/types.ts'
 
@@ -258,11 +265,121 @@ function deFacturas(profileId: number, desde: string, hasta: string): EventoCale
 }
 
 /**
- * Las rentas que caen en la ventana. Entran por lo mismo que las facturas y
- * las deudas (D9): el calendario junta lo que Finply **ya sabe** que va a caer,
- * y una renta pactada es de lo más seguro que hay.
+ * Las facturas que una plantilla va a emitir y que **todavía no se han
+ * emitido**. Es al documento lo que `deRecurrencias` es al movimiento.
  *
- * ⚠ Si el usuario además guardó la renta como recurrencia, saldrá dos veces:
+ * Faltaba, y la asimetría se veía: un gasto recurrente sin confirmar aparecía
+ * en el calendario y en el flujo, y la iguala del mes —que es la entrada más
+ * segura que tiene un negocio— no aparecía en ninguno de los dos hasta que
+ * alguien la emitía a mano. La respuesta a "¿llego a fin de mes?" se quedaba
+ * corta justo del lado de lo que va a entrar.
+ *
+ * Tres decisiones, y las tres son de las que se pagan caras si se toman al
+ * revés:
+ *
+ *   1. **El evento cae en la fecha de cobro, no en la de emisión.** Emitir no
+ *      mueve un peso (D14): el dinero llega a los días de crédito. Ponerlo en
+ *      la fecha de emisión metería en la caja de hoy un cobro de dentro de un
+ *      mes, que es exactamente el error que el flujo existe para no cometer.
+ *   2. **Solo las plantillas con días de crédito.** Sin ellos, la factura que
+ *      salga nace sin vencimiento y `deFacturas` tampoco dice nada de ella —no
+ *      hay fecha que proyectar—. Inventarle una supondría que te pagan el mismo
+ *      día, y de los dos errores posibles ese es el que infla la caja.
+ *   3. **El periodo resuelto se salta.** En cuanto se emite, la factura existe
+ *      y `deFacturas` la anuncia por su saldo. Sin esto, el mismo cobro saldría
+ *      dos veces —la plantilla y el documento— igual que pasó con las rentas.
+ *
+ * El monto es lo **cobrable**: total menos retenciones, la misma definición de
+ * `COBRABLE`. Lo retenido no lo va a mandar el cliente.
+ *
+ * ⚠ Se generan las ocurrencias desde `hoy − días de crédito` y no desde `hoy`:
+ * un periodo que se debió emitir la semana pasada y sigue en la bandeja cobra
+ * dentro de la ventana, y mirar solo hacia adelante lo habría perdido.
+ */
+function deFacturasRecurrentes(
+  profileId: number,
+  desde: string,
+  hasta: string,
+): EventoCalendario[] {
+  const filas: any[] = db
+    .prepare(
+      `SELECT r.*, c.name AS contraparte
+       FROM invoice_recurrences r
+       JOIN counterparties c ON c.id = r.counterparty_id
+       WHERE r.profile_id = ? AND r.archived = 0 AND r.credit_days IS NOT NULL`,
+    )
+    .all(profileId)
+  if (filas.length === 0) return []
+
+  const ids = filas.map((r) => r.id)
+  const resueltos = new Set(
+    (
+      db
+        .prepare(
+          `SELECT recurrence_id, period FROM invoice_recurrence_runs
+           WHERE recurrence_id IN (${ids.map(() => '?').join(',')})`,
+        )
+        .all(...ids) as { recurrence_id: number; period: string }[]
+    ).map((f) => `${f.recurrence_id}·${f.period}`),
+  )
+
+  const eventos: EventoCalendario[] = []
+  for (const r of filas) {
+    const credito = r.credit_days as number
+    const cobrable = Math.max(
+      0,
+      r.subtotal_cents + r.tax_cents - r.withheld_tax_cents - r.withheld_income_cents,
+    )
+    if (cobrable === 0) continue
+    const emitida = r.direction === 'emitida'
+    for (const o of ocurrencias(reglaDeFactura(r), { desde: sumarDias(desde, -credito), hasta })
+      .lista) {
+      if (resueltos.has(`${r.id}·${o.periodo}`)) continue
+      const cobro = sumarDias(o.fecha, credito)
+      if (cobro < desde || cobro > hasta) continue
+      eventos.push({
+        fecha: cobro,
+        tipo: 'factura_recurrente',
+        titulo: emitida ? `Cobrar a ${r.contraparte}` : `Pagar a ${r.contraparte}`,
+        detalle:
+          `${r.concept || 'Factura recurrente'} · sin emitir todavía, ` +
+          `a ${credito} ${credito === 1 ? 'día' : 'días'} de la emisión del ${fechaCorta(o.fecha)}`,
+        montoCents: cobrable,
+        refId: r.id as number,
+        direccion: emitida ? 'entra' : 'sale',
+        periodo: o.periodo,
+      })
+    }
+  }
+  return eventos
+}
+
+/** El día y el mes de una fecha, para meterla dentro de una frase. */
+function fechaCorta(iso: string): string {
+  const { mes, dia } = partesFecha(iso)
+  return `${dia}/${String(mes).padStart(2, '0')}`
+}
+
+/**
+ * Las rentas que caen en la ventana **y todavía no se han cobrado**. Entran por
+ * lo mismo que las facturas y las deudas (D9): el calendario junta lo que
+ * Finply ya sabe que va a caer, y una renta pactada es de lo más seguro que hay.
+ *
+ * ⚠ Lo ya cobrado se salta, igual que una recurrencia con su periodo resuelto.
+ * Sin eso, un inquilino que paga el día 3 lo que vencía el 5 aparecía **dos
+ * veces** en el flujo proyectado —el movimiento asentado y el cobro esperado—,
+ * y la respuesta a "¿llego a fin de mes?" traía una renta de más. Las otras
+ * fuentes ya lo evitaban cada una a su manera: la factura por su saldo, la
+ * deuda por sus abonos, la recurrencia por `recurrence_runs`.
+ *
+ * El único dato que hay para emparejar es el **mes del movimiento**: un cobro
+ * de renta no lleva a qué periodo pertenece. Un pago atrasado —la renta de
+ * agosto cobrada el 2 de septiembre— tapa entonces la de septiembre, y eso es
+ * a propósito: de los dos errores posibles, no anunciar un cobro que quizá ya
+ * ocurrió es el prudente; anunciarlo dos veces infla la caja que el usuario
+ * está contando.
+ *
+ * ⚠ Y si el usuario además guardó la renta como recurrencia, saldrá dos veces:
  * son dos cosas que él escribió y Finply no puede saber que hablan del mismo
  * dinero. Lo mismo pasa ya entre facturas y recurrencias.
  */
@@ -277,6 +394,22 @@ function deRentas(profileId: number, desde: string, hasta: string): EventoCalend
          AND r.start_date <= ? AND (r.end_date IS NULL OR r.end_date >= ?)`,
     )
     .all(profileId, hasta, desde)
+  if (filas.length === 0) return []
+
+  // Los meses ya cobrados de cada contrato, en **una** consulta para todos
+  // (R11). Se mira desde el primer día del mes de `desde`: un cobro del día 1
+  // queda fuera de la ventana y aun así liquida la renta que vence el 5.
+  const cobrados = new Set(
+    (
+      db
+        .prepare(
+          `SELECT DISTINCT rental_id, substr(date, 1, 7) AS mes FROM transactions
+           WHERE profile_id = ? AND rental_id IS NOT NULL AND rental_role = 'renta'
+             AND date >= ? AND date <= ?`,
+        )
+        .all(profileId, `${desde.slice(0, 7)}-01`, hasta) as { rental_id: number; mes: string }[]
+    ).map((f) => `${f.rental_id}·${f.mes}`),
+  )
 
   const eventos: EventoCalendario[] = []
   for (const r of filas) {
@@ -284,7 +417,11 @@ function deRentas(profileId: number, desde: string, hasta: string): EventoCalend
     // ventana de 90 días son tres— así que no hace falta consulta por mes.
     let fecha = proximoDiaDelMes(desde > r.start_date ? desde : r.start_date, r.payment_day)
     while (fecha <= hasta) {
-      if (fecha >= desde && (r.end_date === null || fecha <= r.end_date)) {
+      if (
+        fecha >= desde &&
+        (r.end_date === null || fecha <= r.end_date) &&
+        !cobrados.has(`${r.id}·${fecha.slice(0, 7)}`)
+      ) {
         eventos.push({
           fecha,
           tipo: 'renta' as const,
@@ -307,6 +444,9 @@ const ORDEN: Record<EventoCalendario['tipo'], number> = {
   factura: 2,
   renta: 3,
   recurrencia: 3,
+  // Detrás de la factura que ya existe: un documento emitido pesa más que uno
+  // que todavía puede no emitirse.
+  factura_recurrente: 3,
   msi: 4,
   corte: 5,
   // El calendario nunca genera uno: lo que ya está asentado no está por
@@ -333,6 +473,7 @@ export function calendario(profileId: number, hoy = hoyISO(), dias = 30): Calend
     ...(con('deudas') ? deDeudas(profileId, hoy, hasta) : []),
     ...(con('tarjetas') ? deMSI(profileId, hoy, hasta) : []),
     ...(con('negocio') ? deFacturas(profileId, hoy, hasta) : []),
+    ...(con('negocio') ? deFacturasRecurrentes(profileId, hoy, hasta) : []),
     ...(con('inmuebles') ? deRentas(profileId, hoy, hasta) : []),
   ]
   // Dentro de un mismo día manda lo que cuesta dinero si se te pasa.

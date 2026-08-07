@@ -39,7 +39,13 @@ async function libroGiro(nombre: string) {
 /** Un bien rentado y su contrato, que es el punto de partida de Inmuebles. */
 async function conCasa(
   nombre: string,
-  opciones: { costCents?: number; rentCents?: number; endDate?: string | null } = {},
+  opciones: {
+    costCents?: number
+    rentCents?: number
+    endDate?: string | null
+    /** Desde cuándo corre el contrato. Manda en cuántos meses mide la ventana. */
+    startDate?: string
+  } = {},
 ) {
   const libro = await libroGiro(nombre)
   const bien = (
@@ -59,7 +65,7 @@ async function conCasa(
       rentCents: opciones.rentCents ?? 15_000_00,
       depositCents: 15_000_00,
       paymentDay: 5,
-      startDate: '2026-01-01',
+      startDate: opciones.startDate ?? '2026-01-01',
       endDate: opciones.endDate ?? null,
     })
   ).body
@@ -275,7 +281,13 @@ describe('inmuebles · D6: el depósito no es tuyo', () => {
 
 describe('inmuebles · qué deja la propiedad', () => {
   test('lo cobrado menos el mantenimiento, sobre lo que vale hoy', async () => {
-    const libro = await conCasa('Rendimiento', { costCents: 2_000_000_00 })
+    // El contrato arranca donde arranca la ventana: las doce rentas de abajo
+    // caen dentro de él. Con un contrato que empezara después, la mitad serían
+    // cobros de un contrato que todavía no existía.
+    const libro = await conCasa('Rendimiento', {
+      costCents: 2_000_000_00,
+      startDate: '2025-08-01',
+    })
     // Doce rentas de $15,000 y un mantenimiento de $30,000 en la ventana.
     for (let m = 8; m <= 12; m++) {
       await movRenta(libro, libro.renta.id, 'renta', 15_000_00, `2025-${String(m).padStart(2, '0')}-05`)
@@ -297,7 +309,10 @@ describe('inmuebles · qué deja la propiedad', () => {
   })
 
   test('la valuación del bien manda sobre el costo', async () => {
-    const libro = await conCasa('Revaluada', { costCents: 1_000_000_00 })
+    const libro = await conCasa('Revaluada', {
+      costCents: 1_000_000_00,
+      startDate: '2025-08-01',
+    })
     await c.post(`/api/bienes/${libro.bien.id}/valuaciones`, {
       date: '2026-01-01',
       valueCents: 2_000_000_00,
@@ -355,6 +370,48 @@ describe('inmuebles · el calendario y la alerta', () => {
       0,
       'apagado no manda a una sección que no está en el lomo',
     )
+  })
+
+  test('la renta ya cobrada no se vuelve a anunciar, ni en el flujo', async () => {
+    // El defecto que esto fija: el flujo proyectado sumaba el movimiento
+    // asentado **y** el cobro esperado del mismo día. Un inquilino que paga el
+    // 3 lo que vence el 5 metía dos rentas en la respuesta a "¿llego a fin de
+    // mes?", que es exactamente la cifra que nadie puede permitirse inflada.
+    const libro = await conCasa('Adelantada')
+    const antes = (await c.get(`/api/flujo?profileId=${libro.perfil.id}&hoy=2026-08-03&dias=30`)).body
+    assert.equal(antes.entradasCents, 15_000_00, 'una renta esperada')
+
+    await movRenta(libro, libro.renta.id, 'renta', 15_000_00, '2026-08-05')
+
+    const despues = (
+      await c.get(`/api/flujo?profileId=${libro.perfil.id}&hoy=2026-08-03&dias=30`)
+    ).body
+    assert.equal(despues.entradasCents, 15_000_00, 'la misma renta, no dos')
+    assert.equal(
+      despues.eventos.filter((e: any) => e.tipo === 'renta').length,
+      0,
+      'lo que ya se cobró deja de esperarse',
+    )
+
+    const cal = (
+      await c.get(`/api/calendario?profileId=${libro.perfil.id}&dias=30&hoy=2026-08-03`)
+    ).body
+    assert.equal(
+      cal.eventos.filter((e: any) => e.tipo === 'renta').length,
+      0,
+      'y el calendario tampoco dice "cobrar" lo que ya está cobrado',
+    )
+  })
+
+  test('cobrar un mes no tapa el del mes siguiente', async () => {
+    const libro = await conCasa('Al día')
+    await movRenta(libro, libro.renta.id, 'renta', 15_000_00, '2026-08-05')
+    const cal = (
+      await c.get(`/api/calendario?profileId=${libro.perfil.id}&dias=60&hoy=2026-08-03`)
+    ).body
+    const rentas = cal.eventos.filter((e: any) => e.tipo === 'renta')
+    assert.equal(rentas.length, 1, 'septiembre sigue esperando')
+    assert.equal(rentas[0].fecha, '2026-09-05')
   })
 
   test('el contrato que se acaba avisa, y solo ese', async () => {
@@ -441,6 +498,37 @@ describe('horas · lo trabajado sin cobrar', () => {
     assert.equal(r.porCobrar[0].importeCents, 300_00)
     assert.equal(r.porCobrar[0].entradas, 2)
     assert.equal(r.porCobrar[0].desde, '2026-01-10')
+
+    // Las dos ventanas viven en la misma respuesta y **cada una dice cuál es**.
+    // Antes había un `importeSinFacturarCents` que medía el periodo al lado de
+    // un `porCobrar` que medía siempre: la respuesta publicaba $0 sin facturar
+    // mientras su propia lista sumaba trescientos pesos.
+    assert.equal(r.minutosSinFacturarDelPeriodo, 120, 'del periodo, solo julio')
+    assert.equal(r.importeSinFacturarDelPeriodoCents, 200_00)
+    assert.equal(r.porCobrarMinutos, 180, 'de siempre, las tres horas')
+    assert.equal(r.porCobrarCents, 300_00)
+  })
+
+  test('el total por cobrar es la suma de sus renglones, al centavo', async () => {
+    // Redondear por cliente y redondear el total por su cuenta pueden
+    // separarse: minutos por tarifa entre sesenta casi nunca da un entero. La
+    // cifra grande sale de sumar la tabla que está debajo, así que no pueden.
+    const libro = await libroHoras('Redondeo')
+    const otro = (
+      await c.post('/api/contrapartes', {
+        profileId: libro.perfil.id, name: 'Segundo', kind: 'cliente',
+      })
+    ).body
+    for (const cliente of [libro.cliente.id, otro.id]) {
+      for (const minutos of [7, 11, 13]) await apuntar(libro, cliente, minutos, 333_33, '2026-05-04')
+    }
+
+    const r = (
+      await c.get(`/api/horas/resumen?profileId=${libro.perfil.id}&desde=2026-07-01&hasta=2026-07-31`)
+    ).body
+    const suma = r.porCobrar.reduce((s: number, x: any) => s + x.importeCents, 0)
+    assert.equal(r.porCobrarCents, suma)
+    assert.equal(r.porCobrarMinutos, r.porCobrar.reduce((s: number, x: any) => s + x.minutos, 0))
   })
 
   test('sin horas no se inventa una tarifa media', async () => {
@@ -660,6 +748,39 @@ describe('inventario · qué tienes y cuánto costó lo que salió', () => {
 
     const ajusteAbajo = await mover(libro, 'ajuste', -3_000, 0, '2026-07-02')
     assert.equal(ajusteAbajo.status, 400, 'un ajuste tampoco puede dejarlo en negativo')
+  })
+
+  test('una salida con fecha anterior a su entrada se rechaza', async () => {
+    // El defecto: la comprobación miraba la existencia de **hoy**, no la del
+    // día del movimiento. Vender cinco kilos con fecha de julio cuando la
+    // compra es de agosto pasaba, y entonces el recorrido valuaba el promedio
+    // contra una cantidad negativa: el almacén valía el doble ($2,000 en cinco
+    // kilos que costaron $1,000) y el costo de ventas se quedaba en cero.
+    const libro = await libroAlmacen('Retroactiva')
+    await mover(libro, 'entrada', 10_000, 200_00, '2026-08-01')
+
+    const r = await mover(libro, 'salida', 5_000, 0, '2026-07-15')
+    assert.equal(r.status, 400)
+    assert.match(r.body.error, /2026-07-15/, 'dice con qué fecha no cabe')
+
+    const alm = (
+      await c.get(`/api/inventario?profileId=${libro.perfil.id}&desde=2026-08-01&hasta=2026-08-31`)
+    ).body.productos[0]
+    assert.equal(alm.cantidadMilli, 10_000)
+    assert.equal(alm.costoUnitarioCents, 200_00, 'el promedio sigue siendo el que se pagó')
+    assert.equal(alm.valorCents, 2_000_00)
+  })
+
+  test('una salida vieja tampoco puede dejar en negativo un día posterior', async () => {
+    // Hoy hay cero y el día 3 había diez, pero meter una salida el 3 dejaría
+    // el 5 en menos cinco: lo que limita es el punto más bajo del tramo, no lo
+    // que había ese día ni lo que hay ahora.
+    const libro = await libroAlmacen('Tramo')
+    await mover(libro, 'entrada', 10_000, 100_00, '2026-07-01')
+    await mover(libro, 'salida', 10_000, 0, '2026-07-05')
+
+    const r = await mover(libro, 'salida', 5_000, 0, '2026-07-03')
+    assert.equal(r.status, 400)
   })
 
   test('la ventana solo mueve el costo de ventas, nunca la existencia', async () => {
@@ -936,5 +1057,179 @@ describe('R11 · nada de esto cuesta una consulta por renglón', () => {
     assert.equal(productos, 20)
     assert.equal(nGrande, nChico, 'el recorrido del promedio es JS, no una consulta por producto')
     assert.ok(nGrande <= 3, `son ${nGrande} consultas: el catálogo y todos los movimientos`)
+  })
+})
+
+/**
+ * Tercera vuelta de la auditoría. Los dos hallazgos de los módulos de giro:
+ * el panel de horas prometía una cifra que la factura no iba a respetar, y la
+ * alerta de existencias contaba el anaquel con su propia aritmética.
+ */
+describe('el panel de horas y la factura que sale de él', () => {
+  /**
+   * El redondeo va **por renglón**, y esa no es una elección estética: es la
+   * que hace que la factura valga exactamente lo que suman las horas que la
+   * respaldan. El panel sumaba `minutos × tarifa` de todos los renglones y
+   * dividía entre 60 al final, que da otra cifra.
+   */
+  test('lo por cobrar es la suma de los renglones, al centavo', async () => {
+    const { perfil } = await libroGiro('HorasCentavo')
+    const cliente = (
+      await c.post('/api/contrapartes', { profileId: perfil.id, name: 'Cliente', role: 'cliente' })
+    ).body
+
+    // Dos renglones de un minuto a $100 la hora. Cada uno vale
+    // round(10000/60) = 167, así que los dos valen 334. Sumar los minutos y
+    // dividir al final da round(20000/60) = 333: un centavo, y del lado de
+    // prometer menos de lo que la factura va a pedir.
+    for (const dia of ['2026-07-01', '2026-07-02']) {
+      const r = await c.post('/api/horas', {
+        profileId: perfil.id,
+        date: dia,
+        minutes: 1,
+        rateCents: 100_00,
+        counterpartyId: cliente.id,
+      })
+      assert.equal(r.status, 201, JSON.stringify(r.body))
+    }
+
+    const renglones = (await c.get(`/api/horas?profileId=${perfil.id}`)).body
+    const suma = renglones.reduce((s: number, h: any) => s + h.importeCents, 0)
+    assert.equal(suma, importeDeMinutos(1, 100_00) * 2, 'la lista no suma lo que dice cada renglón')
+
+    const panel = (
+      await c.get(`/api/horas/resumen?profileId=${perfil.id}&desde=2026-07-01&hasta=2026-07-31`)
+    ).body
+    assert.equal(panel.porCobrarCents, suma, 'la cifra grande no es la suma de la lista')
+    assert.equal(panel.importeTotalCents, suma, 'el total del periodo tampoco')
+    assert.equal(
+      panel.porCobrar.reduce((s: number, x: any) => s + x.importeCents, 0),
+      suma,
+      'la tabla por cliente tampoco',
+    )
+
+    const factura = (
+      await c.post(`/api/horas/facturar?profileId=${perfil.id}`, {
+        counterpartyId: cliente.id,
+        issueDate: '2026-07-31',
+        folio: 'A-1',
+        concept: 'Horas',
+        taxCents: 0,
+      })
+    ).body
+    assert.equal(factura.subtotalCents, panel.porCobrarCents, 'la factura y el panel discrepan')
+  })
+
+  test('con tarifas y minutos irregulares sigue cuadrando', async () => {
+    const { perfil } = await libroGiro('HorasIrregular')
+    const cliente = (
+      await c.post('/api/contrapartes', { profileId: perfil.id, name: 'C', role: 'cliente' })
+    ).body
+    const renglones = [
+      { minutes: 7, rateCents: 333_33 },
+      { minutes: 13, rateCents: 777_77 },
+      { minutes: 101, rateCents: 123_45 },
+      { minutes: 1, rateCents: 1 },
+    ]
+    for (const [i, r] of renglones.entries()) {
+      await c.post('/api/horas', {
+        profileId: perfil.id,
+        date: `2026-07-0${i + 1}`,
+        counterpartyId: cliente.id,
+        ...r,
+      })
+    }
+    // El libro paralelo: la misma regla escrita aquí, renglón por renglón.
+    const esperado = renglones.reduce((s, r) => s + importeDeMinutos(r.minutes, r.rateCents), 0)
+    const panel = (
+      await c.get(`/api/horas/resumen?profileId=${perfil.id}&desde=2026-07-01&hasta=2026-07-31`)
+    ).body
+    assert.equal(panel.porCobrarCents, esperado)
+    assert.equal(panel.importeTotalCents, esperado)
+    const factura = (
+      await c.post(`/api/horas/facturar?profileId=${perfil.id}`, {
+        counterpartyId: cliente.id,
+        issueDate: '2026-07-31',
+        folio: '',
+        concept: '',
+        taxCents: 0,
+      })
+    ).body
+    assert.equal(factura.subtotalCents, esperado)
+  })
+})
+
+describe('la alerta de existencias cuenta el mismo anaquel que la vista', () => {
+  test('un libro que quedó en negativo dice cero en las dos, no −10 en una', async () => {
+    const { perfil } = await libroGiro('AnaquelNegativo')
+    const producto = (
+      await c.post('/api/inventario', {
+        profileId: perfil.id,
+        sku: 'CAFE',
+        name: 'Café',
+        unit: 'kg',
+        minQtyMilli: 5_000,
+      })
+    ).body
+    for (const m of [
+      { date: '2026-07-01', kind: 'entrada', qtyMilli: 10_000, unitCostCents: 200_00 },
+      { date: '2026-07-02', kind: 'salida', qtyMilli: 10_000, unitCostCents: 0 },
+    ]) {
+      const r = await c.post('/api/inventario/movimientos', {
+        profileId: perfil.id,
+        productId: producto.id,
+        note: '',
+        ...m,
+      })
+      assert.equal(r.status, 201, JSON.stringify(r.body))
+    }
+    // Borrar la entrada es la puerta por la que un anaquel queda en negativo:
+    // la salida se queda sin nada que la respalde. La lectura pone el piso en
+    // cero y apunta el faltante; la alerta hacía su propio SUM y no lo ponía.
+    const movs = (await c.get(`/api/inventario/${producto.id}/movimientos?profileId=${perfil.id}`))
+      .body
+    const entrada = movs.find((m: any) => m.kind === 'entrada')
+    await c.del(`/api/inventario/movimientos/${entrada.id}?profileId=${perfil.id}`)
+
+    const almacen = (await c.get(`/api/inventario?profileId=${perfil.id}&hoy=${HOY}`)).body
+    const enVista = almacen.productos.find((p: any) => p.id === producto.id)
+    assert.equal(enVista.cantidadMilli, 0, 'la vista nunca enseña una existencia negativa')
+
+    const alerta = (await c.get(`/api/alertas?profileId=${perfil.id}&hoy=${HOY}`)).body.find(
+      (a: any) => a.tipo === 'existencias',
+    )
+    assert.ok(alerta, 'el producto está bajo mínimo: tenía que avisar')
+    assert.ok(
+      !alerta.detalle.includes('-'),
+      `la alerta enseña una existencia que la vista no tiene: ${alerta.detalle}`,
+    )
+    assert.match(alerta.detalle, /^0 kg/, 'las dos pantallas dicen lo mismo del mismo anaquel')
+  })
+
+  test('el anaquel sano sigue avisando igual que antes', async () => {
+    const { perfil } = await libroGiro('AnaquelSano')
+    const producto = (
+      await c.post('/api/inventario', {
+        profileId: perfil.id,
+        sku: 'TE',
+        name: 'Té',
+        unit: 'kg',
+        minQtyMilli: 5_000,
+      })
+    ).body
+    await c.post('/api/inventario/movimientos', {
+      profileId: perfil.id,
+      productId: producto.id,
+      date: '2026-07-01',
+      kind: 'entrada',
+      qtyMilli: 3_000,
+      unitCostCents: 100_00,
+      note: '',
+    })
+    const alerta = (await c.get(`/api/alertas?profileId=${perfil.id}&hoy=${HOY}`)).body.find(
+      (a: any) => a.tipo === 'existencias',
+    )
+    assert.equal(alerta.severidad, 'media', 'queda algo: no es "te quedaste sin"')
+    assert.match(alerta.detalle, /^3 kg contra un mínimo de 5/)
   })
 })

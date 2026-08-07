@@ -243,8 +243,26 @@ describe('inmuebles · qué deja la propiedad', () => {
   })
 
   test('sin meses no se inventa un anualizado', () => {
+    // Cero meses no son "cero por ciento": es un contrato que todavía no
+    // empieza, y de ahí no sale ningún ritmo que llevar a un año. Decir 0 %
+    // sería la misma mentira que decirlo sin valor contra qué medir.
     const r = rendimientoInmueble({ ...base, meses: 0, valorCents: 2_000_000, costoCents: 0 })
     assert.equal(r.anualizadoCents, 0)
-    assert.equal(r.tasaAnualBp, 0, 'cero entre algo sí es cero')
+    assert.equal(r.tasaAnualBp, null, 'sin periodo no se puede decir')
+    assert.equal(r.netoCents, 100_000, 'el neto sí se sabe: es una resta')
+  })
+
+  test('dos meses de contrato se anualizan sobre dos, no sobre doce', () => {
+    // El defecto que esto fija: con doce meses fijos, un depto recién rentado
+    // enseñaba como rendimiento anual lo que llevaba cobrado en dos.
+    const r = rendimientoInmueble({
+      cobradoCents: 40_000_00,
+      gastoCents: 0,
+      meses: 2,
+      valorCents: 2_400_000_00,
+      costoCents: 0,
+    })
+    assert.equal(r.anualizadoCents, 240_000_00, 'veinte mil al mes son 240 mil al año')
+    assert.equal(r.tasaAnualBp, 1000, '10 % anual, no el 0.83 % de dividir entre doce')
   })
 })

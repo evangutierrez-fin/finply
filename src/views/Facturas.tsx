@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api.ts'
 import { useApp } from '../context.ts'
 import { useFetch } from '../hooks.ts'
-import { fmtDate, fmtMoney, parseAmount, todayISO } from '../format.ts'
+import { fmtDate, fmtMoney, mensajeMonto, parseAmount, todayISO } from '../format.ts'
 import { Money } from '../components/Money.tsx'
 import { Modal } from '../components/Modal.tsx'
 import { Cadencia, reglaDesde, type ValoresCadencia } from '../components/Cadencia.tsx'
@@ -305,7 +305,7 @@ function CobroModal({ factura, onClose, onSaved }: { factura: Factura; onClose: 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!accountId) return setError('Elige la cuenta')
-    if (cents === null) return setError('Escribe un monto válido')
+    if (cents === null) return setError(mensajeMonto(amount, 'Escribe un monto válido'))
     setSaving(true)
     setError(null)
     try {
@@ -394,7 +394,7 @@ function NotaCreditoModal({ factura, onClose, onSaved }: { factura: Factura; onC
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (cents === null) return setError('Escribe un monto válido')
+    if (cents === null) return setError(mensajeMonto(amount, 'Escribe un monto válido'))
     setSaving(true)
     setError(null)
     try {
@@ -909,7 +909,18 @@ export function Facturas() {
             Periodos vencidos de tus plantillas. Ninguna existe todavía: Finply propone y tú
             decides. Emitirla tampoco mueve el libro — el dinero entra al cobrarla.
           </p>
+          {/* Con encabezados: sin ellos, un lector de pantalla lee cuatro
+              celdas sueltas y no dice de qué columna es cada una — la fecha y
+              el monto se anuncian igual, y ahí no se distinguen. */}
           <table className="tabla">
+            <thead>
+              <tr>
+                <th>Contraparte</th>
+                <th>Vence</th>
+                <th className="col-num">Total</th>
+                <th><span className="sr-only">Acciones</span></th>
+              </tr>
+            </thead>
             <tbody>
               {pendientes.items.map((p) => (
                 <tr key={`${p.recurrenceId}-${p.periodo}`}>

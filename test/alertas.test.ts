@@ -466,3 +466,99 @@ describe('R11: el costo no crece con el libro', () => {
     }
   })
 })
+
+/**
+ * Tercera vuelta de la auditoría: el Resumen no puede valuar una partida
+ * distinto de como la valúan la bandeja y el calendario (D14).
+ */
+describe('la alerta de recurrencias dice el monto que se va a proponer', () => {
+  /** Una plantilla de monto variable con tres asentadas muy por encima del fijo. */
+  async function libroConPromedio(nombre: string) {
+    const { perfil, cuenta, categorias } = await libroBase(c, nombre)
+    const gasto = categorias.find((k: any) => k.kind === 'gasto')
+    const rec = (
+      await c.post('/api/recurrencias', {
+        profileId: perfil.id,
+        accountId: cuenta.id,
+        type: 'gasto',
+        amountCents: 100_00,
+        categoryId: gasto.id,
+        note: 'Luz',
+        frequency: 'mensual',
+        dayOfMonth: 5,
+        startDate: '2026-01-05',
+        amountMode: 'promedio',
+      })
+    ).body
+    for (const periodo of ['2026-01', '2026-02', '2026-03']) {
+      const r = await c.post(`/api/recurrencias/${rec.id}/asentar?profileId=${perfil.id}`, {
+        periodo,
+        amountCents: 900_00,
+      })
+      assert.equal(r.status, 201, JSON.stringify(r.body))
+    }
+    return { perfil, rec }
+  }
+
+  test('lo por confirmar se valúa con el promedio, no con la columna fija', async () => {
+    const { perfil } = await libroConPromedio('Promedio')
+    const hoy = '2026-08-07'
+    const bandeja = (
+      await c.get(`/api/recurrencias/pendientes?profileId=${perfil.id}&hoy=${hoy}`)
+    ).body
+    assert.ok(bandeja.total > 0, 'tenía que haber atraso que contar')
+    assert.equal(bandeja.items[0].amountCents, 900_00, 'la bandeja propone el promedio')
+
+    const alerta = de(await alertasDe(perfil.id, hoy), 'recurrencia').find((a) =>
+      a.titulo.includes('por confirmar'),
+    )
+    assert.ok(alerta, 'no salió la alerta de partidas por confirmar')
+    // Con la columna fija esto daba $500 de un atraso que vale $4,500: nueve
+    // veces menos, y en la única pantalla que el usuario mira todos los días.
+    assert.equal(
+      alerta.montoCents,
+      bandeja.total * 900_00,
+      'el Resumen valúa el atraso distinto que la bandeja',
+    )
+  })
+
+  test('y lo que viene pronto, también', async () => {
+    const { perfil } = await libroConPromedio('Promedio2')
+    // Dos días antes del 5 de septiembre, con agosto ya resuelto para que la
+    // próxima sin resolver sea la de septiembre.
+    const hoy = '2026-09-03'
+    const cal = (await c.get(`/api/calendario?profileId=${perfil.id}&hoy=${hoy}&dias=3`)).body
+    const evento = cal.eventos.find((e: any) => e.tipo === 'recurrencia')
+    assert.ok(evento, 'el calendario tenía que anunciarla')
+
+    const alerta = de(await alertasDe(perfil.id, hoy), 'recurrencia').find(
+      (a) => !a.titulo.includes('por confirmar'),
+    )
+    assert.ok(alerta, 'no salió la alerta de lo que se cobra pronto')
+    assert.equal(alerta.montoCents, evento.montoCents, 'dos pantallas, dos cifras')
+  })
+
+  test('con monto fijo no cambia nada, y no se consulta el promedio', async () => {
+    const { perfil, cuenta, categorias } = await libroBase(c, 'Fijo')
+    const gasto = categorias.find((k: any) => k.kind === 'gasto')
+    await c.post('/api/recurrencias', {
+      profileId: perfil.id,
+      accountId: cuenta.id,
+      type: 'gasto',
+      amountCents: 300_00,
+      categoryId: gasto.id,
+      note: 'Renta',
+      frequency: 'mensual',
+      dayOfMonth: 1,
+      startDate: '2026-06-01',
+    })
+    const hoy = '2026-08-07'
+    const bandeja = (
+      await c.get(`/api/recurrencias/pendientes?profileId=${perfil.id}&hoy=${hoy}`)
+    ).body
+    const alerta = de(await alertasDe(perfil.id, hoy), 'recurrencia').find((a) =>
+      a.titulo.includes('por confirmar'),
+    )
+    assert.equal(alerta.montoCents, bandeja.total * 300_00)
+  })
+})

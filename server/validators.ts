@@ -3,9 +3,43 @@ import { AA_TEXTO, evaluarTinta, normalizarHex } from '../shared/color.ts'
 import { MAX_UNIDADES_E8 } from '../shared/inversiones.ts'
 import { MODULO_IDS, type ModuloId } from '../shared/modulos.ts'
 import { MAX_PERIODOS } from '../shared/recurrencias.ts'
+import { esFechaReal } from '../shared/fechas.ts'
+import { MAX_CENTAVOS } from '../shared/formato.ts'
 
-const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Fecha inválida (AAAA-MM-DD)')
-const isoMonth = z.string().regex(/^\d{4}-\d{2}$/, 'Mes inválido (AAAA-MM)')
+/**
+ * Una fecha del calendario, no cualquier cadena con esa forma.
+ *
+ * La comprobación de que el día **existe** es de esta puerta y no de cada
+ * módulo: por aquí entra toda fecha que se guarda —movimientos, abonos,
+ * valuaciones, cortes, facturas, horas, stock— y una sola de ellas mal formada
+ * envenena todo lo que la toque. `2026-13-45` cumple la forma, ordena después
+ * de diciembre y desaparece de los reportes del año sin dejar de bajar el
+ * saldo de la cuenta; `2026-02-30` se vuelve el 2 de marzo en cuanto alguien
+ * cuenta días. La regla vive en `shared/fechas.ts` porque es aritmética de
+ * calendario, no de validación.
+ */
+const isoDate = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Fecha inválida (AAAA-MM-DD)')
+  .refine(esFechaReal, 'Ese día no existe en el calendario')
+const isoMonth = z
+  .string()
+  .regex(/^\d{4}-\d{2}$/, 'Mes inválido (AAAA-MM)')
+  .refine((m) => esFechaReal(`${m}-01`), 'Ese mes no existe en el calendario')
+
+const DEMASIADO = 'Esa cifra no cabe en un libro de finanzas: revisa los ceros'
+
+/**
+ * Una cifra de dinero: entero de centavos, acotada por los dos lados con
+ * `MAX_CENTAVOS`. Cada campo le encadena después su propia regla de signo y su
+ * propio mensaje.
+ *
+ * El techo está en `shared/formato.ts` y no aquí porque el import de CSV
+ * escribe **sin pasar por este validador** y tiene que respetar el mismo: una
+ * copia de una regla que debe coincidir es una regla que se separa.
+ */
+const dinero = () =>
+  z.number().int().min(-MAX_CENTAVOS, DEMASIADO).max(MAX_CENTAVOS, DEMASIADO)
 
 /**
  * Una tinta personalizada para un tema. `null` vuelve al preset.
@@ -95,7 +129,7 @@ export const plantillaTxInput = z.object({
   transferAccountId: z.number().int().positive().nullish(),
   categoryId: z.number().int().positive().nullish(),
   /** Nulo: "el monto lo pongo yo cada vez". */
-  amountCents: z.number().int().positive('El monto tiene que ser mayor que cero').nullish(),
+  amountCents: dinero().positive('El monto tiene que ser mayor que cero').nullish(),
   note: z.string().max(200).default(''),
   position: z.number().int().min(0).optional(),
 })
@@ -113,14 +147,14 @@ export const accountInput = z.object({
   name: z.string().trim().min(1, 'La cuenta necesita un nombre').max(60),
   type: z.enum(['efectivo', 'banco', 'tarjeta', 'ahorro', 'otro']).default('efectivo'),
   currency: z.string().trim().length(3).toUpperCase().default('MXN'),
-  openingCents: z.number().int().default(0),
+  openingCents: dinero().default(0),
   // Datos de tarjeta. `null` explícito los borra; ausentes los dejan como
   // estaban, que es la diferencia entre "quítalo" y "no opiné".
-  creditLimitCents: z.number().int().nonnegative('El límite no puede ser negativo').nullish(),
+  creditLimitCents: dinero().nonnegative('El límite no puede ser negativo').nullish(),
   cutDay: diaDelMes.nullish(),
   dueDay: diaDelMes.nullish(),
   /** Debajo de esto, Finply avisa. `null` quita el aviso. */
-  minBalanceCents: z.number().int().nullish(),
+  minBalanceCents: dinero().nullish(),
   institution: z.string().trim().max(60).default(''),
   sortOrder: z.number().int().min(-999).max(999).default(0),
   // Lo que de verdad cuesta la tarjeta (Fase 14). Los tres los copia el
@@ -130,7 +164,7 @@ export const accountInput = z.object({
   annualRateBp: z.number().int().min(0).max(2_000_000, 'Esa tasa no es de una tarjeta').nullish(),
   /** Porcentaje del saldo que exige el pago mínimo, en puntos base. */
   minPaymentBp: z.number().int().min(0).max(10_000, 'El mínimo no puede pasar del 100 %').nullish(),
-  minPaymentFloorCents: z.number().int().nonnegative().nullish(),
+  minPaymentFloorCents: dinero().nonnegative().nullish(),
 })
 
 export const accountPatch = accountInput.omit({ profileId: true }).partial().extend({
@@ -223,7 +257,7 @@ export const importInput = z.object({
  */
 const txSplit = z.object({
   categoryId: z.number().int().positive().nullish(),
-  amountCents: z.number().int().positive('Cada renglón debe ser mayor a cero'),
+  amountCents: dinero().positive('Cada renglón debe ser mayor a cero'),
   note: z.string().trim().max(120).default(''),
 })
 
@@ -235,7 +269,7 @@ export const txInput = z
     profileId: z.number().int().positive(),
     accountId: z.number().int().positive(),
     type: z.enum(['ingreso', 'gasto', 'transferencia']),
-    amountCents: z.number().int().positive('El monto debe ser mayor a cero'),
+    amountCents: dinero().positive('El monto debe ser mayor a cero'),
     date: isoDate,
     categoryId: z.number().int().positive().nullish(),
     note: z.string().trim().max(200).default(''),
@@ -247,7 +281,7 @@ export const txInput = z
     invoiceId: z.number().int().positive().nullish(),
     // Impuesto **contenido** en el monto, no sumado: por eso se valida contra
     // él y no puede pasarse. Un IVA mayor que la factura no existe.
-    taxCents: z.number().int().min(0).default(0),
+    taxCents: dinero().min(0).default(0),
     deductible: z.boolean().default(false),
     // Fase 10. Los dos ausentes dejan lo que ya había —la misma regla de
     // `tagIds`—; un arreglo vacío quita el reparto y un `null` explícito
@@ -335,7 +369,7 @@ export const debtInput = z.object({
   direction: z.enum(['por_cobrar', 'por_pagar']),
   counterparty: z.string().trim().min(1, 'Falta el nombre de la persona o negocio').max(60),
   concept: z.string().trim().max(120).default(''),
-  principalCents: z.number().int().positive('El monto debe ser mayor a cero'),
+  principalCents: dinero().positive('El monto debe ser mayor a cero'),
   startDate: isoDate,
   dueDate: isoDate.nullish(),
   // Puntos base para no guardar flotantes: 24.5 % anual = 2450. El tope de
@@ -359,14 +393,12 @@ export const debtInput = z.object({
    */
   accountId: z.number().int().positive().nullish(),
   /** Enganche: lo que se puso de contado al contratar. No es principal. */
-  downPaymentCents: z.number().int().nonnegative('El enganche no puede ser negativo').default(0),
+  downPaymentCents: dinero().nonnegative('El enganche no puede ser negativo').default(0),
   /**
    * Comisión de apertura (D30). Se descuenta de lo que te depositan, así que
    * no puede pasar del principal: nadie firma un crédito para recibir cero.
    */
-  originationFeeCents: z
-    .number()
-    .int()
+  originationFeeCents: dinero()
     .nonnegative('La comisión no puede ser negativa')
     .default(0),
   /** Cuenta de la que sale (o a la que entra) el enganche. */
@@ -381,7 +413,7 @@ export const debtPatch = debtInput
   .partial()
 
 export const paymentInput = z.object({
-  amountCents: z.number().int().positive('El abono debe ser mayor a cero'),
+  amountCents: dinero().positive('El abono debe ser mayor a cero'),
   date: isoDate,
   note: z.string().trim().max(200).default(''),
   accountId: z.number().int().positive().nullish(),
@@ -390,7 +422,7 @@ export const paymentInput = z.object({
    * interés devengado desde el abono anterior; presente, manda lo que diga el
    * estado de cuenta del usuario.
    */
-  interestCents: z.number().int().nonnegative('El interés no puede ser negativo').optional(),
+  interestCents: dinero().nonnegative('El interés no puede ser negativo').optional(),
 })
 
 export const msiInput = z.object({
@@ -398,7 +430,7 @@ export const msiInput = z.object({
   /** Tiene que ser una tarjeta; la ruta lo verifica contra el libro. */
   accountId: z.number().int().positive(),
   concept: z.string().trim().max(120).default(''),
-  totalCents: z.number().int().positive('El monto de la compra debe ser mayor a cero'),
+  totalCents: dinero().positive('El monto de la compra debe ser mayor a cero'),
   months: z
     .number()
     .int()
@@ -430,7 +462,7 @@ export const recurrenceInput = z
     profileId: z.number().int().positive(),
     accountId: z.number().int().positive(),
     type: z.enum(['ingreso', 'gasto', 'transferencia']),
-    amountCents: z.number().int().positive('El monto debe ser mayor a cero'),
+    amountCents: dinero().positive('El monto debe ser mayor a cero'),
     categoryId: z.number().int().positive().nullish(),
     transferAccountId: z.number().int().positive().nullish(),
     note: z.string().trim().max(200).default(''),
@@ -513,7 +545,7 @@ export const bandejaQuery = recurrenceQuery.extend({
 export const asentarInput = z.object({
   periodo,
   date: isoDate.optional(),
-  amountCents: z.number().int().positive('El monto debe ser mayor a cero').optional(),
+  amountCents: dinero().positive('El monto debe ser mayor a cero').optional(),
   categoryId: z.number().int().positive().nullish(),
   transferAccountId: z.number().int().positive().nullish(),
   accountId: z.number().int().positive().optional(),
@@ -545,7 +577,7 @@ export const investmentPatch = investmentInput.omit({ profileId: true }).partial
 
 export const investmentEntryInput = z.object({
   type: z.enum(['aporte', 'retiro', 'valuacion']),
-  amountCents: z.number().int().min(0, 'El monto no puede ser negativo'),
+  amountCents: dinero().min(0, 'El monto no puede ser negativo'),
   date: isoDate,
   note: z.string().trim().max(200).default(''),
   accountId: z.number().int().positive().nullish(),
@@ -557,9 +589,7 @@ export const investmentEntryInput = z.object({
     .min(0, 'Las unidades no pueden ser negativas')
     .max(MAX_UNIDADES_E8, 'Son demasiadas unidades para un solo registro')
     .nullish(),
-  unitPriceCents: z
-    .number()
-    .int()
+  unitPriceCents: dinero()
     .min(0, 'El precio no puede ser negativo')
     .nullish(),
 })
@@ -609,7 +639,7 @@ export const budgetInput = z
     /** 'AAAA-MM' o 'AAAA', según `periodKind`. */
     period: z.union([isoMonth, isoAnio]),
     periodKind: z.enum(['mes', 'anio']).default('mes'),
-    amountCents: z.number().int().positive('El presupuesto debe ser mayor a cero'),
+    amountCents: dinero().positive('El presupuesto debe ser mayor a cero'),
     rollover: z.boolean().default(false),
   })
   // El tipo y el texto tienen que concordar: guardar 'anio' con '2026-03'
@@ -640,13 +670,13 @@ export const budgetCopyInput = z.object({
 export const budgetTotalInput = z.object({
   profileId: z.number().int().positive(),
   month: isoMonth,
-  amountCents: z.number().int().positive('El tope total debe ser mayor a cero'),
+  amountCents: dinero().positive('El tope total debe ser mayor a cero'),
 })
 
 export const goalInput = z.object({
   profileId: z.number().int().positive(),
   name: z.string().trim().min(1, 'La meta necesita un nombre').max(60),
-  targetCents: z.number().int().positive('La meta debe ser mayor a cero'),
+  targetCents: dinero().positive('La meta debe ser mayor a cero'),
   dueDate: isoDate.nullish(),
   note: z.string().trim().max(200).default(''),
   /**
@@ -660,7 +690,7 @@ export const goalInput = z.object({
 export const goalPatch = goalInput.omit({ profileId: true }).partial()
 
 export const goalEntryInput = z.object({
-  amountCents: z.number().int().positive('El aporte debe ser mayor a cero'),
+  amountCents: dinero().positive('El aporte debe ser mayor a cero'),
   date: isoDate,
   note: z.string().trim().max(200).default(''),
   /**
@@ -807,7 +837,7 @@ export const contraparteInput = z.object({
   contact: z.string().trim().max(120).default(''),
   /** Días de crédito por omisión. `null` explícito los quita. */
   creditDays: z.number().int().min(0).max(365, 'Eso ya no es crédito comercial').nullish(),
-  creditLimitCents: z.number().int().nonnegative('El límite no puede ser negativo').nullish(),
+  creditLimitCents: dinero().nonnegative('El límite no puede ser negativo').nullish(),
 })
 
 export const contrapartePatch = contraparteInput
@@ -833,13 +863,13 @@ export const facturaInput = z.object({
   concept: z.string().trim().max(200).default(''),
   issueDate: isoDate,
   dueDate: isoDate.nullish(),
-  subtotalCents: z.number().int().positive('El subtotal debe ser mayor a cero'),
-  taxCents: z.number().int().min(0).default(0),
+  subtotalCents: dinero().positive('El subtotal debe ser mayor a cero'),
+  taxCents: dinero().min(0).default(0),
   // Retenciones (D21): **monto y no tasa**, igual que el impuesto, para no
   // amarrar el modelo a ninguna jurisdicción. Son dos porque así vienen
   // desglosadas en la factura que el usuario tiene enfrente.
-  withheldTaxCents: z.number().int().min(0).default(0),
-  withheldIncomeCents: z.number().int().min(0).default(0),
+  withheldTaxCents: dinero().min(0).default(0),
+  withheldIncomeCents: dinero().min(0).default(0),
   costCenterId: z.number().int().positive().nullish(),
 })
 
@@ -863,8 +893,8 @@ export const cotizacionInput = z
     concept: z.string().trim().max(200).default(''),
     issueDate: isoDate,
     validUntil: isoDate.nullish(),
-    subtotalCents: z.number().int().positive('El subtotal debe ser mayor a cero'),
-    taxCents: z.number().int().min(0).default(0),
+    subtotalCents: dinero().positive('El subtotal debe ser mayor a cero'),
+    taxCents: dinero().min(0).default(0),
     costCenterId: z.number().int().positive().nullish(),
   })
   .refine((q) => !q.validUntil || q.validUntil >= q.issueDate, {
@@ -912,7 +942,7 @@ export const notaCreditoInput = z.object({
   date: isoDate,
   folio: z.string().trim().max(40).default(''),
   concept: z.string().trim().max(200).default(''),
-  amountCents: z.number().int().positive('La nota de crédito debe ser mayor a cero'),
+  amountCents: dinero().positive('La nota de crédito debe ser mayor a cero'),
 })
 
 /** Aplicar un anticipo: liga un movimiento que ya existe a esta factura. */
@@ -926,10 +956,10 @@ export const facturaRecurrenteInput = z
     counterpartyId: z.number().int().positive(),
     direction: z.enum(['emitida', 'recibida']),
     concept: z.string().trim().max(200).default(''),
-    subtotalCents: z.number().int().positive('El subtotal debe ser mayor a cero'),
-    taxCents: z.number().int().min(0).default(0),
-    withheldTaxCents: z.number().int().min(0).default(0),
-    withheldIncomeCents: z.number().int().min(0).default(0),
+    subtotalCents: dinero().positive('El subtotal debe ser mayor a cero'),
+    taxCents: dinero().min(0).default(0),
+    withheldTaxCents: dinero().min(0).default(0),
+    withheldIncomeCents: dinero().min(0).default(0),
     costCenterId: z.number().int().positive().nullish(),
     creditDays: z.number().int().min(0).max(365).nullish(),
     frequency: z.enum(['mensual', 'quincenal', 'semanal', 'anual']),
@@ -957,8 +987,8 @@ export const emitirFacturaInput = z.object({
   dueDate: isoDate.nullish(),
   folio: z.string().trim().max(40).optional(),
   concept: z.string().trim().max(200).optional(),
-  subtotalCents: z.number().int().positive('El subtotal debe ser mayor a cero').optional(),
-  taxCents: z.number().int().min(0).optional(),
+  subtotalCents: dinero().positive('El subtotal debe ser mayor a cero').optional(),
+  taxCents: dinero().min(0).optional(),
 })
 
 export const facturaQuery = z.object({
@@ -974,7 +1004,7 @@ export const facturaQuery = z.object({
 /** El cobro o pago de una factura: crea el movimiento y lo liga. */
 export const cobroInput = z.object({
   accountId: z.number().int().positive(),
-  amountCents: z.number().int().positive('El monto debe ser mayor a cero'),
+  amountCents: dinero().positive('El monto debe ser mayor a cero'),
   date: isoDate,
   note: z.string().trim().max(200).default(''),
   categoryId: z.number().int().positive().nullish(),
@@ -997,8 +1027,8 @@ export const arrendamientoInput = z.object({
   profileId: z.number().int().positive(),
   assetId: z.number().int().positive(),
   tenant: z.string().trim().max(80).default(''),
-  rentCents: z.number().int().nonnegative('La renta no puede ser negativa'),
-  depositCents: z.number().int().nonnegative('El depósito no puede ser negativo').default(0),
+  rentCents: dinero().nonnegative('La renta no puede ser negativa'),
+  depositCents: dinero().nonnegative('El depósito no puede ser negativo').default(0),
   paymentDay: diaDelMes.default(1),
   startDate: isoDate,
   endDate: isoDate.nullish(),
@@ -1023,7 +1053,7 @@ export const horaInput = z.object({
     .int()
     .positive('Las horas se apuntan en minutos, y tienen que ser más de cero')
     .max(24 * 60, 'Eso es más de un día'),
-  rateCents: z.number().int().nonnegative('La tarifa no puede ser negativa').default(0),
+  rateCents: dinero().nonnegative('La tarifa no puede ser negativa').default(0),
   counterpartyId: z.number().int().positive().nullish(),
   costCenterId: z.number().int().positive().nullish(),
   note: z.string().trim().max(200).default(''),
@@ -1047,7 +1077,7 @@ export const facturarHorasInput = z.object({
   dueDate: isoDate.nullish(),
   folio: z.string().trim().max(40).default(''),
   concept: z.string().trim().max(200).default(''),
-  taxCents: z.number().int().min(0).default(0),
+  taxCents: dinero().min(0).default(0),
 })
 
 export const productoInput = z.object({
@@ -1071,7 +1101,7 @@ export const movimientoStockInput = z.object({
   date: isoDate,
   kind: z.enum(['entrada', 'salida', 'ajuste']),
   qtyMilli: z.number().int().refine((n) => n !== 0, 'Un movimiento de cero no es un movimiento'),
-  unitCostCents: z.number().int().nonnegative('El costo no puede ser negativo').default(0),
+  unitCostCents: dinero().nonnegative('El costo no puede ser negativo').default(0),
   note: z.string().trim().max(200).default(''),
   txId: z.number().int().positive().nullish(),
 })
@@ -1103,7 +1133,7 @@ export const cortInput = z.object({
   profileId: z.number().int().positive(),
   accountId: z.number().int().positive(),
   date: isoDate,
-  balanceCents: z.number().int(),
+  balanceCents: dinero(),
   note: z.string().trim().max(200).default(''),
 })
 
@@ -1185,7 +1215,7 @@ export const bienInput = z.object({
   profileId: z.number().int().positive(),
   name: z.string().trim().min(1, 'El bien necesita un nombre').max(60),
   kind: z.enum(['inmueble', 'vehiculo', 'equipo', 'otro']).default('otro'),
-  costCents: z.number().int().nonnegative('El costo no puede ser negativo'),
+  costCents: dinero().nonnegative('El costo no puede ser negativo'),
   acquiredDate: isoDate,
   /** La deuda que lo financia. `null` explícito la desliga. */
   debtId: z.number().int().positive().nullish(),
@@ -1208,7 +1238,7 @@ export const bienQuery = z.object({
  */
 export const valuacionInput = z.object({
   date: isoDate,
-  valueCents: z.number().int().nonnegative('El valor no puede ser negativo'),
+  valueCents: dinero().nonnegative('El valor no puede ser negativo'),
   note: z.string().trim().max(200).default(''),
 })
 

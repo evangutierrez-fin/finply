@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../api.ts'
 import { useApp } from '../context.ts'
 import { useFetch } from '../hooks.ts'
-import { fmtDate, fmtMoney, parseAmount, todayISO } from '../format.ts'
+import { fmtDate, fmtMoney, mensajeMonto, parseAmount, todayISO } from '../format.ts'
 import { Money, CountUpMoney } from '../components/Money.tsx'
 import { Modal } from '../components/Modal.tsx'
 import { HistorialValor } from '../components/Charts.tsx'
@@ -123,7 +123,7 @@ function EntryModal({
     }
     const cents = montoEfectivo
     if (!(mode === 'valuacion' && porPrecio) && cents === null) {
-      return setError('Escribe un monto válido')
+      return setError(mensajeMonto(amount, 'Escribe un monto válido'))
     }
     if (units.trim() && unitsE8 === null) {
       return setError('Esas unidades no se entienden (hasta 8 decimales)')

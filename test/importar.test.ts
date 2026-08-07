@@ -110,6 +110,23 @@ describe('fechas', () => {
       assert.equal(parseFecha(mala), null, `debió rechazar "${mala}"`)
     }
   })
+
+  test('un año de cuatro dígitos con ceros no produce una fecha corta', () => {
+    // El import escribe en la base sin pasar por el validador de la API, así
+    // que lo que salga de aquí es lo que se guarda. Con el año sin rellenar,
+    // '0026-03-05' se convertía en '26-03-05': ni es AAAA-MM-DD ni ordena con
+    // las demás. Hoy se rechaza, que es lo que hace también la puerta de la API.
+    assert.equal(parseFecha('0026-03-05'), null)
+    assert.equal(parseFecha('0999-01-01'), null)
+    assert.equal(parseFecha('1000-01-01'), '1000-01-01', 'cuatro dígitos de verdad sí entran')
+  })
+
+  test('el bisiesto se decide con el año escrito, no con uno inventado', () => {
+    assert.equal(parseFecha('29/02/2028'), '2028-02-29', '2028 es bisiesto')
+    assert.equal(parseFecha('29/02/2027'), null, '2027 no lo es')
+    assert.equal(parseFecha('2100-02-29'), null, 'los siglos no bisiestos también cuentan')
+    assert.equal(parseFecha('2000-02-29'), '2000-02-29', 'y 2000 sí lo fue')
+  })
 })
 
 describe('vista previa', () => {

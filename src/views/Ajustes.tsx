@@ -9,8 +9,65 @@ import { NAV_ITEMS } from '../components/Sidebar.tsx'
 import { CamposPropios } from '../components/CamposPropios.tsx'
 import { PlantillasTx } from '../components/PlantillasTx.tsx'
 import { diasDesde } from '../../shared/formato.ts'
+import type { RevisionRespaldo } from '../../shared/types.ts'
 
 const CONFIRM_WORD = 'RESTAURAR'
+
+/**
+ * Lo que el respaldo traía dentro y la base sí acepta: fechas que no existen en
+ * el calendario y cifras que la aritmética no puede releer.
+ *
+ * Se enseña **después** de restaurar y no antes, porque no cambia la decisión:
+ * el archivo se restaura entero de todos modos. Negarse a restaurar el respaldo
+ * de alguien es peor que restaurarlo con un renglón torcido — ese archivo puede
+ * ser lo único que le queda. Lo que sí cambia es que ahora sabe qué buscar, con
+ * la tabla, la columna y el valor, y el formulario ya no le deja volver a
+ * escribirlos.
+ */
+function RevisionDelRespaldo({ revision }: { revision: RevisionRespaldo }) {
+  return (
+    <div className="ajustes-revision" role="status">
+      <p className="ajustes-texto">
+        <strong>Se restauró el libro completo</strong>, y el archivo traía renglones escritos antes
+        de que existieran dos reglas que hoy los rechazan. No es un error del respaldo ni de
+        Finply, pero conviene corregirlos desde su movimiento.
+      </p>
+      {revision.fechas > 0 && (
+        <p className="ajustes-texto">
+          {revision.fechas === 1
+            ? 'Una fecha que no existe en el calendario, restaurada tal cual: el saldo la cuenta y los reportes del año no la ven.'
+            : `${revision.fechas} fechas que no existen en el calendario, restauradas tal cual: el saldo las cuenta y los reportes del año no las ven.`}{' '}
+          Cuál era la fecha de verdad solo lo sabes tú, así que Finply no la adivinó.
+        </p>
+      )}
+      {revision.montos > 0 && (
+        <p className="ajustes-texto">
+          {revision.montos === 1
+            ? 'Una cifra que el libro no puede releer, restaurada en un centavo: su renglón está completo —fecha, concepto, cuenta— y solo el monto se apartó.'
+            : `${revision.montos} cifras que el libro no puede releer, restauradas en un centavo: sus renglones están completos —fecha, concepto, cuenta— y solo el monto se apartó.`}{' '}
+          Un centavo al lado de una cifra de verdad no se puede confundir, y dejarlas como venían
+          habría devuelto un libro que no abre. Aquí abajo está lo que decían, para volver a
+          escribirlo.
+        </p>
+      )}
+      <ul className="ajustes-revision-lista">
+        {revision.ejemplos.map((h, i) => (
+          <li key={`${h.tabla}-${h.columna}-${i}`}>
+            <code>
+              {h.tabla}.{h.columna}
+            </code>{' '}
+            = <code>{h.valor}</code>
+          </li>
+        ))}
+      </ul>
+      {revision.fechas + revision.montos > revision.ejemplos.length && (
+        <p className="ajustes-nota">
+          Se enseñan los primeros {revision.ejemplos.length}; el total está arriba.
+        </p>
+      )}
+    </div>
+  )
+}
 
 /**
  * Ajustes, partido en dos.
@@ -383,10 +440,14 @@ function Configuracion() {
           toca un movimiento y no cambia el nombre del perfil. Lo único que se sobrescribe son las
           preferencias —tinta, formato, orden del lomo—, que es lo que se viene a copiar.
         </p>
+        {/* Un `type="file"` sin etiqueta se anuncia como "botón examinar" y
+            nada más: quien no ve la pantalla no sabe qué archivo se le está
+            pidiendo. El texto de arriba lo explica y es el que se nombra. */}
         <input
           ref={archivo}
           type="file"
           accept="application/json,.json"
+          aria-label="Archivo de configuración .json para aplicar a este libro"
           className="ajustes-archivo"
           onChange={(e) => {
             const file = e.target.files?.[0]
@@ -410,11 +471,14 @@ function AjustesDeLaApp() {
   const [confirmText, setConfirmText] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState<string | null>(null)
+  /** Lo que el archivo traía dentro y la base sí acepta. `null` = venía limpio. */
+  const [revision, setRevision] = useState<RevisionRespaldo | null>(null)
   const [working, setWorking] = useState(false)
 
   const pickFile = async (file: File) => {
     setError(null)
     setDone(null)
+    setRevision(null)
     try {
       const snapshot = JSON.parse(await file.text())
       setPending({ name: file.name, snapshot })
@@ -429,9 +493,10 @@ function AjustesDeLaApp() {
     if (!pending) return
     setWorking(true)
     try {
-      const { restaurados } = await api.backup.restore(pending.snapshot)
+      const { restaurados, revision } = await api.backup.restore(pending.snapshot)
       const total = Object.values(restaurados).reduce((s, n) => s + n, 0)
       setDone(`Libro restaurado: ${total} registros desde ${pending.name}.`)
+      setRevision(revision.fechas + revision.montos > 0 ? revision : null)
       setPending(null)
       setConfirmText('')
       setError(null)
@@ -439,7 +504,14 @@ function AjustesDeLaApp() {
       bump()
       // Los perfiles cambiaron por completo; la forma honesta de reflejarlo
       // es recargar en vez de intentar reconciliar el estado en memoria.
-      setTimeout(() => window.location.reload(), 1200)
+      //
+      // ⚠ Salvo que el archivo trajera algo torcido: entonces la recarga se
+      // llevaría el único aviso que el usuario va a recibir, y ese aviso es
+      // justo el que le dice qué ir a corregir. Ahí se queda en pantalla y él
+      // decide cuándo recargar.
+      if (revision.fechas + revision.montos === 0) {
+        setTimeout(() => window.location.reload(), 1200)
+      }
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -479,6 +551,7 @@ function AjustesDeLaApp() {
           ref={fileInput}
           type="file"
           accept="application/json,.json"
+          aria-label="Archivo de respaldo .json para restaurar"
           className="ajustes-archivo"
           onChange={(e) => {
             const file = e.target.files?.[0]
@@ -525,6 +598,7 @@ function AjustesDeLaApp() {
 
         {error && <p className="forma-error" role="alert">{error}</p>}
         {done && <p className="ajustes-ok" role="status">{done}</p>}
+        {revision && <RevisionDelRespaldo revision={revision} />}
       </section>
 
       <section className="hoja ajustes-bloque">

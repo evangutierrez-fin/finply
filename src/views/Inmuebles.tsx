@@ -181,7 +181,10 @@ function Carta({
 
       <dl className="renta-cifras">
         <div>
-          <dt>Cobrado en 12 meses</dt>
+          {/* El rótulo dice la ventana **de este contrato**, no la de la
+              consulta: uno firmado hace dos meses lleva dos, y llamarle "12
+              meses" a lo que cobró en dos vuelve ilegible la cifra de al lado. */}
+          <dt>Cobrado en {r.meses === 1 ? 'el mes' : `${r.meses} meses`}</dt>
           <dd><Money cents={r.cobradoCents} /></dd>
         </div>
         <div>
@@ -203,6 +206,12 @@ function Carta({
         </p>
       ) : (
         <p className="reportes-nota">
+          {r.meses < 12 && (
+            <>
+              Llevando ese ritmo de {r.meses === 1 ? 'un mes' : `${r.meses} meses`} a un año son{' '}
+              <Money cents={r.rendimiento.anualizadoCents} signed className="cifra-chica" />.{' '}
+            </>
+          )}
           Eso es <strong className="cifra-chica">{fmtTasa(tasa)} anual</strong> sobre los{' '}
           {fmtMoney(r.assetValueCents)} que vale hoy
           {r.rendimiento.tasaSobreCostoBp !== null && r.assetCostCents !== r.assetValueCents && (
@@ -294,7 +303,9 @@ export function Inmuebles({ onNav }: { onNav: (view: View) => void }) {
         <>
           <div className="stats stats-auto">
             <div className="stat">
-              <span className="stat-label">Rentas cobradas en 12 meses</span>
+              {/* Doce aquí sí es la ventana de la consulta: el total junta
+                  contratos de distinta edad y solo lo mirado los abarca a todos. */}
+              <span className="stat-label">Rentas cobradas en los últimos 12 meses</span>
               <span className="stat-valor"><Money cents={cobrado} /></span>
             </div>
             <div className="stat">

@@ -18,7 +18,7 @@
 // es registrar un movimiento, y eso lo hace el usuario (R4).
 
 import { db, httpError, inTransaction } from './db.ts'
-import { finDeMes, hoyISO, proximoDiaDelMes } from '../shared/fechas.ts'
+import { correrMesTexto, finDeMes, hoyISO, proximoDiaDelMes } from '../shared/fechas.ts'
 import { rendimientoInmueble } from '../shared/giro.ts'
 import type { Arrendamiento } from '../shared/types.ts'
 
@@ -67,6 +67,27 @@ function movimientosDe(profileId: number, desde: string, hasta: string) {
   return mapa
 }
 
+/**
+ * Cuántos meses del contrato caen dentro de la ventana.
+ *
+ * Es el divisor del rendimiento anualizado, y por eso importa: dividir entre
+ * doce lo que un contrato de dos meses cobró en dos lo hace parecer seis veces
+ * peor de lo que es. Se cuenta por meses de calendario, que es la unidad en
+ * que se cobra una renta, y con los dos extremos dentro.
+ */
+export function mesesEnVentana(
+  contrato: { startDate: string; endDate: string | null },
+  ventana: { desde: string; hasta: string },
+): number {
+  const mes = (iso: string) => {
+    const [anio, m] = iso.split('-').map(Number)
+    return anio! * 12 + (m! - 1)
+  }
+  const inicio = Math.max(mes(contrato.startDate), mes(ventana.desde))
+  const fin = Math.min(mes(contrato.endDate ?? ventana.hasta), mes(ventana.hasta))
+  return Math.max(0, fin - inicio + 1)
+}
+
 function mapArrendamiento(
   row: any,
   movs: { cobrado: number; gasto: number; deposito: number },
@@ -78,6 +99,10 @@ function mapArrendamiento(
   // vuelve a cobrar, y uno que aún no empieza cobra desde su fecha de inicio.
   const base = row.start_date > hoy ? row.start_date : hoy
   const proximo = proximoDiaDelMes(base, row.payment_day)
+  const meses = mesesEnVentana(
+    { startDate: row.start_date, endDate: endDate },
+    { desde, hasta: finDeMes(hoy) },
+  )
   return {
     id: row.id,
     profileId: row.profile_id,
@@ -98,13 +123,13 @@ function mapArrendamiento(
     // Nunca negativo: devolver de más no significa que el inquilino te deba un
     // depósito, significa que alguien se equivocó al capturar.
     depositoEnManoCents: Math.max(0, movs.deposito),
-    meses: VENTANA_MESES,
+    meses,
     rendimiento: rendimientoInmueble({
       cobradoCents: movs.cobrado,
       gastoCents: movs.gasto,
       valorCents: row.asset_value ?? 0,
       costoCents: row.asset_cost ?? 0,
-      meses: VENTANA_MESES,
+      meses,
     }),
     proximoCobro: row.archived === 1 || (endDate !== null && proximo > endDate) ? null : proximo,
   }
@@ -112,12 +137,13 @@ function mapArrendamiento(
 
 /** La ventana de doce meses que termina hoy, en fechas. */
 function ventana(hoy: string): { desde: string; hasta: string } {
-  const [anio, mes] = hoy.split('-').map(Number)
   // Doce meses cerrados hacia atrás contando el actual: julio 2026 mira desde
-  // agosto 2025. Es la misma convención que el reporte anual.
-  const total = anio! * 12 + (mes! - 1) - (VENTANA_MESES - 1)
-  const desde = `${Math.floor(total / 12)}-${String((((total % 12) + 12) % 12) + 1).padStart(2, '0')}-01`
-  return { desde, hasta: finDeMes(hoy) }
+  // agosto 2025. Es la misma convención que el reporte anual, y la misma
+  // aritmética: `correrMesTexto` en vez de una séptima copia de la cuenta.
+  return {
+    desde: `${correrMesTexto(hoy.slice(0, 7), -(VENTANA_MESES - 1))}-01`,
+    hasta: finDeMes(hoy),
+  }
 }
 
 export function listar(profileId: number, hoy = hoyISO()): Arrendamiento[] {

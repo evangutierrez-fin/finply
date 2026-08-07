@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { api } from '../api.ts'
 import { useApp } from '../context.ts'
 import { useFetch } from '../hooks.ts'
-import { currentMonth, fmtMoney, monthLabel, parseAmount, shiftMonth } from '../format.ts'
+import { currentMonth, fmtMoney, monthLabel, mensajeMonto, parseAmount, shiftMonth } from '../format.ts'
 import { Money } from '../components/Money.tsx'
 import type { Budget } from '../../shared/types.ts'
 import { rotuloCategoria } from '../../shared/taxonomia.ts'
@@ -126,7 +126,7 @@ export function Presupuestos() {
   ) => {
     const cents = parseAmount(raw)
     if (!cents) {
-      setFormError('Escribe un monto válido para el presupuesto')
+      setFormError(mensajeMonto(raw, 'Escribe un monto válido para el presupuesto'))
       return false
     }
     const periodKind = opciones.periodKind ?? 'mes'
@@ -169,7 +169,7 @@ export function Presupuestos() {
   const guardarTotal = async () => {
     const cents = parseAmount(totalValue)
     if (!cents) {
-      setFormError('Escribe un monto válido para el tope del mes')
+      setFormError(mensajeMonto(totalValue, 'Escribe un monto válido para el tope del mes'))
       return
     }
     try {

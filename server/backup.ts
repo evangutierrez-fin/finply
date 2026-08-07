@@ -11,6 +11,9 @@ import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:f
 import path from 'node:path'
 import { db, dataDir, httpError, inTransaction } from './db.ts'
 import { SCHEMA_VERSION } from './migrations.ts'
+import { esFechaReal } from '../shared/fechas.ts'
+import type { HallazgoRespaldo, RevisionRespaldo } from '../shared/types.ts'
+import { MAX_CENTAVOS } from '../shared/formato.ts'
 
 /** Formato del archivo de respaldo. Sube si deja de ser compatible. */
 const BACKUP_FORMAT = 1
@@ -194,13 +197,120 @@ function parseSnapshot(raw: unknown): Snapshot {
   return data as Snapshot
 }
 
+/** Cuántos ejemplos se devuelven. Más que esto ya no es un aviso, es un volcado. */
+const MAX_EJEMPLOS = 8
+
+/**
+ * Si una columna guarda una fecha de calendario. Se mira el **nombre**, que es
+ * la convención del esquema entero: `date`, `due_date`, `start_date`,
+ * `valid_until`, `paused_from`. Los `_at` quedan fuera a propósito: son marcas
+ * de tiempo con hora, no días del calendario.
+ */
+function esColumnaDeFecha(nombre: string): boolean {
+  if (nombre.endsWith('_at')) return false
+  return (
+    nombre === 'date' ||
+    nombre.endsWith('_date') ||
+    nombre === 'valid_until' ||
+    nombre === 'paused_from' ||
+    nombre === 'paused_until'
+  )
+}
+
+/** Si una cifra de dinero es de las que el libro puede volver a leer. */
+function montoLegible(valor: unknown): boolean {
+  return (
+    typeof valor === 'number' && Number.isSafeInteger(valor) && Math.abs(valor) <= MAX_CENTAVOS
+  )
+}
+
+/**
+ * Con cuánto se restaura una cifra que el libro no puede releer.
+ *
+ * **Un centavo, y no cero**, por una razón que no es de gusto: casi toda
+ * columna de dinero del esquema lleva `CHECK (amount_cents > 0)`, así que un
+ * cero haría que la restauración entera fallara con un 400 — y entonces el
+ * usuario se quedaría sin su respaldo por querer protegerlo, que es exactamente
+ * lo contrario de lo que se buscaba. Restaurar obedece las mismas reglas que
+ * todo lo demás.
+ *
+ * Un centavo al lado de una cifra de verdad es inconfundible, y el informe trae
+ * lo que decía para volver a escribirlo.
+ */
+const MONTO_ILEGIBLE = 1
+
+/**
+ * Revisa lo que el respaldo trae dentro **sin negarse a restaurarlo**, y de
+ * paso deja sin efecto lo único que no se puede restaurar.
+ *
+ * La segunda vuelta de la auditoría dejó esto escrito como hueco conocido: la
+ * restauración comprueba llaves foráneas y las reglas de la base, no el
+ * calendario. Un archivo hecho antes del hallazgo 4 puede traer un `2026-02-30`
+ * —que existe para el texto y no para la aritmética— y uno anterior al hallazgo
+ * 8 puede traer una cifra que ninguna pantalla podrá volver a leer.
+ *
+ * La decisión de fondo no cambia, y es la que gobierna las dos ramas de abajo:
+ * **negarse a restaurar el respaldo de alguien es peor que restaurarlo con un
+ * renglón torcido.** Ese archivo puede ser lo único que le queda. Pero las dos
+ * cosas no son iguales, y tratarlas igual sería el error:
+ *
+ *   · **La fecha se restaura tal cual.** El libro abre, los saldos cuadran y lo
+ *     único que se pierde es ese renglón en los reportes del año. Cuál era la
+ *     fecha de verdad solo lo sabe el usuario.
+ *   · **La cifra ilegible no se restaura: entra en un centavo.** Aquí no hay
+ *     elección que tomar. Se comprobó escribiéndola: la fila entra, y a partir
+ *     de ahí ninguna lectura de esa cuenta contesta — **ni la exportación del
+ *     respaldo siguiente**. Restaurarla tal cual sería devolverle al usuario un
+ *     libro que no puede abrir y del que ya no puede sacar nada. La fila se
+ *     conserva entera —su fecha, su concepto, su cuenta, sus ligas— y el valor
+ *     original viaja en el informe para que lo vuelva a escribir. Por qué un
+ *     centavo y no cero, en `MONTO_ILEGIBLE`.
+ *
+ * Muta `snapshot` a propósito: es el objeto que se va a insertar, y sanear en
+ * una copia dejaría la puerta abierta a insertar el original por descuido.
+ */
+export function revisarSnapshot(snapshot: Snapshot): RevisionRespaldo {
+  const revision: RevisionRespaldo = { fechas: 0, montos: 0, ejemplos: [] }
+  const apuntar = (h: HallazgoRespaldo) => {
+    if (h.motivo === 'fecha') revision.fechas++
+    else revision.montos++
+    if (revision.ejemplos.length < MAX_EJEMPLOS) revision.ejemplos.push(h)
+  }
+
+  for (const tabla of TABLES) {
+    for (const fila of snapshot.tables[tabla] ?? []) {
+      for (const [columna, valor] of Object.entries(fila)) {
+        if (valor === null || valor === undefined) continue
+        if (esColumnaDeFecha(columna)) {
+          if (typeof valor !== 'string' || !esFechaReal(valor)) {
+            apuntar({ tabla, columna, valor: String(valor).slice(0, 40), motivo: 'fecha' })
+          }
+          continue
+        }
+        if (!columna.endsWith('_cents') || montoLegible(valor)) continue
+        apuntar({ tabla, columna, valor: String(valor).slice(0, 40), motivo: 'monto' })
+        fila[columna] = MONTO_ILEGIBLE
+      }
+    }
+  }
+  return revision
+}
+
 /**
  * Reemplaza el contenido del libro por el del respaldo. Todo ocurre dentro de
  * una transacción: si el archivo trae una sola referencia rota, no se aplica
  * nada y el libro anterior sigue intacto.
+ *
+ * Antes de escribir nada pasa por `revisarSnapshot`, que además de contar lo
+ * que viene torcido **deja en cero las cifras que el libro no puede releer**:
+ * ver ahí por qué esa es la única de las dos que no se restaura tal cual.
  */
-export function importSnapshot(raw: unknown): { restaurados: Record<string, number> } {
+export function importSnapshot(raw: unknown): {
+  restaurados: Record<string, number>
+  revision: RevisionRespaldo
+} {
   const snapshot = parseSnapshot(raw)
+  const revision = revisarSnapshot(snapshot)
   const restaurados: Record<string, number> = {}
 
   inTransaction(() => {
@@ -240,7 +350,7 @@ export function importSnapshot(raw: unknown): { restaurados: Record<string, numb
     }
   })
 
-  return { restaurados }
+  return { restaurados, revision }
 }
 
 const SNAPSHOT_DIR = path.join(dataDir, 'respaldos')

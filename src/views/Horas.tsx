@@ -382,7 +382,7 @@ export function Horas({ onNav }: { onNav: (view: View) => void }) {
               <div className="stat">
                 <span className="stat-label">Sin facturar, de siempre</span>
                 <span className="stat-valor stat-in">
-                  <Money cents={porCobrar.reduce((s, c) => s + c.importeCents, 0)} />
+                  <Money cents={resumen.porCobrarCents} />
                 </span>
               </div>
               {resumen.tarifaMediaCents !== null && (

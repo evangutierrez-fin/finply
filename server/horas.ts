@@ -31,6 +31,25 @@ const SELECT = `
   LEFT JOIN invoices f ON f.id = h.invoice_id
 `
 
+/**
+ * El importe de **un renglón**, en SQL: los mismos minutos por tarifa entre 60
+ * que calcula `importeDeMinutos`, redondeados una vez por renglón.
+ *
+ * Que exista es el punto. Sumar `minutes * rate_cents` de todos los renglones y
+ * dividir entre 60 al final **no** da lo mismo que sumar los renglones ya
+ * redondeados, y las dos cifras estaban en pantallas distintas: el panel decía
+ * $3.33 por cobrar de dos renglones de un minuto a $100 la hora, y la factura
+ * que salía de esos mismos dos renglones era de $3.34. Un centavo, siempre del
+ * lado de prometer menos de lo que se va a cobrar, y creciendo con el número de
+ * renglones.
+ *
+ * Manda el renglón, no el agregado: es lo que respalda la factura y es lo que el
+ * usuario ve en la lista. Se redondea aquí igual que allá —hacia arriba en el
+ * medio, y todos los valores son positivos, así que `round` de SQLite y
+ * `Math.round` coinciden—, con `h` como alias de `time_entries`.
+ */
+const IMPORTE_RENGLON = `CAST(ROUND(h.minutes * h.rate_cents / 60.0) AS INTEGER)`
+
 function mapHora(row: any): Hora {
   return {
     id: row.id,
@@ -90,17 +109,22 @@ export function listar(filtro: FiltroHoras): Hora[] {
  * cada una: los totales del periodo miran la ventana, y lo por cobrar mira
  * **todo el historial** — una hora de hace seis meses sin facturar sigue sin
  * cobrarse, y esconderla porque no cae en la ventana sería perderla.
+ *
+ * Todos los importes se suman **renglón por renglón ya redondeado**
+ * (`IMPORTE_RENGLON`), que es la misma aritmética de `mapHora` y de `facturar`.
+ * Es lo único que hace que la cifra grande, la lista de abajo y la factura que
+ * sale de esas horas no puedan separarse por centavos.
  */
 export function resumen(profileId: number, desde: string, hasta: string): ResumenHoras {
   const totales: any = db
     .prepare(
       `SELECT
-        COALESCE(SUM(minutes), 0) AS minutos,
-        COALESCE(SUM(minutes * rate_cents), 0) AS importe_x60,
-        COALESCE(SUM(CASE WHEN invoice_id IS NULL THEN minutes END), 0) AS minutos_libres,
-        COALESCE(SUM(CASE WHEN invoice_id IS NULL THEN minutes * rate_cents END), 0) AS libre_x60
-       FROM time_entries
-       WHERE profile_id = ? AND date BETWEEN ? AND ?`,
+        COALESCE(SUM(h.minutes), 0) AS minutos,
+        COALESCE(SUM(${IMPORTE_RENGLON}), 0) AS importe,
+        COALESCE(SUM(CASE WHEN h.invoice_id IS NULL THEN h.minutes END), 0) AS minutos_libres,
+        COALESCE(SUM(CASE WHEN h.invoice_id IS NULL THEN ${IMPORTE_RENGLON} END), 0) AS libre
+       FROM time_entries h
+       WHERE h.profile_id = ? AND h.date BETWEEN ? AND ?`,
     )
     .get(profileId, desde, hasta)
 
@@ -109,40 +133,46 @@ export function resumen(profileId: number, desde: string, hasta: string): Resume
       `SELECT h.counterparty_id AS id, cp.name AS name,
         COUNT(*) AS entradas,
         COALESCE(SUM(h.minutes), 0) AS minutos,
-        COALESCE(SUM(h.minutes * h.rate_cents), 0) AS importe_x60,
+        COALESCE(SUM(${IMPORTE_RENGLON}), 0) AS importe,
         MIN(h.date) AS desde, MAX(h.date) AS hasta
        FROM time_entries h
        LEFT JOIN counterparties cp ON cp.id = h.counterparty_id
        WHERE h.profile_id = ? AND h.invoice_id IS NULL
        GROUP BY h.counterparty_id
-       ORDER BY importe_x60 DESC`,
+       ORDER BY importe DESC`,
     )
     .all(profileId) as any[]
 
   const minutosTotal = totales.minutos as number
-  const importeTotalCents = Math.round((totales.importe_x60 as number) / 60)
+  const importeTotalCents = totales.importe as number
+  const filas = porCobrar.map(
+    (c): HorasPorCobrar => ({
+      counterpartyId: c.id ?? null,
+      // Sin cliente no se puede facturar, y hay que decirlo con su nombre.
+      counterpartyName: c.name ?? 'Sin cliente',
+      minutos: c.minutos,
+      importeCents: c.importe,
+      entradas: c.entradas,
+      desde: c.desde,
+      hasta: c.hasta,
+    }),
+  )
   return {
     desde,
     hasta,
     minutosTotal,
     importeTotalCents,
-    minutosSinFacturar: totales.minutos_libres as number,
-    importeSinFacturarCents: Math.round((totales.libre_x60 as number) / 60),
+    minutosSinFacturarDelPeriodo: totales.minutos_libres as number,
+    importeSinFacturarDelPeriodoCents: totales.libre as number,
     // Sin horas no hay tarifa media que decir: dividir entre cero no da cero.
     tarifaMediaCents:
       minutosTotal > 0 ? Math.round((importeTotalCents * 60) / minutosTotal) : null,
-    porCobrar: porCobrar.map(
-      (c): HorasPorCobrar => ({
-        counterpartyId: c.id ?? null,
-        // Sin cliente no se puede facturar, y hay que decirlo con su nombre.
-        counterpartyName: c.name ?? 'Sin cliente',
-        minutos: c.minutos,
-        importeCents: Math.round(c.importe_x60 / 60),
-        entradas: c.entradas,
-        desde: c.desde,
-        hasta: c.hasta,
-      }),
-    ),
+    porCobrar: filas,
+    // El total sale de **sumar los renglones**, no de un agregado paralelo: es
+    // la única forma de que la cifra grande y la tabla que está debajo no
+    // puedan separarse por el redondeo de cada cliente.
+    porCobrarMinutos: filas.reduce((s, c) => s + c.minutos, 0),
+    porCobrarCents: filas.reduce((s, c) => s + c.importeCents, 0),
   }
 }
 
