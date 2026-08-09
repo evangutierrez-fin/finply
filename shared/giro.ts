@@ -11,6 +11,21 @@
 
 // ── Inventario: promedio ponderado móvil (D29) ────────────────────────────
 
+/**
+ * Tope de una cantidad de existencias, en milésimas: mil millones de unidades.
+ *
+ * Es el hermano de `MAX_CENTAVOS` y existe por lo mismo, no por opinión sobre
+ * qué es mucho inventario. `qty_milli` es una columna INTEGER de SQLite y
+ * `node:sqlite` se niega a **devolver** un entero que JavaScript no pueda
+ * representar exacto: una cantidad por encima de 2^53 entraba sin quejarse y a
+ * partir de ahí el almacén —y el respaldo del libro entero— contestaba 500.
+ * El techo del dinero no la cubría porque no es dinero.
+ *
+ * Mil millones de unidades dejan cuatro órdenes de magnitud de holgura para
+ * multiplicarla por un costo unitario antes de acercarse al entero seguro.
+ */
+export const MAX_MILESIMAS = 1_000_000_000_000
+
 export type TipoMovimientoExistencias = 'entrada' | 'salida' | 'ajuste'
 
 export interface MovimientoExistencias {

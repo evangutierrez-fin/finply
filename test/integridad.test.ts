@@ -773,3 +773,79 @@ describe('el techo del dinero', () => {
     assert.equal(r.status, 201, 'el techo no puede estorbarle a un libro real')
   })
 })
+
+/**
+ * La otra mitad del mismo hallazgo, y la que la tercera vuelta no vio: **la
+ * trampa no era del dinero, era del entero**.
+ *
+ * `qty_milli` y `position` son columnas INTEGER igual que los centavos, y el
+ * techo del dinero no las cubría. Con una cantidad por encima de 2^53 el
+ * almacén dejaba de abrir y —peor— el respaldo del libro entero contestaba
+ * 500: la misma partida encerrada, por una puerta que no era de dinero.
+ */
+describe('el techo de las demás magnitudes', () => {
+  const ENORME = Number.MAX_SAFE_INTEGER + 2
+
+  test('una cantidad de existencias imposible se rechaza y el almacén sigue abriendo', async () => {
+    const { perfil } = await libroBase(c, 'Cantidad', 'negocio')
+    const prod = (
+      await c.post('/api/inventario', { profileId: perfil.id, name: 'Cemento', unit: 'kg' })
+    ).body
+    const r = await c.post('/api/inventario/movimientos', {
+      profileId: perfil.id,
+      productId: prod.id,
+      date: '2026-08-03',
+      kind: 'entrada',
+      qtyMilli: ENORME,
+      unitCostCents: 100,
+    })
+    assert.equal(r.status, 400, 'pasó una cantidad que el libro no puede releer')
+
+    const almacen = await c.get(`/api/inventario?profileId=${perfil.id}`)
+    assert.equal(almacen.status, 200, 'el almacén dejó de abrir')
+    assert.equal(almacen.body.productos[0].cantidadMilli, 0)
+    // Y la puerta que de verdad importa: el libro entero se sigue pudiendo sacar.
+    assert.equal((await c.get('/api/respaldo')).status, 200, 'el libro se quedó sin salida')
+  })
+
+  test('el mínimo de un producto tampoco cuela una cantidad imposible', async () => {
+    const { perfil } = await libroBase(c, 'Minimo', 'negocio')
+    const r = await c.post('/api/inventario', {
+      profileId: perfil.id, name: 'Arena', unit: 'kg', minQtyMilli: ENORME,
+    })
+    assert.equal(r.status, 400)
+    assert.equal((await c.get(`/api/inventario?profileId=${perfil.id}`)).status, 200)
+  })
+
+  test('el orden de una lista tampoco: es un entero como cualquier otro', async () => {
+    const { perfil } = await libroBase(c, 'Orden')
+    const campo = await c.post('/api/personalizacion/campos', {
+      profileId: perfil.id, label: 'Obra', kind: 'texto', position: ENORME,
+    })
+    assert.equal(campo.status, 400)
+    assert.equal(
+      (await c.get(`/api/personalizacion/campos?profileId=${perfil.id}`)).status,
+      200,
+      'los campos propios dejaron de abrir',
+    )
+
+    const plantilla = await c.post('/api/personalizacion/plantillas', {
+      profileId: perfil.id, name: 'Café', type: 'gasto', position: ENORME,
+    })
+    assert.equal(plantilla.status, 400)
+  })
+
+  test('mil quinientos kilos —una cantidad real— siguen entrando', async () => {
+    const { perfil } = await libroBase(c, 'CantidadOk', 'negocio')
+    const prod = (
+      await c.post('/api/inventario', {
+        profileId: perfil.id, name: 'Grava', unit: 'kg', minQtyMilli: 100_000,
+      })
+    ).body
+    const r = await c.post('/api/inventario/movimientos', {
+      profileId: perfil.id, productId: prod.id, date: '2026-08-03',
+      kind: 'entrada', qtyMilli: 1_500_000, unitCostCents: 250,
+    })
+    assert.equal(r.status, 201, 'el techo no puede estorbarle a un almacén real')
+  })
+})

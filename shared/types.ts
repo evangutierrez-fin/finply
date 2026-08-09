@@ -1835,7 +1835,13 @@ export interface HallazgoRespaldo {
   columna: string
   /** El valor tal cual venía, recortado para que quepa en un aviso. */
   valor: string
-  motivo: 'fecha' | 'monto'
+  /**
+   * `cifra` es la hermana de `monto`: una magnitud entera que no es dinero
+   * —una cantidad de existencias, el orden de una lista— y que rompe el libro
+   * exactamente igual. Se separan porque lo que se le dice al usuario no es lo
+   * mismo: "un centavo" no significa nada al lado de un kilo.
+   */
+  motivo: 'fecha' | 'monto' | 'cifra'
 }
 
 /**
@@ -1856,6 +1862,8 @@ export interface RevisionRespaldo {
   fechas: number
   /** Cifras que el libro no puede releer. Se restauraron en un centavo. */
   montos: number
+  /** Magnitudes que no son dinero y tampoco se pueden releer. En 1. */
+  cifras: number
   /** Los primeros, para poder ir a buscarlos. La cuenta completa va arriba. */
   ejemplos: HallazgoRespaldo[]
 }

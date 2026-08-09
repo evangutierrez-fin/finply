@@ -25,6 +25,7 @@ import { listar as listarRecurrencias } from './recurrencias.ts'
 import { tablaAmortizacion } from '../shared/credito.ts'
 import { diasEntre, hoyISO, sumarDias } from '../shared/fechas.ts'
 import { cantidadTexto } from '../shared/giro.ts'
+import { cifraPendiente, pesoPendiente, restoPendiente } from '../shared/recurrencias.ts'
 import type { Alerta } from '../shared/types.ts'
 
 /**
@@ -200,16 +201,28 @@ function deRecurrencias(profileId: number, hoy: string): Alerta[] {
     // promedio de lo asentado—, y la que vale es la que la bandeja va a
     // proponer. Con la columna, el Resumen anunciaba $500 de un atraso que el
     // calendario y la bandeja valuaban en $4,500 (D14).
-    const monto = conPendientes.reduce((s, r) => s + r.pendientes * r.montoPropuestoCents, 0)
+    //
+    // Y **partido por dirección**, no sumado: sumar el sueldo que entra con la
+    // colegiatura que sale daba una cifra que la bandeja no enseña nunca. La
+    // aritmética es la misma que usa la bandeja, en `shared/recurrencias.ts`.
+    const peso = pesoPendiente(
+      conPendientes.map((r) => ({
+        type: r.type,
+        investmentId: r.investmentId,
+        amountCents: r.pendientes * r.montoPropuestoCents,
+      })),
+    )
+    const resto = restoPendiente(peso, pesos)
+    const deQuien =
+      conPendientes.length === 1
+        ? `De ${etiqueta(conPendientes[0]!.note, conPendientes[0]!.type)}, sin asentar en el libro`
+        : `De ${conPendientes.length} plantillas, sin asentar en el libro`
     alertas.push({
       tipo: 'recurrencia',
       severidad: 'media',
       titulo: `${pendientes} ${pendientes === 1 ? 'partida' : 'partidas'} por confirmar`,
-      detalle:
-        conPendientes.length === 1
-          ? `De ${etiqueta(conPendientes[0]!.note, conPendientes[0]!.type)}, sin asentar en el libro`
-          : `De ${conPendientes.length} plantillas, sin asentar en el libro`,
-      montoCents: monto,
+      detalle: resto ? `${deQuien}. ${resto}` : deQuien,
+      montoCents: cifraPendiente(peso),
       refId: conPendientes.length === 1 ? conPendientes[0]!.id : null,
       vista: 'recurrencias',
     })
@@ -222,15 +235,27 @@ function deRecurrencias(profileId: number, hoy: string): Alerta[] {
       diasEntre(hoy, r.proximaFecha) <= DIAS_AVISO_RECURRENCIA,
   )
   if (proximas.length > 0) {
-    const monto = proximas.reduce((s, r) => s + r.montoPropuestoCents, 0)
+    // Lo mismo que arriba: "suman $3,450 entre todos" juntaba $1,450 de un
+    // curso con $2,000 que se van a una inversión propia y siguen siendo
+    // tuyos. Sumarlos no describe nada.
+    const peso = pesoPendiente(
+      proximas.map((r) => ({
+        type: r.type,
+        investmentId: r.investmentId,
+        amountCents: r.montoPropuestoCents,
+      })),
+    )
+    const monto = cifraPendiente(peso)
+    const resto = restoPendiente(peso, pesos)
     const una = proximas.length === 1 ? proximas[0]! : null
+    const entreTodos = resto ? `Suman ${pesos(monto)}, y aparte ${resto}` : `Suman ${pesos(monto)} entre todos`
     alertas.push({
       tipo: 'recurrencia',
       severidad: 'media',
       titulo: una
         ? `${etiqueta(una.note, una.type)} ${una.type === 'ingreso' ? 'entra' : 'se cobra'} ${cuando(hoy, una.proximaFecha!)}`
         : `${proximas.length} movimientos recurrentes en ${DIAS_AVISO_RECURRENCIA} días`,
-      detalle: una ? una.descripcion : `Suman ${pesos(monto)} entre todos`,
+      detalle: una ? una.descripcion : entreTodos,
       montoCents: monto,
       refId: una?.id ?? null,
       vista: 'recurrencias',

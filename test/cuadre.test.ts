@@ -540,6 +540,48 @@ describe('duplicar y adjuntar', () => {
     assert.match(JSON.stringify(grande.body), /tope/)
   })
 
+  /**
+   * El nombre de un recibo acaba en tres sitios: una cabecera HTTP, una ruta
+   * dentro del .zip y el respaldo. Solo el .zip lo cortaba.
+   *
+   * Un salto de línea es el separador entre dos cabeceras, así que Node se
+   * niega a mandar la respuesta: el recibo se subía con un 201 y después
+   * **contestaba 500 para siempre**. Entró al libro y ya no salía, que es el
+   * mismo modo de fallar de una cifra ilegible.
+   */
+  test('un recibo con un nombre imposible se sube saneado y se puede bajar', async () => {
+    const tx = (await gasto(3000, '2026-12-23')).body
+    const subida = await c.post(`/api/transactions/${tx.id}/adjuntos`, {
+      filename: 'recibo\r\nX-Inyectado: si.pdf',
+      mime: 'application/pdf',
+      dataB64: Buffer.from('%PDF-1.4').toString('base64'),
+    })
+    assert.equal(subida.status, 201)
+    assert.ok(!/[\r\n]/.test(subida.body.filename), 'el salto de línea entró al libro')
+
+    const bajada = await c.getBytes(`/api/transactions/${tx.id}/adjuntos/${subida.body.id}`)
+    assert.equal(bajada.status, 200, 'el recibo entró y ya no podía salir')
+    assert.match(bajada.headers['content-disposition']!, /^attachment/)
+  })
+
+  test('y un nombre que es una ruta sale como nombre, no como ruta', async () => {
+    const tx = (await gasto(3100, '2026-12-24')).body
+    const subida = await c.post(`/api/transactions/${tx.id}/adjuntos`, {
+      filename: '../../../.ssh/authorized_keys',
+      mime: 'application/pdf',
+      dataB64: Buffer.from('%PDF-1.4').toString('base64'),
+    })
+    assert.equal(subida.status, 201)
+    assert.ok(!subida.body.filename.includes('/'), 'la ruta se guardó tal cual')
+    assert.ok(!subida.body.filename.startsWith('.'))
+
+    const bajada = await c.getBytes(`/api/transactions/${tx.id}/adjuntos/${subida.body.id}`)
+    assert.ok(
+      !bajada.headers['content-disposition']!.includes('../'),
+      'la cabecera de bajada seguía mandando la ruta entera',
+    )
+  })
+
   test('borrar el movimiento se lleva su recibo', async () => {
     const tx = (await gasto(2000, '2026-12-22')).body
     const subida = await c.post(`/api/transactions/${tx.id}/adjuntos`, {

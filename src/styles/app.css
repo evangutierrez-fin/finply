@@ -2093,6 +2093,7 @@ select.campo-input { cursor: pointer; }
 .rec-nota-dia { margin-top: 8px; font-size: 12.5px; }
 
 .cal-resumen { margin-bottom: 22px; }
+.cal-resumen-cifras { display: flex; gap: 48px; flex-wrap: wrap; }
 .cal-resumen-nota { font-size: 13px; color: var(--tinta-2); margin-top: 8px; max-width: 62ch; }
 .cal-lista { display: flex; flex-direction: column; gap: 18px; }
 .cal-dia {

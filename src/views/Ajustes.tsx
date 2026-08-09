@@ -24,12 +24,23 @@ const CONFIRM_WORD = 'RESTAURAR'
  * la tabla, la columna y el valor, y el formulario ya no le deja volver a
  * escribirlos.
  */
+/**
+ * Cuántos renglones tocó la revisión. Una sola cuenta y no tres: de esto
+ * dependen el aviso, el recorte de la lista y **si la pantalla se recarga**, y
+ * tres sumas que deben coincidir son tres sumas que se separan — la tercera
+ * causa se agregó en la cuarta vuelta y las otras dos ya se habrían quedado
+ * atrás.
+ */
+function totalHallazgos(r: RevisionRespaldo): number {
+  return r.fechas + r.montos + r.cifras
+}
+
 function RevisionDelRespaldo({ revision }: { revision: RevisionRespaldo }) {
   return (
     <div className="ajustes-revision" role="status">
       <p className="ajustes-texto">
         <strong>Se restauró el libro completo</strong>, y el archivo traía renglones escritos antes
-        de que existieran dos reglas que hoy los rechazan. No es un error del respaldo ni de
+        de que existieran las reglas que hoy los rechazan. No es un error del respaldo ni de
         Finply, pero conviene corregirlos desde su movimiento.
       </p>
       {revision.fechas > 0 && (
@@ -50,6 +61,15 @@ function RevisionDelRespaldo({ revision }: { revision: RevisionRespaldo }) {
           escribirlo.
         </p>
       )}
+      {revision.cifras > 0 && (
+        <p className="ajustes-texto">
+          {revision.cifras === 1
+            ? 'Una cantidad que no es dinero y el libro tampoco puede releer —una existencia, el orden de una lista—, restaurada en 1.'
+            : `${revision.cifras} cantidades que no son dinero y el libro tampoco puede releer —existencias, el orden de una lista—, restauradas en 1.`}{' '}
+          Cae en la misma trampa que un monto imposible y con el mismo resultado: el libro deja de
+          abrir. Aquí abajo está lo que decían.
+        </p>
+      )}
       <ul className="ajustes-revision-lista">
         {revision.ejemplos.map((h, i) => (
           <li key={`${h.tabla}-${h.columna}-${i}`}>
@@ -60,7 +80,7 @@ function RevisionDelRespaldo({ revision }: { revision: RevisionRespaldo }) {
           </li>
         ))}
       </ul>
-      {revision.fechas + revision.montos > revision.ejemplos.length && (
+      {totalHallazgos(revision) > revision.ejemplos.length && (
         <p className="ajustes-nota">
           Se enseñan los primeros {revision.ejemplos.length}; el total está arriba.
         </p>
@@ -496,7 +516,7 @@ function AjustesDeLaApp() {
       const { restaurados, revision } = await api.backup.restore(pending.snapshot)
       const total = Object.values(restaurados).reduce((s, n) => s + n, 0)
       setDone(`Libro restaurado: ${total} registros desde ${pending.name}.`)
-      setRevision(revision.fechas + revision.montos > 0 ? revision : null)
+      setRevision(totalHallazgos(revision) > 0 ? revision : null)
       setPending(null)
       setConfirmText('')
       setError(null)
@@ -509,7 +529,7 @@ function AjustesDeLaApp() {
       // llevaría el único aviso que el usuario va a recibir, y ese aviso es
       // justo el que le dice qué ir a corregir. Ahí se queda en pantalla y él
       // decide cuándo recargar.
-      if (revision.fechas + revision.montos === 0) {
+      if (totalHallazgos(revision) === 0) {
         setTimeout(() => window.location.reload(), 1200)
       }
     } catch (err) {
@@ -608,7 +628,9 @@ function AjustesDeLaApp() {
         </p>
         {info && <p className="ajustes-ruta"><code>{info.dbPath}</code></p>}
         <p className="ajustes-nota">
-          El servidor solo escucha en <code>127.0.0.1</code>: nadie más en tu red alcanza Finply.
+          El servidor solo escucha en <code>127.0.0.1</code>: nadie más en tu red alcanza Finply. Y
+          solo contesta si la petición viene a nombre de esta máquina, para que una página abierta
+          en otra pestaña no pueda hacerse pasar por ella.
         </p>
       </section>
     </>

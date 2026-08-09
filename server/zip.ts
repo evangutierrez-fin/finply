@@ -117,23 +117,8 @@ export function armarZip(entradas: EntradaZip[], fecha = new Date()): Buffer {
   return Buffer.concat([cuerpo, directorio, remate])
 }
 
-/**
- * Nombre seguro para una entrada. Un recibo se llama como lo llamó el usuario,
- * y ese texto acaba siendo una **ruta** al descomprimir: `../../.ssh/config`
- * escribiría fuera de la carpeta destino en cualquier extractor descuidado.
- * Se corta a lo que sí es un nombre de archivo.
- */
-export function nombreSeguro(texto: string, porOmision = 'archivo'): string {
-  const limpio = texto
-    .replace(/[\\/]/g, '-')
-    // Nulos y control: como escape, no literales — un salto de línea dentro
-    // del nombre partiría la ruta en dos y un editor se lo come sin avisar.
-    .replace(/[\u0000-\u001f]/g, '')
-    // Dos puntos seguidos nunca son parte de un nombre: son el salto de
-    // carpeta. Se colapsan antes de quitar lo que sobra por delante.
-    .replace(/\.{2,}/g, '.')
-    .replace(/^[.\-\s]+/, '')
-    .trim()
-    .slice(0, 100)
-  return limpio === '' ? porOmision : limpio
-}
+// `nombreSeguro` vivía aquí, que es donde hizo falta primero. Se mudó a
+// `shared/archivos.ts` en la cuarta vuelta: no era una regla del .zip sino la
+// del nombre, y la bajada de un recibo —que también mete ese texto en una
+// cabecera HTTP— se había quedado sin ella.
+export { nombreSeguro } from '../shared/archivos.ts'

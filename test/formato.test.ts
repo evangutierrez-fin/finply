@@ -9,7 +9,14 @@
 
 import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { MAX_CENTAVOS, mensajeMonto, montoPasaDelTecho } from '../shared/formato.ts'
+import {
+  FORMATO_POR_OMISION,
+  MAX_CENTAVOS,
+  mensajeMonto,
+  montoPasaDelTecho,
+  pesosCon,
+  sinCeroNegativo,
+} from '../shared/formato.ts'
 
 const BASE = 'Escribe un monto válido, por ejemplo 250 o 1,250.50'
 
@@ -56,5 +63,25 @@ describe('el techo del dinero, del lado del formulario', () => {
     const a = mensajeMonto('1e30'.replace('e30', '0'.repeat(30)), 'Escribe un monto válido')
     const b = mensajeMonto('1'.padEnd(31, '0'), 'Escribe un monto para el presupuesto')
     assert.equal(a, b)
+  })
+})
+
+/**
+ * El cero no lleva signo. Es el detalle más pequeño de la auditoría y sale en
+ * la pantalla más vista: el Resumen enseña la salida del mes negando el gasto
+ * —`-expenseCents`—, y en un mes sin gastos eso es `-0`, que `Intl` escribe
+ * "−$0.00". Ni siquiera se pinta en rojo, porque `-0 < 0` es falso.
+ */
+describe('el cero no tiene signo', () => {
+  test('el cero negativo se escribe como cero', () => {
+    assert.equal(pesosCon(-0, FORMATO_POR_OMISION), pesosCon(0, FORMATO_POR_OMISION))
+    assert.ok(!pesosCon(-0, FORMATO_POR_OMISION).includes('-'))
+    assert.ok(!pesosCon(-0, { ...FORMATO_POR_OMISION, sinCentavos: true }).includes('-'))
+  })
+
+  test('y un negativo de verdad lo conserva', () => {
+    assert.ok(pesosCon(-1, FORMATO_POR_OMISION).includes('-'))
+    assert.equal(sinCeroNegativo(-1), -1)
+    assert.equal(Object.is(sinCeroNegativo(-0), 0), true, 'siguió siendo -0')
   })
 })

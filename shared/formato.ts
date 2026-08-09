@@ -168,5 +168,20 @@ export function pesosCon(cents: number, formato: Formato, currency = 'MXN'): str
     currency,
     ...(formato.sinCentavos ? { minimumFractionDigits: 0, maximumFractionDigits: 0 } : {}),
   }
-  return new Intl.NumberFormat('es-MX', opciones).format(cents / 100)
+  return new Intl.NumberFormat('es-MX', opciones).format(sinCeroNegativo(cents) / 100)
+}
+
+/**
+ * El cero no tiene signo.
+ *
+ * JavaScript sí tiene `-0`, e `Intl` lo escribe `-$0.00`. Aparece en cuanto
+ * una vista niega una cifra para enseñarla como salida —`-data.expenseCents`—
+ * y el mes no tuvo gastos: el Resumen decía "Salió −$0.00". Ni siquiera sale
+ * en rojo, porque `-0 < 0` es falso, así que es solo un signo que sobra.
+ *
+ * Se arregla aquí y no en la vista porque las vistas que niegan una cifra son
+ * muchas y la puerta por la que se escribe el dinero es una.
+ */
+export function sinCeroNegativo(cents: number): number {
+  return cents === 0 ? 0 : cents
 }

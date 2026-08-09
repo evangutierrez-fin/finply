@@ -5,6 +5,8 @@ import { MODULO_IDS, type ModuloId } from '../shared/modulos.ts'
 import { MAX_PERIODOS } from '../shared/recurrencias.ts'
 import { esFechaReal } from '../shared/fechas.ts'
 import { MAX_CENTAVOS } from '../shared/formato.ts'
+import { MAX_MILESIMAS } from '../shared/giro.ts'
+import { nombreSeguro } from '../shared/archivos.ts'
 
 /**
  * Una fecha del calendario, no cualquier cadena con esa forma.
@@ -40,6 +42,25 @@ const DEMASIADO = 'Esa cifra no cabe en un libro de finanzas: revisa los ceros'
  */
 const dinero = () =>
   z.number().int().min(-MAX_CENTAVOS, DEMASIADO).max(MAX_CENTAVOS, DEMASIADO)
+
+/**
+ * Las otras magnitudes que se guardan como entero y también rompen el libro.
+ *
+ * El techo del dinero cerró la puerta del dinero, y esa no era la única: una
+ * cantidad de existencias (`qty_milli`) y el orden de una lista (`position`)
+ * son columnas INTEGER igual que los centavos, y por encima de 2^53
+ * `node:sqlite` se niega a devolverlas. Con una cantidad así el almacén dejaba
+ * de abrir **y el respaldo del libro entero contestaba 500**: la misma trampa
+ * del hallazgo 8, por una puerta que no era de dinero.
+ *
+ * `MAX_POSICION` no pretende ser una cifra profunda: una lista se ordena con
+ * enteros pequeños —la siguiente posición es el máximo más uno— y un millón ya
+ * es absurdo mucho antes de acercarse al entero seguro.
+ */
+const DEMASIADA_CANTIDAD = 'Esa cantidad no cabe en un almacén: revisa los ceros'
+const MAX_POSICION = 1_000_000
+const posicion = () =>
+  z.number().int().min(0).max(MAX_POSICION, 'Esa posición no es de una lista')
 
 /**
  * Una tinta personalizada para un tema. `null` vuelve al preset.
@@ -114,7 +135,7 @@ export const campoInput = z.object({
   kind: z.enum(['texto', 'numero', 'fecha', 'lista', 'casilla']).default('texto'),
   /** Solo para 'lista': una opción por renglón. */
   options: z.string().max(500).default(''),
-  position: z.number().int().min(0).optional(),
+  position: posicion().optional(),
   archived: z.boolean().optional(),
 })
 
@@ -131,7 +152,7 @@ export const plantillaTxInput = z.object({
   /** Nulo: "el monto lo pongo yo cada vez". */
   amountCents: dinero().positive('El monto tiene que ser mayor que cero').nullish(),
   note: z.string().max(200).default(''),
-  position: z.number().int().min(0).optional(),
+  position: posicion().optional(),
 })
 
 export const plantillaTxPatch = plantillaTxInput.partial().omit({ profileId: true })
@@ -208,7 +229,7 @@ export const reglaInput = z.object({
 })
 
 export const reglaPatch = reglaInput.omit({ profileId: true }).partial().extend({
-  position: z.number().int().min(0).optional(),
+  position: posicion().optional(),
 })
 
 export const reglaQuery = z.object({
@@ -1086,7 +1107,7 @@ export const productoInput = z.object({
   name: z.string().trim().min(1, 'El producto necesita un nombre').max(80),
   unit: z.string().trim().min(1).max(16).default('pieza'),
   /** Debajo de esto Finply avisa. `null` quita el aviso. */
-  minQtyMilli: z.number().int().nonnegative().nullish(),
+  minQtyMilli: z.number().int().nonnegative().max(MAX_MILESIMAS, DEMASIADA_CANTIDAD).nullish(),
   archived: z.boolean().default(false),
 })
 
@@ -1100,7 +1121,12 @@ export const movimientoStockInput = z.object({
   productId: z.number().int().positive(),
   date: isoDate,
   kind: z.enum(['entrada', 'salida', 'ajuste']),
-  qtyMilli: z.number().int().refine((n) => n !== 0, 'Un movimiento de cero no es un movimiento'),
+  qtyMilli: z
+    .number()
+    .int()
+    .min(-MAX_MILESIMAS, DEMASIADA_CANTIDAD)
+    .max(MAX_MILESIMAS, DEMASIADA_CANTIDAD)
+    .refine((n) => n !== 0, 'Un movimiento de cero no es un movimiento'),
   unitCostCents: dinero().nonnegative('El costo no puede ser negativo').default(0),
   note: z.string().trim().max(200).default(''),
   txId: z.number().int().positive().nullish(),
@@ -1181,7 +1207,13 @@ export const MIMES_ADJUNTO = ['image/png', 'image/jpeg', 'image/webp', 'image/he
 
 export const adjuntoInput = z
   .object({
-    filename: z.string().trim().min(1).max(120),
+    // El nombre se sanea **al entrar**, no al salir. Sale por tres puertas
+    // —la bajada, el .zip y el respaldo— y solo una de ellas lo cortaba: un
+    // recibo con un salto de línea en el nombre se subía sin queja y después
+    // no se podía bajar nunca, porque ese salto parte una cabecera HTTP en dos
+    // y Node se niega a mandarla. Un archivo que entra y ya no sale es el
+    // mismo modo de fallar que una cifra ilegible.
+    filename: z.string().trim().min(1).max(120).transform((n) => nombreSeguro(n, 'recibo')),
     mime: z.string().trim().refine((m) => MIMES_ADJUNTO.includes(m), {
       message: `Solo se adjuntan imágenes o PDF (${MIMES_ADJUNTO.join(', ')})`,
     }),

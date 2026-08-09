@@ -18,7 +18,7 @@ import { crc32, inflateRawSync } from 'node:zlib'
 import { levantar, libroBase, type Cliente } from './ayuda.ts'
 // `server/csv.ts` no llega a `db.ts` (R16): es el módulo puro de siempre.
 import { parseCsv } from '../server/csv.ts'
-import { nombreSeguro } from '../server/zip.ts'
+import { nombreSeguro } from '../shared/archivos.ts'
 
 /**
  * Un lector de .zip mínimo, escrito para esta prueba. Va del directorio
@@ -431,5 +431,49 @@ describe('el nombre de un archivo dentro del .zip', () => {
     assert.equal(nombreSeguro('   '), 'archivo')
     assert.ok(!nombreSeguro('x'.repeat(400)).includes('/'))
     assert.ok(nombreSeguro('x'.repeat(400)).length <= 100)
+  })
+
+  test('ni parte una cabecera en dos', () => {
+    // El mismo nombre viaja en `Content-Disposition` al bajar el recibo, y ahí
+    // un salto de línea no es un carácter raro: es el separador entre dos
+    // cabeceras. Node se niega a mandarla y el recibo se vuelve un archivo que
+    // entró al libro y ya no puede salir.
+    assert.equal(nombreSeguro('recibo\r\nX-Inyectado: si.pdf'), 'reciboX-Inyectado: si.pdf')
+    assert.ok(!/[\r\n ]/.test(nombreSeguro('a b\nc')))
+  })
+})
+
+/**
+ * La salida de un libro que **ya** trae una cifra que JavaScript no puede
+ * representar exacto. Son dos puertas —este .zip y el respaldo JSON— y las dos
+ * tronaban con el mismo `RangeError`: el libro quedaba dentro de Finply sin
+ * forma de sacarlo, que es lo contrario de lo que este archivo promete.
+ */
+describe('llevarse un libro escrito antes del techo', () => {
+  let c: Cliente
+  before(async () => {
+    c = await levantar()
+  })
+  after(() => c.cerrar())
+
+  test('el .zip sale, y la cifra sale entera', async () => {
+    const { perfil, cuenta } = await libroBase(c, 'Envenenado')
+    const { db } = await import('../server/db.ts')
+    db.prepare(
+      `INSERT INTO transactions (profile_id, account_id, type, amount_cents, date, note)
+       VALUES (?, ?, 'gasto', 99999999999999999, '2026-07-11', 'Veneno')`,
+    ).run(perfil.id, cuenta.id)
+
+    const res = await c.getBytes(`/api/exportar/libro.zip?profileId=${perfil.id}`)
+    assert.equal(res.status, 200, 'el libro no se podía sacar de Finply')
+
+    // La cifra viaja exacta y desescalada. Es justo la que un `number` no
+    // conserva: 99999999999999999 se redondea a 100000000000000000 en cuanto
+    // pasa por coma flotante, y ahí los dos últimos centavos desaparecen.
+    const filas = hoja(leerZip(res.body), 'transactions')
+    const columna = filas[0]!.indexOf('amount')
+    const suya = filas.slice(1).find((f) => f[filas[0]!.indexOf('note')] === 'Veneno')
+    assert.ok(suya, 'el movimiento envenenado no salió en la hoja')
+    assert.equal(suya[columna], '999999999999999.99', 'la cifra salió redondeada')
   })
 })

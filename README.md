@@ -486,6 +486,14 @@ Si necesitas exponerlo a propósito, `API_HOST=0.0.0.0` lo permite, pero
 entonces cualquiera que sepa tu IP entra y escribe sin credenciales. Ponle un
 proxy con autenticación enfrente antes de hacerlo.
 
+Escuchar solo en loopback basta contra la red y **no basta contra el
+navegador**: una página cualquiera puede resolver su propio dominio a
+`127.0.0.1` —*DNS rebinding*— y a partir de ahí el navegador la trata como del
+mismo origen que Finply, sin CORS que estorbe. Por eso el servidor también
+comprueba **a nombre de quién** llega la petición: contesta a `localhost` y a
+una IP literal, y no a un dominio ajeno. Si lo pones detrás de un proxy con tu
+propio nombre, `FINPLY_HOSTS=finply.casa` lo añade.
+
 Tus datos viven en un solo archivo SQLite (`data/finply.db`, gitignoreado).
 Desde **Ajustes** puedes descargar un respaldo completo en JSON o restaurar uno
 anterior; la ruta exacta del archivo también aparece ahí, por si prefieres
@@ -727,12 +735,15 @@ recurrencias, el flujo, los presupuestos, el patrimonio completo, los módulos
 por perfil y de giro, la personalización y la salida de tus datos. De aquí en
 adelante lo que se haga sale del uso, no de una lista.
 
-La **auditoría de las cuentas** ya se hizo, y va por su **tercera vuelta**:
+La **auditoría de las cuentas** ya se hizo, y va por su **cuarta vuelta**:
 está en [AUDITORIA.md](AUDITORIA.md), con lo que se revisó, contra qué, lo que
-se encontró —catorce hallazgos hasta hoy, todos arreglados y con su prueba de
+se encontró —veintiún hallazgos hasta hoy, todos arreglados y con su prueba de
 regresión— y lo que **no** cubre. La primera vuelta rehizo la aritmética, la
-segunda entró a los módulos de giro y a las fechas, y la tercera fue por las
-juntas: los lugares donde el mismo peso se calcula dos veces.
+segunda entró a los módulos de giro y a las fechas, la tercera fue por las
+juntas —los lugares donde el mismo peso se calcula dos veces— y la cuarta fue
+por lo que impedía compartir la app: el hueco que la tercera dejó escrito, la
+primera revisión de seguridad, y un recorrido de la app vista por vista
+comparando cada titular contra su propia API.
 
 **Lo que Finply no hace, y no es una promesa pendiente**
 

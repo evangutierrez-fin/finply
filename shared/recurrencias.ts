@@ -317,3 +317,80 @@ export function describirRecurrencia(regla: ReglaRecurrencia): string {
       return `Cada año, ${diaTexto(r.dayOfMonth!)} de ${MESES_LARGOS[r.monthOfYear! - 1]}`
   }
 }
+
+// ── Cuánto pesa lo que está por confirmar ─────────────────────────────────
+
+/** Lo mínimo que hace falta para pesar una propuesta: qué es y cuánto. */
+export interface PartidaPendiente {
+  type: 'ingreso' | 'gasto' | 'transferencia'
+  /** Aporte a una inversión propia. Sale de la cuenta y **no es gasto** (D6). */
+  investmentId: number | null
+  amountCents: number
+}
+
+/**
+ * Lo que está por confirmar, **partido por dirección**.
+ *
+ * Vive aquí y no en la vista porque son dos pantallas las que lo dicen —la
+ * bandeja de Recurrencias y la alerta del Resumen— y hasta la cuarta vuelta
+ * cada una lo calculaba a su manera. La bandeja tenía razón y la alerta no: la
+ * alerta **sumaba las tres direcciones en una sola cifra**, así que un libro
+ * con $9,594.24 de gasto, $2,000.00 de aporte y $8,900.00 de sueldo por
+ * confirmar recibía un aviso de "$20,494.24", un número que no aparece en
+ * ninguna otra pantalla y que no significa nada: mezcla lo que sale con lo que
+ * entra, y mete en el gasto un aporte que D6 dice que no lo es.
+ *
+ * Tres montones y no un neto, por lo mismo que el Resumen no neteó nunca
+ * "entró" contra "salió": el neto de un ingreso y un gasto del mismo tamaño es
+ * cero, y cero no describe a un mes en que pasaron las dos cosas.
+ */
+export interface PesoPendiente {
+  /** Gasto de verdad: sale y no vuelve. */
+  gastoCents: number
+  /** Sale de la cuenta y sigue siendo tuyo (D6). */
+  aporteCents: number
+  ingresoCents: number
+}
+
+export function pesoPendiente(partidas: PartidaPendiente[]): PesoPendiente {
+  const peso: PesoPendiente = { gastoCents: 0, aporteCents: 0, ingresoCents: 0 }
+  for (const p of partidas) {
+    if (p.type === 'ingreso') peso.ingresoCents += p.amountCents
+    else if (p.type === 'gasto' && p.investmentId !== null) peso.aporteCents += p.amountCents
+    else if (p.type === 'gasto') peso.gastoCents += p.amountCents
+    // Una transferencia entre cuentas propias no entra ni sale (D6).
+  }
+  return peso
+}
+
+/**
+ * La cifra con la que se anuncia ese montón cuando **solo cabe una**, que es
+ * el caso de una tarjeta de alerta.
+ *
+ * Manda lo que sale, porque de eso avisa una alerta; si no sale nada, lo que
+ * entra. Nunca una suma de las dos.
+ */
+export function cifraPendiente(peso: PesoPendiente): number {
+  if (peso.gastoCents > 0) return peso.gastoCents
+  if (peso.aporteCents > 0) return peso.aporteCents
+  return peso.ingresoCents
+}
+
+/**
+ * Lo que la cifra de arriba **deja fuera**, escrito para poder pegarlo al
+ * detalle de la alerta. Cadena vacía cuando no deja nada fuera.
+ *
+ * `pesos` se recibe en vez de importarse: este módulo es puro y no sabe de la
+ * convención de formato del perfil abierto (R16).
+ */
+export function restoPendiente(peso: PesoPendiente, pesos: (c: number) => string): string {
+  const partes: string[] = []
+  if (peso.gastoCents > 0 && peso.aporteCents > 0) {
+    partes.push(`${pesos(peso.aporteCents)} van a una inversión`)
+  }
+  if ((peso.gastoCents > 0 || peso.aporteCents > 0) && peso.ingresoCents > 0) {
+    partes.push(`${pesos(peso.ingresoCents)} entran`)
+  }
+  if (partes.length === 0) return ''
+  return partes.length === 1 ? `${partes[0]!}.` : `${partes[0]!} y ${partes[1]!}.`
+}

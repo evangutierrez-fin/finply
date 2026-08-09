@@ -14,7 +14,8 @@
 // perfil y lo cambia al cambiar de perfil.
 
 import {
-  FORMATO_POR_OMISION, MAX_CENTAVOS, MESES, fechaCon, fechaConAnio, pesosCon, type Formato,
+  FORMATO_POR_OMISION, MAX_CENTAVOS, MESES, fechaCon, fechaConAnio, pesosCon, sinCeroNegativo,
+  type Formato,
 } from '../shared/formato.ts'
 import { correrMesTexto } from '../shared/fechas.ts'
 
@@ -40,7 +41,10 @@ export function fmtMoney(cents: number, currency = 'MXN'): string {
     f = new Intl.NumberFormat('es-MX', { style: 'currency', currency })
     formatters.set(currency, f)
   }
-  return f.format(cents / 100)
+  // `sinCeroNegativo` también aquí: este es el camino rápido y se salta
+  // `pesosCon`, que es donde vive la regla. Sin esto, el cero llevaría signo
+  // en las trescientas llamadas que no piden "sin centavos".
+  return f.format(sinCeroNegativo(cents) / 100)
 }
 
 /**

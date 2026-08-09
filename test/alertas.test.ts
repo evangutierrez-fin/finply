@@ -562,3 +562,86 @@ describe('la alerta de recurrencias dice el monto que se va a proponer', () => {
     assert.equal(alerta.montoCents, bandeja.total * 300_00)
   })
 })
+
+/**
+ * La misma bandeja, contada dos veces (D14).
+ *
+ * La alerta del Resumen y la bandeja de Recurrencias hablan **del mismo
+ * montón**, y hasta la cuarta vuelta cada una lo sumaba a su manera: la
+ * bandeja separaba el gasto del aporte a una inversión —D6: mover dinero a un
+ * fondo tuyo no es gasto— y dejaba el ingreso fuera del titular; la alerta
+ * sumaba las tres direcciones en una sola cifra. Con un sueldo por confirmar,
+ * el Resumen anunciaba una cantidad que no aparecía en ninguna otra pantalla.
+ */
+describe('la alerta y la bandeja pesan lo mismo', () => {
+  const HOY = '2026-08-09'
+
+  /** Un libro con las tres direcciones pendientes: gasto, aporte y sueldo. */
+  async function libroConLasTres(nombre: string) {
+    const { perfil, cuenta, categorias } = await libroBase(c, nombre)
+    const gasto = categorias.find((k: any) => k.kind === 'gasto')
+    const ingreso = categorias.find((k: any) => k.kind === 'ingreso')
+    const fondo = (
+      await c.post('/api/investments', { profileId: perfil.id, name: 'Fondo', kind: 'fondo' })
+    ).body
+
+    const base = {
+      profileId: perfil.id,
+      accountId: cuenta.id,
+      frequency: 'mensual' as const,
+      dayOfMonth: 1,
+      startDate: '2026-07-01',
+    }
+    await c.post('/api/recurrencias', {
+      ...base, type: 'gasto', amountCents: 1_200_00, categoryId: gasto.id, note: 'Colegiatura',
+    })
+    await c.post('/api/recurrencias', {
+      ...base, type: 'gasto', amountCents: 500_00, note: 'Aporte al fondo', investmentId: fondo.id,
+    })
+    await c.post('/api/recurrencias', {
+      ...base, type: 'ingreso', amountCents: 3_000_00, categoryId: ingreso.id, note: 'Sueldo',
+    })
+    return perfil
+  }
+
+  test('el aviso enseña el gasto de la bandeja, no la suma de las direcciones', async () => {
+    const perfil = await libroConLasTres('Tres')
+    const bandeja = (await c.get(`/api/recurrencias/pendientes?profileId=${perfil.id}&hoy=${HOY}`))
+      .body
+    const gastoDeLaBandeja = bandeja.items
+      .filter((p: any) => p.type === 'gasto' && !p.investmentId)
+      .reduce((s: number, p: any) => s + p.amountCents, 0)
+    assert.ok(gastoDeLaBandeja > 0, 'la bandeja no trajo gasto que comparar')
+
+    const alerta = de(await alertasDe(perfil.id, HOY), 'recurrencia').find((a: any) =>
+      a.titulo.includes('por confirmar'),
+    )
+    assert.ok(alerta, 'no hubo aviso de partidas por confirmar')
+    assert.equal(
+      alerta.montoCents,
+      gastoDeLaBandeja,
+      'el aviso y la bandeja dicen dos cifras del mismo montón',
+    )
+
+    // Y lo que la cifra deja fuera **se dice**, en vez de sumarse a ella.
+    assert.match(alerta.detalle, /inversión/)
+    assert.match(alerta.detalle, /entran/)
+    const suma = bandeja.items.reduce((s: number, p: any) => s + p.amountCents, 0)
+    assert.notEqual(alerta.montoCents, suma, 'volvió a sumar las tres direcciones')
+  })
+
+  test('sin gasto, el aviso habla de lo que entra y no de cero', async () => {
+    const { perfil, cuenta, categorias } = await libroBase(c, 'SoloIngreso')
+    const ingreso = categorias.find((k: any) => k.kind === 'ingreso')
+    await c.post('/api/recurrencias', {
+      profileId: perfil.id, accountId: cuenta.id, type: 'ingreso', amountCents: 2_500_00,
+      categoryId: ingreso.id, note: 'Iguala', frequency: 'mensual', dayOfMonth: 1,
+      startDate: '2026-07-01',
+    })
+    const alerta = de(await alertasDe(perfil.id, HOY), 'recurrencia').find((a: any) =>
+      a.titulo.includes('por confirmar'),
+    )
+    assert.ok(alerta)
+    assert.equal(alerta.montoCents, 2 * 2_500_00, 'un aviso de $0 no le dice nada a nadie')
+  })
+})

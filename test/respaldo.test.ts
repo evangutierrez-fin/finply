@@ -370,6 +370,7 @@ describe('respaldo', () => {
  */
 describe('el respaldo dice qué traía dentro', () => {
   const CONCEPTO = 'Renglón a torcer'
+  const VENENO = 'Renglón envenenado'
 
   /** Un respaldo real con un renglón conocido, torcido a mano como uno viejo. */
   async function respaldoCon(nombre: string, torcer: (fila: any) => void) {
@@ -398,7 +399,7 @@ describe('el respaldo dice qué traía dentro', () => {
     const { respaldo } = await respaldoCon('Sano', () => {})
     const res = await c.post('/api/respaldo/restaurar', respaldo)
     assert.equal(res.status, 200)
-    assert.deepEqual(res.body.revision, { fechas: 0, montos: 0, ejemplos: [] })
+    assert.deepEqual(res.body.revision, { fechas: 0, montos: 0, cifras: 0, ejemplos: [] })
   })
   test('las marcas de tiempo no cuentan como fecha torcida', async () => {
     // `created_at` lleva hora y no es un día del calendario: contarlo habría
@@ -464,6 +465,155 @@ describe('el respaldo dice qué traía dentro', () => {
     assert.equal((await c.post('/api/respaldo/restaurar', respaldo)).status, 200)
     assert.equal((await c.get('/api/respaldo')).status, 200, 'ya no se puede respaldar')
   })
+  /**
+   * El otro lado de la misma moneda, y el que quedó abierto en la tercera
+   * vuelta: **el libro que ya está envenenado**. El techo protege a los libros
+   * nuevos y la revisión protege a los restaurados, pero quien escribió la
+   * cifra con una versión anterior seguía encerrado — y encerrado del peor
+   * modo, porque la única puerta que le quedaba era la que tronaba.
+   *
+   * Se escribe por SQL a propósito: por HTTP ya no se puede, que es justo lo
+   * que arregló el hallazgo 8. Así se reproduce el libro viejo tal como es.
+   */
+  test('un libro que ya trae la cifra ilegible se puede exportar', async () => {
+    const { perfil, cuenta } = await libroBase(c, 'Envenenado')
+    const { db } = await import('../server/db.ts')
+    db.prepare(
+      `INSERT INTO transactions (profile_id, account_id, type, amount_cents, date, note)
+       VALUES (?, ?, 'gasto', 99999999999999999, '2026-07-11', ?)`,
+    ).run(perfil.id, cuenta.id, VENENO)
+
+    const res = await c.get('/api/respaldo')
+    assert.equal(res.status, 200, 'el libro envenenado sigue sin poder salir')
+
+    const fila = res.body.tables.transactions.find((t: any) => t.note === VENENO)
+    assert.ok(fila, 'la fila envenenada no salió en el respaldo')
+    assert.equal(
+      fila.amount_cents,
+      '99999999999999999',
+      'la cifra tiene que salir como texto: es lo único que la conserva entera',
+    )
+    // Lo demás del respaldo sale como siempre: números, no texto.
+    assert.equal(typeof fila.id, 'number')
+    assert.equal(typeof fila.profile_id, 'number')
+  })
+
+  /**
+   * Y el ciclo completo: el respaldo del libro envenenado se puede volver a
+   * restaurar, y al restaurarlo el libro queda sano. Esa es la salida —
+   * exportar y restaurar el mismo archivo— y no existía.
+   */
+  test('exportar y restaurar el mismo archivo saca al libro del pozo', async () => {
+    const { perfil, cuenta } = await libroBase(c, 'Rescatable')
+    const { db } = await import('../server/db.ts')
+    db.prepare(
+      `INSERT INTO transactions (profile_id, account_id, type, amount_cents, date, note)
+       VALUES (?, ?, 'gasto', 99999999999999999, '2026-07-11', ?)`,
+    ).run(perfil.id, cuenta.id, VENENO)
+
+    const respaldo = (await c.get('/api/respaldo')).body
+    const res = await c.post('/api/respaldo/restaurar', respaldo)
+    assert.equal(res.status, 200)
+
+    // ⚠ El respaldo se lleva **todos** los perfiles, incluido el que envenenó
+    // la prueba de arriba: lo que se comprueba es que la suya esté, no que sea
+    // la única.
+    const suyo = res.body.revision.ejemplos.filter(
+      (h: any) => h.motivo === 'monto' && h.valor === '99999999999999999',
+    )
+    assert.ok(suyo.length >= 1, 'no se dijo qué cifra se apartó')
+
+    const movs = (await c.get(`/api/transactions?profileId=${perfil.id}`)).body
+    const renglon = movs.find((t: any) => t.note === VENENO)
+    assert.ok(renglon, 'la fila se perdió en el rescate')
+    assert.equal(renglon.amountCents, 1)
+  })
+
+  /**
+   * Y la magnitud que **no** es dinero. Una cantidad de existencias cae en la
+   * misma trampa —es una columna INTEGER como cualquier otra— y el techo del
+   * dinero no la cubría, así que el rescate tampoco la sacaba: el respaldo la
+   * volvía a escribir tal cual y el libro volvía a cerrarse.
+   */
+  test('una cantidad ilegible que no es dinero también se aparta', async () => {
+    const { perfil } = await libroBase(c, 'Almacén', 'negocio')
+    const { db } = await import('../server/db.ts')
+    const prod = (
+      await c.post('/api/inventario', { profileId: perfil.id, name: 'Cemento', unit: 'kg' })
+    ).body
+    db.prepare(
+      `INSERT INTO stock_moves (product_id, date, kind, qty_milli, unit_cost_cents)
+       VALUES (?, '2026-07-12', 'entrada', 99999999999999999, 100)`,
+    ).run(prod.id)
+
+    const respaldo = (await c.get('/api/respaldo')).body
+    assert.ok(respaldo.tables, 'el libro con existencias ilegibles no se pudo exportar')
+
+    const res = await c.post('/api/respaldo/restaurar', respaldo)
+    assert.equal(res.status, 200)
+    const suyo = res.body.revision.ejemplos.filter((h: any) => h.motivo === 'cifra')
+    assert.equal(suyo.length, 1)
+    assert.equal(suyo[0].tabla, 'stock_moves')
+    assert.equal(suyo[0].columna, 'qty_milli')
+    assert.equal(res.body.revision.cifras, 1)
+    assert.equal(res.body.revision.montos, 0, 'una cantidad no es un monto')
+
+    // Y el almacén vuelve a abrir.
+    const almacen = await c.get(`/api/inventario?profileId=${perfil.id}`)
+    assert.equal(almacen.status, 200)
+    assert.equal(almacen.body.productos[0].cantidadMilli, 1)
+  })
+
+  test('los enteros que sí caben no se tocan al restaurar', async () => {
+    // La red de la revisión se amplió de `_cents` a toda columna INTEGER, y lo
+    // que no puede pasar es que empiece a apartar lo que siempre estuvo bien.
+    const { perfil } = await libroBase(c, 'Enteros', 'negocio')
+    const prod = (
+      await c.post('/api/inventario', {
+        profileId: perfil.id, name: 'Arena', unit: 'kg', minQtyMilli: 5_000,
+      })
+    ).body
+    await c.post('/api/inventario/movimientos', {
+      profileId: perfil.id, productId: prod.id, date: '2026-07-12',
+      kind: 'entrada', qtyMilli: 12_500, unitCostCents: 350,
+    })
+    const respaldo = (await c.get('/api/respaldo')).body
+    const res = await c.post('/api/respaldo/restaurar', respaldo)
+    assert.equal(res.body.revision.cifras, 0, 'apartó una cantidad que sí cabía')
+
+    const almacen = (await c.get(`/api/inventario?profileId=${perfil.id}`)).body
+    const suyo = almacen.productos.find((p: any) => p.name === 'Arena')
+    assert.equal(suyo.cantidadMilli, 12_500)
+    assert.equal(suyo.minQtyMilli, 5_000)
+  })
+
+  /**
+   * La primera fila decidía por todas. Un archivo donde el primer renglón no
+   * trae el concepto —editado a mano, unido de dos respaldos, escrito por otra
+   * herramienta— hacía que la columna se cayera del INSERT y **todos** los
+   * conceptos de la tabla se perdieran, con un 200 y sin un solo aviso.
+   */
+  test('una fila a la que le falta una columna no se lleva la de las demás', async () => {
+    const { perfil, cuenta } = await libroBase(c, 'Desparejo')
+    for (const [monto, nota] of [[1_000, 'Primero'], [2_000, 'Segundo']] as const) {
+      await c.post('/api/transactions', {
+        profileId: perfil.id, accountId: cuenta.id, type: 'gasto',
+        amountCents: monto, date: '2026-07-10', note: nota,
+      })
+    }
+    const respaldo = (await c.get('/api/respaldo')).body
+    const primera = respaldo.tables.transactions.find((t: any) => t.note === 'Primero')
+    assert.ok(primera)
+    delete primera.note
+
+    const res = await c.post('/api/respaldo/restaurar', respaldo)
+    assert.equal(res.status, 200)
+
+    const movs = (await c.get(`/api/transactions?profileId=${perfil.id}`)).body
+    const conceptos = movs.map((t: any) => t.note).sort()
+    assert.deepEqual(conceptos, ['', 'Segundo'], 'la fila completa perdió su concepto')
+  })
+
   test('los ejemplos se recortan y el total no', async () => {
     const { respaldo } = await respaldoCon('Muchos', () => {})
     // Doce fechas imposibles en el mismo libro: más que los ejemplos que se

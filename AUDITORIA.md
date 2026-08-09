@@ -658,13 +658,188 @@ otro caso — "para el presupuesto", "para el tope del mes"—, que es lo que ev
 nueve frases distintas del mismo techo. Y vive en `shared` y no en el `.tsx` por
 lo de siempre: ahí no se puede probar.
 
-## Lo que la tercera vuelta **no** cubre
+## Lo que la tercera vuelta **no** cubrió
 
 - **Un libro que ya tenga una cifra ilegible dentro no se puede exportar.** El
   techo impide crearla y la restauración la aparta, así que solo puede venir de
-  un libro anterior a esta vuelta. Sacarla de ahí pediría un exportador que lea
-  en texto, y eso es otra fase.
-- **Los adjuntos, la conciliación y la tinta**, otra vez: no calculan dinero.
+  un libro anterior a esa vuelta. *Cerrado en la cuarta (§ 24).*
+- **Los adjuntos, la conciliación y la tinta**: no calculan dinero. Los
+  adjuntos resultaron tener lo suyo, y no era de dinero (§ 27).
+- Y sigue en pie lo primero de todo: **nada de esto es una declaración fiscal**.
+
+---
+
+# Cuarta vuelta · 9 de agosto de 2026
+
+Las tres primeras auditaron la aritmética y las juntas. Esta salió de una
+pregunta distinta: **¿está lista para compartirse?** Así que fue a lo que
+impedía decir que sí — el hueco que la tercera dejó escrito, lo que ninguna
+vuelta había leído, y la primera revisión de seguridad del proyecto.
+
+Las tres reglas siguen: la cifra esperada no sale del código que se audita, el
+hallazgo se reproduce antes de tocar nada, y **cuando dos pantallas enseñan la
+misma partida, se comparan**. Esta vez se le sumó una cuarta, que es la que
+encontró la mitad de los hallazgos: **una cifra que suma dos direcciones no es
+una cifra**. Y una forma de trabajo nueva: la app se levantó con el libro demo
+y se recorrió vista por vista en el navegador, comparando cada titular contra
+lo que contesta su propia API. Tres hallazgos salieron de ahí y ninguna prueba
+los habría encontrado, porque el error no estaba en el servidor.
+
+## 24 · La salida de un libro envenenado · ⚠ **hallazgo 15, arreglado**
+
+**El hueco que la tercera vuelta dejó escrito, y que era el peor de los suyos.**
+
+El techo del dinero (§ 16) protege a los libros nuevos y la revisión del
+respaldo aparta lo que llega en un archivo viejo. Faltaba el tercer caso: quien
+**ya** tenía la cifra dentro, escrita con una versión anterior. Para ese libro
+las dos salidas —el respaldo JSON y el .zip de "llevarte tus datos"— contestaban
+`500` con el mismo `RangeError`, medido por HTTP en las dos. Un libro del que no
+puedes salir no es tuyo.
+
+*Arreglado* en `filasCrudas` ([`server/db.ts`](server/db.ts)): si la lectura
+lanza `RangeError`, se reintenta esa consulta con `setReadBigInts`. El reintento
+vive ahí y no en cada salida porque **las dos tropezaban con lo mismo**. Cada
+una escribe después lo que sabe escribir: el respaldo saca la cifra como texto
+—lo único que la conserva entera— y el CSV la escribe exacta y desescalada,
+porque `escalaCsv` ya trabajaba en BigInt justo para esto. Y el ciclo cierra:
+exportar y restaurar el mismo archivo deja el libro sano, con el informe
+diciendo qué se apartó.
+
+## 25 · El techo no era del dinero, era del entero · ⚠ **hallazgo 16, arreglado**
+
+**La misma trampa del hallazgo 8, por tres puertas que no eran de dinero.**
+
+`qty_milli` —la cantidad de un movimiento de existencias—, `min_qty_milli` y
+`position` son columnas `INTEGER` como los centavos, y ninguna tenía tope. Con
+una cantidad de 2⁵³+1, medido por HTTP: el `POST` contestó 500 **y la fila
+quedó escrita**, el almacén dejó de abrir, y `GET /api/respaldo` —el libro
+entero, no solo ese módulo— contestó 500 también. El techo del dinero no las
+cubría porque no son dinero.
+
+*Arreglado* con `MAX_MILESIMAS` en [`shared/giro.ts`](shared/giro.ts) —mil
+millones de unidades, con holgura para multiplicarla por un costo— y un tope de
+lista para `position`. Y la revisión del respaldo dejó de mirar solo `_cents`:
+ahora pregunta al esquema **qué columnas son enteras** y aparta cualquiera que
+el libro no pueda releer, con su propio motivo (`cifra`), porque "un centavo" no
+significa nada al lado de un kilo. Se le pregunta al esquema y no al nombre a
+propósito: un folio de factura es texto y puede ser una tirada larguísima de
+dígitos perfectamente legítima.
+
+## 26 · La primera fila decidía por todas · ⚠ **hallazgo 17, arreglado**
+
+**Restaurar perdía datos en silencio, con un 200.**
+
+`importSnapshot` miraba las columnas de la **primera** fila de cada tabla y con
+esas armaba el `INSERT` de todas. Correcto mientras el archivo sea homogéneo, y
+una pérdida callada en cuanto deje de serlo: si al primer renglón le faltaba el
+concepto —un archivo editado a mano, dos respaldos unidos, otro programa— la
+columna se caía y **todos los conceptos de la tabla se perdían**. Medido: dos
+movimientos, "Primero" y "Segundo"; se le quitó el concepto al primero; después
+de restaurar, ninguno de los dos tenía concepto.
+
+*Arreglado* agrupando las filas por la forma que traen: cada renglón entra con
+lo que tiene, y una columna ausente se **omite** en vez de mandarse nula, que es
+lo que deja a SQLite aplicar su valor por omisión. Un archivo sano tiene una
+sola forma y no paga nada.
+
+## 27 · Seguridad · ⚠ **hallazgos 18 y 19, arreglados**
+
+La primera revisión de seguridad del proyecto. Lo que se miró y salió limpio:
+inyección de SQL —toda interpolación viene de listas del propio código, nunca de
+la petición—, inyección de fórmulas en CSV (ya cubierta), *zip slip*,
+contaminación de prototipo por el cuerpo JSON y por un respaldo, el tope de
+cuerpo, el catálogo de MIME de los adjuntos, y las dependencias
+(`npm audit`: cero, y una de desarrollo actualizada).
+
+**Hallazgo 18 · Cualquier página podía leer el libro entero.** Finply no pide
+contraseña porque escucha solo en `127.0.0.1`. Eso es cierto para la red y falso
+para el navegador: una página cualquiera puede resolver *su* dominio a
+`127.0.0.1` —*DNS rebinding*— y desde ese momento el navegador la considera del
+mismo origen, sin CORS que estorbe. Medido con una petición a nombre de
+`malicioso.example`: contestó `200` con las cuentas. *Arreglado* comprobando la
+cabecera `Host` — lo único que el atacante no puede falsear, porque para rebotar
+el DNS necesita un dominio suyo. Pasan `localhost` y las IP literales (contra
+una IP no hay DNS que rebotar, y quien puso `API_HOST=0.0.0.0` llega por una);
+un nombre propio se declara en `FINPLY_HOSTS`.
+
+**Hallazgo 19 · Un recibo que entraba y ya no salía.** El nombre de un adjunto
+se saneaba al meterlo en el .zip y **no** al mandarlo en la cabecera
+`Content-Disposition`. Con un salto de línea en el nombre —que el validador
+aceptaba— la subida contestaba `201` y la bajada `500` para siempre: un salto de
+línea separa dos cabeceras HTTP y Node se niega a mandarla. Es el mismo modo de
+fallar que una cifra ilegible, en otro material. *Arreglado* moviendo
+`nombreSeguro` a [`shared/archivos.ts`](shared/archivos.ts) y poniéndolo en las
+**tres** puertas: la de entrada, la de bajada y la del .zip.
+
+## 28 · Las alertas sumaban ingresos con gastos · ⚠ **hallazgo 20, arreglado**
+
+**Encontrado mirando la app, no el código.**
+
+El Resumen anunciaba "8 partidas por confirmar · **$20,494.24**". La bandeja de
+Recurrencias, hablando del mismo montón, decía "8 partidas · **$9,594.24** de
+gasto · $2,000.00 a inversión". La cifra del Resumen era la suma de las tres
+direcciones: el gasto, el aporte a un fondo propio —que D6 dice que no es
+gasto— y el sueldo que **entra**. Un número que no aparece en ninguna otra
+pantalla y que no describe nada. La segunda alerta hacía lo mismo: "Suman
+$3,450.00 entre todos" juntaba $1,450 de un curso con $2,000 que van a una
+inversión.
+
+La bandeja tenía razón desde siempre, pero su aritmética vivía dentro del
+`.tsx`, donde no se puede probar, así que la alerta se escribió otra por su
+cuenta. *Arreglado* llevándola a `pesoPendiente` en
+[`shared/recurrencias.ts`](shared/recurrencias.ts): tres montones y no un neto,
+por la misma razón por la que el Resumen nunca neteó "entró" contra "salió". La
+alerta enseña lo que sale —de eso avisa una alerta— y **dice** lo que deja
+fuera en vez de sumárselo.
+
+## 29 · El calendario tampoco · ⚠ **hallazgo 21, arreglado**
+
+El Calendario decía "Compromisos en 30 días · **$56,300.01**". El Flujo, con la
+**misma ventana y los mismos eventos**, decía "va a entrar $52,800.01, va a
+salir $3,500.00". La primera cifra era la suma de las otras dos. Nadie tiene un
+compromiso de cobrar.
+
+*Arreglado* con `pesoDeEventos` en
+[`shared/calendario.ts`](shared/calendario.ts), y aplicado en los dos sitios
+donde la vista sumaba: el titular y el pie de la rejilla. Hay prueba de que las
+dos cifras del Calendario son las dos del Flujo, al centavo.
+
+## 30 · Dos cosas pequeñas que se ven todos los días
+
+**El patrimonio en cero de una pestaña de fondo.** `useCountUp` anima la cifra
+grande del Resumen y de Inversiones con `requestAnimationFrame`, y el navegador
+**congela** `rAF` en una pestaña que no se está mirando: el paso intermedio
+nunca corre y la cifra se queda en el valor con el que montó, que en la carga
+inicial es cero. Un libro abierto en una pestaña de atrás enseñaba `$0.00` de
+patrimonio. Se vio en el propio barrido, con el panel oculto. *Arreglado*: con
+la pestaña oculta no se anima, se salta al final. **Ninguna cifra puede depender
+de que corra una animación.**
+
+**El cero con signo.** El Resumen enseña la salida del mes negando el gasto
+(`-expenseCents`), y en un mes sin gastos eso es `-0`, que `Intl` escribe
+`−$0.00`. Ni siquiera salía en rojo, porque `-0 < 0` es falso. *Arreglado* en
+`pesosCon` y en el camino rápido de `fmtMoney`, que son las dos puertas por las
+que se escribe dinero en pantalla.
+
+## Lo que la cuarta vuelta **no** cubre
+
+- **Una renta vencida y no cobrada no aparece en ningún lado.** El calendario y
+  el flujo miran de hoy hacia adelante —igual para rentas, facturas y deudas, es
+  una decisión y es consistente—, así que la renta de agosto que nadie pagó
+  simplemente deja de estar y `proximoCobro` salta a septiembre. Las facturas
+  tienen su antigüedad de saldos para eso; los arrendamientos no tienen nada
+  equivalente. No se tocó porque no es un error de cuenta: es una vista que
+  falta, y eso se decide, no se arregla.
+- **`server/migrations.ts` y `server/seed.ts` siguen sin leerse renglón a
+  renglón.** El primero está cubierto por `test/migraciones.test.ts` y por el
+  hecho de que todo el resto corre encima de él; el segundo solo escribe el
+  libro demo.
+- **La revisión de seguridad no incluyó una herramienta automática.** Fue
+  manual, guiada por las superficies reales de esta app: sin red que la exponga,
+  sin autenticación que romper y sin usuarios entre los que escalar.
+- **El bundle pesa 645 kB** (169 kB comprimido) y el aviso de Vite sigue ahí. En
+  una app local que se sirve desde tu propia máquina no cuesta nada; en cuanto
+  alguien la ponga detrás de un dominio, sí.
 - Y sigue en pie lo primero de todo: **nada de esto es una declaración fiscal**.
 
 ---
@@ -678,20 +853,29 @@ node --test test/auditoria.test.ts test/auditoria.cruce.test.ts
 Son 46 pruebas en 8 suites, y corren en menos de dos segundos. Van dentro de
 `npm test` como todas las demás.
 
-Los hallazgos de la segunda y la tercera vuelta tienen sus pruebas de regresión
-donde vive cada uno —`test/integridad.test.ts` (fechas y el techo del dinero),
-`test/giro.modulos.test.ts` (inventario, horas, rentas), `test/negocio2.test.ts`
-(el IVA de una devolución y la proyección de facturas recurrentes),
-`test/alertas.test.ts` (el monto propuesto), `test/escalas.test.ts` (el riel),
-`test/respaldo.test.ts` (lo que trae un archivo viejo), `test/formato.test.ts`
-(el mensaje del techo), `test/giro.test.ts` (rendimiento) y
+Los hallazgos de la segunda vuelta en adelante tienen sus pruebas de regresión
+donde vive cada uno —`test/integridad.test.ts` (fechas, el techo del dinero y el
+de las demás magnitudes), `test/giro.modulos.test.ts` (inventario, horas,
+rentas), `test/negocio2.test.ts` (el IVA de una devolución y la proyección de
+facturas recurrentes), `test/alertas.test.ts` (el monto propuesto y el peso de
+la bandeja), `test/escalas.test.ts` (el riel), `test/respaldo.test.ts` (lo que
+trae un archivo viejo, la salida de un libro envenenado y las filas
+desparejas), `test/exportar.test.ts` (el .zip de ese mismo libro y el nombre de
+un recibo), `test/cuadre.test.ts` (el recibo que entraba y no salía),
+`test/puerta.test.ts` (a nombre de quién llega la petición),
+`test/calendario.peso.test.ts` (las dos direcciones de una ventana),
+`test/recurrencias.test.ts` (los tres montones), `test/formato.test.ts` (el
+mensaje del techo y el cero sin signo), `test/giro.test.ts` (rendimiento) y
 `test/importar.test.ts` (fechas del CSV)—.
 
 Todas se corrieron contra el código **sin arreglar**: las nueve de la segunda
 vuelta fallan ahí, y de las dieciocho del primer tramo de la tercera **fallan
 doce** —al menos una por hallazgo; las otras seis comprueban que lo que ya
 funcionaba sigue igual, y por eso pasan de los dos lados. Es lo que separa una
-prueba de regresión de una que solo describe lo que el código ya hacía.
+prueba de regresión de una que solo describe lo que el código ya hacía. Las de
+la cuarta también: la del `Host`, la del respaldo desparejo, la de las
+existencias imposibles, la del recibo y la de la alerta fallan contra el código
+de antes, comprobado quitando el arreglo y volviéndolo a poner.
 
-La suite completa quedó en **936 pruebas**, con `npm run typecheck` y
-`npm run build` verdes.
+La suite completa quedó en **963 pruebas**, con `npm run typecheck` y
+`npm run build` verdes, y CI en verde sobre Node 24 y 26.
