@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { api } from '../api.ts'
-import { parseAmount } from '../format.ts'
+import { mensajeMonto, parseAmount } from '../format.ts'
 import { useApp } from '../context.ts'
 import { Modal } from './Modal.tsx'
 
@@ -48,7 +48,7 @@ export function PropuestaModal({
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     const cents = parseAmount(amount)
-    if (!cents) return setError('Escribe un monto válido, por ejemplo 250 o 1,250.50')
+    if (!cents) return setError(mensajeMonto(amount, 'Escribe un monto válido, por ejemplo 250 o 1,250.50'))
     setSaving(true)
     setError(null)
     try {

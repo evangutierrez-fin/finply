@@ -6,7 +6,7 @@
 
 import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { pasoBonito, ticksBonitos, techoDeEscala } from '../shared/escalas.ts'
+import { pasoBonito, rielDeComposicion, ticksBonitos, techoDeEscala } from '../shared/escalas.ts'
 
 describe('pasos y marcas del eje', () => {
   test('solo usa saltos que alguien lee sin pensar', () => {
@@ -105,5 +105,46 @@ describe('el techo de la escala', () => {
     // está en 1,000.00 — diez veces. El operador es estrictamente mayor.
     assert.equal(techoDeEscala([1_000_00, ...resto]).recortados, 0, '10× justo no es atípico')
     assert.equal(techoDeEscala([1_000_01, ...resto]).recortados, 1, 'un centavo más sí')
+  })
+})
+
+/**
+ * La barra de composición del patrimonio. Se mide aquí y no en el componente
+ * por lo mismo que el eje: un ancho mal calculado se ve perfectamente bien.
+ */
+describe('el riel de la composición del patrimonio', () => {
+  test('las partes reparten el riel y la deuda se mide contra ellas', () => {
+    const riel = rielDeComposicion([60_000_00, 30_000_00, 10_000_00, 0], 50_000_00)
+    assert.deepEqual(riel.partes, [60, 30, 10, 0], 'cada parte vale lo que pesa')
+    assert.equal(riel.debes, 50, 'y lo que debes va en la misma escala')
+  })
+
+  test('una parte negativa no desborda el riel', () => {
+    // El caso real: la tarjeta se comió la caja y "En cuentas" queda bajo cero.
+    // Con la suma algebraica de divisor, las inversiones median 200 % del riel.
+    const riel = rielDeComposicion([-5_000_00, 10_000_00], 0)
+    assert.equal(riel.partes[0], 0, 'lo negativo no se dibuja')
+    assert.equal(riel.partes[1], 100, 'y lo positivo llena el riel, no el doble')
+    for (const ancho of riel.partes) assert.ok(ancho <= 100, `${ancho} % se sale del riel`)
+  })
+
+  test('los tramos dibujados nunca suman más que el riel entero', () => {
+    const casos: number[][] = [
+      [-5_000_00, 10_000_00, 2_000_00],
+      [-1, -1, -1],
+      [0, 0, 0],
+      [1, -1_000_000_00, 5],
+    ]
+    for (const partes of casos) {
+      const riel = rielDeComposicion(partes, 0)
+      const suma = riel.partes.reduce((s, a) => s + a, 0)
+      assert.ok(suma <= 100 + 1e-9, `${partes} dibujó ${suma} % de riel`)
+    }
+  })
+
+  test('la deuda más grande que lo que tienes llena su barra, y no más', () => {
+    const riel = rielDeComposicion([10_000_00], 40_000_00)
+    assert.equal(riel.debes, 100, 'lo que debes manda la escala')
+    assert.equal(riel.partes[0], 25, 'y lo que tienes se mide contra ella')
   })
 })

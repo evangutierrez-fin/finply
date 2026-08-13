@@ -41,7 +41,16 @@ export function prefersReducedMotion(): boolean {
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches
 }
 
-/** Anima un número entero desde su valor anterior hasta `target`. */
+/**
+ * Anima un número entero desde su valor anterior hasta `target`.
+ *
+ * ⚠ Con la pestaña oculta **no se anima, se salta al final**. No es una
+ * optimización: el navegador congela `requestAnimationFrame` en una pestaña de
+ * fondo, así que el paso intermedio nunca corre y la cifra se queda en el
+ * valor con el que montó — que en la carga inicial es cero. Un libro abierto
+ * en una pestaña de atrás enseñaba "$0.00" de patrimonio hasta que alguien la
+ * miraba. **Ninguna cifra puede depender de que corra una animación.**
+ */
 export function useCountUp(target: number, duration = 700): number {
   const [value, setValue] = useState(target)
   const previous = useRef(target)
@@ -50,7 +59,7 @@ export function useCountUp(target: number, duration = 700): number {
   useEffect(() => {
     const from = previous.current
     previous.current = target
-    if (from === target || prefersReducedMotion()) {
+    if (from === target || prefersReducedMotion() || document.hidden) {
       setValue(target)
       return
     }

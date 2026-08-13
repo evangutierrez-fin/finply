@@ -3,7 +3,7 @@ import type {
   Account, Category, Frecuencia, Investment, ModoMonto, Recurrencia, Tag, TxType,
 } from '../../shared/types.ts'
 import { api } from '../api.ts'
-import { fmtDateAnio, fmtMoney, parseAmount, todayISO } from '../format.ts'
+import { fmtDateAnio, fmtMoney, mensajeMonto, parseAmount, todayISO } from '../format.ts'
 import { finEfectivo, ocurrencias } from '../../shared/recurrencias.ts'
 import { useApp } from '../context.ts'
 import { Cadencia, reglaDesde, type ValoresCadencia } from './Cadencia.tsx'
@@ -132,7 +132,7 @@ export function RecurrenciaModal({
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     const cents = parseAmount(amount)
-    if (!cents) return setError('Escribe un monto válido, por ejemplo 250 o 1,250.50')
+    if (!cents) return setError(mensajeMonto(amount, 'Escribe un monto válido, por ejemplo 250 o 1,250.50'))
     if (!accountId) return setError('Elige una cuenta')
     if (type === 'transferencia' && !transferAccountId) return setError('Elige la cuenta destino')
     if (tope.trim() !== '' && maxOccurrences === null) {

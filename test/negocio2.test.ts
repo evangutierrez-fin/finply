@@ -705,3 +705,259 @@ describe('R11 · nada de esto crece con el libro', () => {
     }
   })
 })
+
+/**
+ * Tercera vuelta de la auditoría: el impuesto también obedece a D6.
+ *
+ * El estado de resultados enseña el IVA trasladado y el acreditable en dos
+ * renglones separados, y los sumaba por `t.type` en crudo. Una devolución es
+ * dinero que **entra** y cuenta del lado del **gasto** —esa es la regla que ya
+ * gobierna los montos—, así que su impuesto no es IVA que cobraste: es el
+ * acreditable de la compra que se está deshaciendo.
+ */
+describe('el IVA de una devolución', () => {
+  const resultados = (perfil: number, desde: string, hasta: string): Promise<EstadoResultados> =>
+    c.get(`/api/negocio/resultados?profileId=${perfil}&desde=${desde}&hasta=${hasta}`).then((r) => r.body)
+
+  /** Una compra con IVA, devuelta entera dentro del mismo periodo. */
+  async function compraYDevolucion(nombre: string, devueltoCents: number) {
+    const { perfil, cuenta, categorias } = await libroNegocio(nombre)
+    const gasto = categorias.find((k: any) => k.kind === 'gasto')
+    const compra = (
+      await c.post('/api/transactions', {
+        profileId: perfil.id,
+        accountId: cuenta.id,
+        type: 'gasto',
+        amountCents: 1_160_00,
+        date: '2026-07-03',
+        categoryId: gasto.id,
+        note: 'Compra con IVA',
+        taxCents: 160_00,
+        deductible: true,
+      })
+    ).body
+    const iva = Math.round((160_00 * devueltoCents) / 1_160_00)
+    const dev = await c.post('/api/transactions', {
+      profileId: perfil.id,
+      accountId: cuenta.id,
+      type: 'ingreso',
+      amountCents: devueltoCents,
+      date: '2026-07-10',
+      note: 'Devolución',
+      taxCents: iva,
+      refundOfId: compra.id,
+    })
+    assert.equal(dev.status, 201, JSON.stringify(dev.body))
+    return { perfil, iva }
+  }
+
+  test('devolver la compra entera deja los dos renglones en cero', async () => {
+    const { perfil } = await compraYDevolucion('IvaDevuelto', 1_160_00)
+    const r = await resultados(perfil.id, '2026-07-01', '2026-07-31')
+    // Antes decía $160 trasladados y $160 acreditables: el neto salía bien y
+    // las dos cifras que la vista enseña por separado estaban infladas las dos.
+    assert.equal(r.impuestoTrasladadoCents, 0, 'devolver una compra no es cobrar IVA')
+    assert.equal(r.impuestoAcreditableCents, 0, 'y cancela el que se había acreditado')
+    // Y lo de siempre sigue en pie: el gasto se deshace, no se vuelve ingreso.
+    assert.equal(r.ingresosCents, 0)
+    assert.equal(r.utilidadCents, 0)
+  })
+
+  test('una devolución parcial baja el acreditable en su parte', async () => {
+    const { perfil, iva } = await compraYDevolucion('IvaParcial', 580_00)
+    const r = await resultados(perfil.id, '2026-07-01', '2026-07-31')
+    assert.equal(r.impuestoTrasladadoCents, 0)
+    assert.equal(r.impuestoAcreditableCents, 160_00 - iva)
+  })
+
+  test('una venta con IVA lo sigue trasladando, que es lo de siempre', async () => {
+    const { perfil, cuenta, categorias } = await libroNegocio('IvaVenta')
+    const ingreso = categorias.find((k: any) => k.kind === 'ingreso')
+    await c.post('/api/transactions', {
+      profileId: perfil.id,
+      accountId: cuenta.id,
+      type: 'ingreso',
+      amountCents: 1_160_00,
+      date: '2026-07-03',
+      categoryId: ingreso.id,
+      taxCents: 160_00,
+    })
+    const r = await resultados(perfil.id, '2026-07-01', '2026-07-31')
+    assert.equal(r.impuestoTrasladadoCents, 160_00)
+    assert.equal(r.impuestoAcreditableCents, 0)
+  })
+})
+
+/**
+ * La factura que todavía no se emite, en el calendario y en el flujo.
+ *
+ * La asimetría que cierra: un gasto recurrente sin confirmar salía en los dos
+ * y la iguala del mes —la entrada más segura que tiene un negocio— no salía en
+ * ninguno hasta que alguien la emitía a mano.
+ */
+describe('las facturas recurrentes se proyectan sin contarse dos veces', () => {
+  const plantillaDe = (perfil: number, cliente: number, datos: Record<string, unknown> = {}) =>
+    c.post('/api/facturas/recurrentes', {
+      profileId: perfil,
+      counterpartyId: cliente,
+      direction: 'emitida',
+      concept: 'Iguala mensual',
+      subtotalCents: 800_000,
+      taxCents: 128_000,
+      creditDays: 30,
+      frequency: 'mensual',
+      dayOfMonth: 1,
+      startDate: '2026-05-01',
+      ...datos,
+    })
+
+  const calendario = (perfil: number, hoy: string, dias = 90) =>
+    c.get(`/api/calendario?profileId=${perfil}&hoy=${hoy}&dias=${dias}`).then((r) => r.body)
+  const flujo = (perfil: number, hoy: string, dias = 90) =>
+    c.get(`/api/flujo?profileId=${perfil}&hoy=${hoy}&dias=${dias}`).then((r) => r.body)
+
+  test('el cobro cae a los días de crédito, no el día de la emisión', async () => {
+    const { perfil, cliente } = await libroNegocio('ProyectaFR')
+    await plantillaDe(perfil.id, cliente.id)
+
+    // Desde el 1 de agosto: la emisión del 1 de septiembre cobra el 1 de
+    // octubre. Poner el evento en la emisión metería en la caja de agosto un
+    // cobro de octubre, que es el error que el flujo existe para no cometer.
+    const cal = await calendario(perfil.id, '2026-08-01', 90)
+    const proyectadas = cal.eventos.filter((e: any) => e.tipo === 'factura_recurrente')
+    assert.ok(proyectadas.length > 0, 'la plantilla no se proyectó')
+    for (const e of proyectadas) {
+      assert.match(e.detalle, /sin emitir todavía/)
+      assert.equal(e.direccion, 'entra', 'una factura emitida se cobra')
+      // Lo cobrable, no el total del documento: aquí no hay retenciones, así
+      // que coinciden, y la prueba de abajo separa las dos cifras.
+      assert.equal(e.montoCents, 928_000)
+    }
+    const fechas = proyectadas.map((e: any) => e.fecha)
+    assert.ok(fechas.includes('2026-10-01'), `la emisión del 1 sep cobra el 1 oct: ${fechas}`)
+    assert.ok(!fechas.includes('2026-09-01'), 'la fecha de emisión no es la de cobro')
+  })
+
+  test('lo retenido no se proyecta: no lo va a mandar el cliente', async () => {
+    const { perfil, cliente } = await libroNegocio('RetenidoFR')
+    await plantillaDe(perfil.id, cliente.id, {
+      withheldTaxCents: 85_333,
+      withheldIncomeCents: 80_000,
+    })
+    const cal = await calendario(perfil.id, '2026-08-01', 90)
+    const uno = cal.eventos.find((e: any) => e.tipo === 'factura_recurrente')
+    assert.ok(uno)
+    assert.equal(uno.montoCents, 928_000 - 85_333 - 80_000, 'proyectó el total, no lo cobrable')
+  })
+
+  test('emitir el periodo lo saca de la proyección y lo mete como factura', async () => {
+    const { perfil, cliente } = await libroNegocio('EmitirFR')
+    const p: FacturaRecurrente = (await plantillaDe(perfil.id, cliente.id)).body
+
+    const antes = await calendario(perfil.id, '2026-08-01', 90)
+    const proyectada = antes.eventos.find(
+      (e: any) => e.tipo === 'factura_recurrente' && e.periodo === '2026-09',
+    )
+    assert.ok(proyectada, 'septiembre tenía que estar proyectado')
+
+    const emitida = await c.post(
+      `/api/facturas/recurrentes/${p.id}/emitir?profileId=${perfil.id}`,
+      { periodo: '2026-09' },
+    )
+    assert.equal(emitida.status, 201, JSON.stringify(emitida.body))
+
+    const despues = await calendario(perfil.id, '2026-08-01', 90)
+    assert.equal(
+      despues.eventos.filter((e: any) => e.tipo === 'factura_recurrente' && e.periodo === '2026-09')
+        .length,
+      0,
+      'el periodo emitido se sigue proyectando',
+    )
+    // Y ahora existe como documento, en la misma fecha y por el mismo dinero.
+    const documento = despues.eventos.find(
+      (e: any) => e.tipo === 'factura' && e.fecha === proyectada.fecha,
+    )
+    assert.ok(documento, 'la factura emitida no entró al calendario')
+    assert.equal(documento.montoCents, proyectada.montoCents, 'el mismo cobro cambió de monto')
+
+    // Lo que importa de verdad: el flujo no cuenta el mismo peso dos veces.
+    const f = await flujo(perfil.id, '2026-08-01', 90)
+    const enEsaFecha = f.eventos.filter(
+      (e: any) => e.fecha === proyectada.fecha && e.montoCents === proyectada.montoCents,
+    )
+    assert.equal(enEsaFecha.length, 1, 'el mismo cobro aparece dos veces en el flujo')
+  })
+
+  test('un periodo descartado tampoco se proyecta', async () => {
+    const { perfil, cliente } = await libroNegocio('DescartarFR')
+    const p: FacturaRecurrente = (await plantillaDe(perfil.id, cliente.id)).body
+    await c.post(`/api/facturas/recurrentes/${p.id}/descartar?profileId=${perfil.id}`, {
+      periodo: '2026-09',
+    })
+    const cal = await calendario(perfil.id, '2026-08-01', 90)
+    assert.equal(
+      cal.eventos.filter((e: any) => e.tipo === 'factura_recurrente' && e.periodo === '2026-09')
+        .length,
+      0,
+    )
+  })
+
+  test('sin días de crédito no se proyecta nada: no hay fecha de cobro que suponer', async () => {
+    const { perfil, cliente } = await libroNegocio('SinCreditoFR')
+    await plantillaDe(perfil.id, cliente.id, { creditDays: null })
+    const cal = await calendario(perfil.id, '2026-08-01', 90)
+    assert.equal(
+      cal.eventos.filter((e: any) => e.tipo === 'factura_recurrente').length,
+      0,
+      'suponer que te pagan el mismo día infla la caja',
+    )
+  })
+
+  test('una plantilla archivada deja de proyectar, y el flujo lo refleja', async () => {
+    const { perfil, cliente } = await libroNegocio('ArchivadaFR')
+    const p: FacturaRecurrente = (await plantillaDe(perfil.id, cliente.id)).body
+    const conEllas = await flujo(perfil.id, '2026-08-01', 90)
+
+    await c.patch(`/api/facturas/recurrentes/${p.id}`, {
+      profileId: perfil.id,
+      counterpartyId: cliente.id,
+      direction: 'emitida',
+      concept: 'Iguala mensual',
+      subtotalCents: 800_000,
+      taxCents: 128_000,
+      withheldTaxCents: 0,
+      withheldIncomeCents: 0,
+      creditDays: 30,
+      frequency: 'mensual',
+      dayOfMonth: 1,
+      startDate: '2026-05-01',
+      archived: true,
+    })
+    const sinEllas = await flujo(perfil.id, '2026-08-01', 90)
+    assert.ok(conEllas.entradasCents > sinEllas.entradasCents, 'archivar no la calló')
+    assert.equal(
+      sinEllas.eventos.filter((e: any) => e.tipo === 'factura_recurrente').length,
+      0,
+    )
+  })
+
+  test('la proyección cuadra con la identidad del flujo', async () => {
+    const { perfil, cliente } = await libroNegocio('CuadreFR')
+    await plantillaDe(perfil.id, cliente.id)
+    const f = await flujo(perfil.id, '2026-08-01', 90)
+    assert.equal(
+      f.saldoInicialCents + f.entradasCents - f.salidasCents,
+      f.saldoFinalCents,
+      'el flujo dejó de cuadrar al meter la proyección',
+    )
+    assert.equal(f.puntos.at(-1).saldoCents, f.saldoFinalCents)
+  })
+
+  test('con Negocio apagado no se proyecta ninguna', async () => {
+    const { perfil, cliente } = await libroNegocio('ApagadoFR')
+    await plantillaDe(perfil.id, cliente.id)
+    await c.patch(`/api/profiles/${perfil.id}`, { modules: [] })
+    const cal = await calendario(perfil.id, '2026-08-01', 90)
+    assert.equal(cal.eventos.filter((e: any) => e.tipo === 'factura_recurrente').length, 0)
+  })
+})

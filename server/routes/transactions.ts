@@ -9,6 +9,7 @@ import { attachCampos, listarCampos, setCamposDeTx } from '../personalizacion.ts
 import { sincronizarCompraMSI } from '../tarjetas.ts'
 import { adjuntoInput, conciliarInput, txInput, txQuery } from '../validators.ts'
 import { hoyISO } from '../../shared/fechas.ts'
+import { nombreSeguro } from '../../shared/archivos.ts'
 
 const router = Router()
 
@@ -595,7 +596,12 @@ router.get('/:id/adjuntos/:adjuntoId', (req, res) => {
   res.setHeader('Content-Type', row.mime || 'application/octet-stream')
   // `attachment` y no `inline`: el archivo lo subió el usuario y abrirlo en la
   // misma pestaña convierte un PDF ajeno en código corriendo en el origen.
-  res.setHeader('Content-Disposition', `attachment; filename="${row.filename.replace(/"/g, '')}"`)
+  //
+  // Y el nombre se vuelve a cortar aunque el validador ya lo corte al entrar:
+  // esta fila puede venir de un libro escrito antes de esa regla, o de un
+  // respaldo restaurado. Cerrar la puerta no limpia lo que ya está adentro.
+  const nombre = nombreSeguro(String(row.filename ?? ''), 'recibo').replace(/"/g, '')
+  res.setHeader('Content-Disposition', `attachment; filename="${nombre}"`)
   res.send(Buffer.from(row.data_b64, 'base64'))
 })
 

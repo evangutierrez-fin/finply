@@ -6,6 +6,7 @@ import { fmtDateAnio, fmtMoney } from '../format.ts'
 import { Money } from '../components/Money.tsx'
 import { RecurrenciaModal } from '../components/RecurrenciaModal.tsx'
 import { PropuestaModal } from '../components/PropuestaModal.tsx'
+import { pesoPendiente } from '../../shared/recurrencias.ts'
 import type { Propuesta, Recurrencia } from '../../shared/types.ts'
 
 function atrasoTexto(dias: number): string {
@@ -236,13 +237,13 @@ export function Recurrencias() {
   // Un aporte a una inversión sale de la cuenta pero **no es gasto** (D6):
   // sumarlo aquí daría un total que ni el Resumen ni los reportes confirman
   // nunca. Va contado aparte, con su nombre.
-  const sumaPendiente = (bandeja?.items ?? []).reduce(
-    (s, p) => s + (p.type === 'gasto' && !p.investmentId ? p.amountCents : 0),
-    0,
-  )
-  const sumaAporte = (bandeja?.items ?? []).reduce(
-    (s, p) => s + (p.investmentId ? p.amountCents : 0),
-    0,
+  //
+  // La cuenta vive en `shared/recurrencias.ts` desde la cuarta vuelta: la
+  // alerta del Resumen habla de esta misma bandeja y hacía su propia suma
+  // —las tres direcciones en una sola cifra—, así que las dos pantallas
+  // anunciaban números distintos de lo mismo (D14).
+  const { gastoCents: sumaPendiente, aporteCents: sumaAporte } = pesoPendiente(
+    bandeja?.items ?? [],
   )
 
   return (

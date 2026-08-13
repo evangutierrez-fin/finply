@@ -719,6 +719,15 @@ export type TipoEvento =
   | 'msi'
   | 'factura'
   /**
+   * Una factura que **todavía no se emite**: el periodo de una plantilla que
+   * sigue en la bandeja. Es al documento lo que 'recurrencia' es al
+   * movimiento, y va aparte de 'factura' porque no es lo mismo de ninguna
+   * manera que importe: aquella existe y esta no, aquella tiene folio y saldo
+   * y esta tiene una fecha de cobro **proyectada**. En cuanto se emite, el
+   * periodo queda resuelto y el evento pasa a ser 'factura'.
+   */
+  | 'factura_recurrente'
+  /**
    * Una partida **ya asentada** con fecha futura. No la genera el calendario
    * —ahí solo va lo que está por confirmar—, sino el flujo proyectado, que
    * tiene que contarla: ya está en el libro y va a mover la caja.
@@ -1582,7 +1591,11 @@ export interface Arrendamiento {
   gastoCents: number
   /** El depósito que de verdad tienes en la mano: recibido menos devuelto. */
   depositoEnManoCents: number
-  /** Cuántos meses mide la ventana de las dos cifras de arriba. */
+  /**
+   * Cuántos meses del contrato caen dentro de la ventana de las dos cifras de
+   * arriba. Es doce en un contrato que lleva un año o más; menos en uno recién
+   * firmado o ya terminado, y es el divisor con el que se anualiza.
+   */
   meses: number
   rendimiento: RendimientoInmueble
   /** La próxima fecha de cobro, dentro del contrato. `null` si ya terminó. */
@@ -1620,16 +1633,38 @@ export interface HorasPorCobrar {
   hasta: string
 }
 
+/**
+ * El panel de Horas. Lleva **dos ventanas distintas y las dos dicen cuál es**:
+ * lo del periodo mirado y lo que falta por cobrar de todo el historial.
+ *
+ * Los nombres son largos a propósito. Antes había un `importeSinFacturarCents`
+ * que medía el periodo junto a un `porCobrar` que medía siempre, y en el libro
+ * demo la misma respuesta decía `0` mientras su propia lista sumaba $10,825:
+ * dos verdades bajo un nombre que no distinguía cuál era cuál.
+ */
 export interface ResumenHoras {
   desde: string
   hasta: string
   minutosTotal: number
   importeTotalCents: number
-  minutosSinFacturar: number
-  importeSinFacturarCents: number
+  /** Sin facturar **de la ventana**, no de siempre. */
+  minutosSinFacturarDelPeriodo: number
+  importeSinFacturarDelPeriodoCents: number
   /** Tarifa media efectiva del periodo, en centavos por hora. `null` sin horas. */
   tarifaMediaCents: number | null
+  /**
+   * Lo que falta por cobrar de **todo el historial**, por cliente: una hora de
+   * hace medio año sin facturar sigue sin cobrarse.
+   */
   porCobrar: HorasPorCobrar[]
+  /**
+   * El total de esa lista. Es la **suma de sus renglones ya redondeados**, no
+   * un agregado aparte: redondear por cliente y redondear el total por su
+   * cuenta puede separarse unos centavos, y la vista enseña las dos cosas
+   * juntas.
+   */
+  porCobrarMinutos: number
+  porCobrarCents: number
 }
 
 export interface Producto {
@@ -1770,4 +1805,65 @@ export interface FlujoProyectado {
    */
   puntos: { fecha: string; saldoCents: number; entradasCents: number; salidasCents: number }[]
   eventos: EventoCalendario[]
+}
+
+// ── El respaldo ───────────────────────────────────────────────────────────
+
+/**
+ * Un renglón del respaldo que la base acepta y el calendario —o la aritmética
+ * del dinero— no. No es un error del archivo ni de Finply: es algo que hay que
+ * saber para poder ir a corregirlo.
+ *
+ * `motivo` no es solo una etiqueta: **dice qué se hizo con el valor**.
+ *
+ *   · `'fecha'` — se restauró **tal cual**. Un `2026-02-30` es ilegible para el
+ *     calendario y perfectamente legible para todo lo demás: el libro abre, el
+ *     saldo cuadra y solo los reportes del año se pierden ese renglón. Cuál era
+ *     la fecha de verdad solo lo sabe el usuario, así que Finply no la adivina.
+ *   · `'monto'` — **no se pudo restaurar y quedó en un centavo.** Una cifra por
+ *     encima del entero seguro no es un número raro: es un número que
+ *     `node:sqlite` se niega a devolver, así que la fila entra y ninguna
+ *     pantalla vuelve a leerla — ni el propio respaldo siguiente. Meterla tal
+ *     cual sería restaurar un libro que no se puede abrir. Se guarda todo lo
+ *     demás de la fila —su fecha, su concepto, su cuenta, sus ligas— con el
+ *     monto en un centavo, y `valor` trae lo que decía para poder volver a
+ *     escribirlo. Un centavo y no cero porque el esquema exige `> 0` en casi
+ *     toda columna de dinero, y restaurar obedece las mismas reglas.
+ */
+export interface HallazgoRespaldo {
+  tabla: string
+  columna: string
+  /** El valor tal cual venía, recortado para que quepa en un aviso. */
+  valor: string
+  /**
+   * `cifra` es la hermana de `monto`: una magnitud entera que no es dinero
+   * —una cantidad de existencias, el orden de una lista— y que rompe el libro
+   * exactamente igual. Se separan porque lo que se le dice al usuario no es lo
+   * mismo: "un centavo" no significa nada al lado de un kilo.
+   */
+  motivo: 'fecha' | 'monto' | 'cifra'
+}
+
+/**
+ * Lo que traía dentro un respaldo restaurado.
+ *
+ * Restaurar comprueba llaves foráneas y las reglas de la base, no el
+ * calendario ni el techo del dinero: un archivo hecho antes de que existieran
+ * esas dos reglas puede traer un `2026-02-30` o una cifra que ninguna pantalla
+ * podrá volver a leer.
+ *
+ * La regla que gobierna esto: **negarse a restaurar el respaldo de alguien es
+ * peor que restaurarlo con un renglón torcido** — ese archivo puede ser lo
+ * único que le queda. Así que se restaura, entero, y lo único que no entra es
+ * lo que dejaría el libro sin poder abrirse. Todo lo que se tocó se dice.
+ */
+export interface RevisionRespaldo {
+  /** Fechas que no existen en el calendario. Se restauraron tal cual. */
+  fechas: number
+  /** Cifras que el libro no puede releer. Se restauraron en un centavo. */
+  montos: number
+  /** Magnitudes que no son dinero y tampoco se pueden releer. En 1. */
+  cifras: number
+  /** Los primeros, para poder ir a buscarlos. La cuenta completa va arriba. */
+  ejemplos: HallazgoRespaldo[]
 }

@@ -70,6 +70,40 @@ export function httpError(status: number, message: string): Error {
   return Object.assign(new Error(message), { status })
 }
 
+/**
+ * Todas las filas de una consulta, **aunque el libro traiga un entero que
+ * JavaScript no puede representar exacto**.
+ *
+ * `node:sqlite` se niega a devolver un entero por encima de 2^53: lanza
+ * `RangeError` y se lleva la consulta entera, no solo esa celda. Desde la
+ * cuarta vuelta ninguna puerta deja entrar una cifra así, pero un libro
+ * escrito con una versión anterior ya la tiene dentro, y entonces lo único que
+ * importa es **poder sacarlo**: el respaldo JSON y el .zip de "llevarte tus
+ * datos" son las dos salidas, y las dos tronaban con el mismo error.
+ *
+ * El reintento en BigInt es exacto y solo se paga cuando hace falta. Encender
+ * `setReadBigInts` de entrada convertiría **todos** los enteros de todas las
+ * consultas —ids incluidos— y cambiaría lo que sale por las dos puertas para
+ * todo el mundo.
+ *
+ * `ilegibles` dice si hizo falta, para que quien no sepa leer un BigInt
+ * —el JSON del respaldo— lo convierta, y quien sí —el CSV, que escribe la
+ * cifra exacta— no pague nada.
+ */
+export function filasCrudas(
+  sql: string,
+  ...params: unknown[]
+): { filas: Record<string, unknown>[]; ilegibles: boolean } {
+  const stmt = db.prepare(sql)
+  try {
+    return { filas: stmt.all(...(params as any[])) as Record<string, unknown>[], ilegibles: false }
+  } catch (err) {
+    if (!(err instanceof RangeError)) throw err
+    stmt.setReadBigInts(true)
+    return { filas: stmt.all(...(params as any[])) as Record<string, unknown>[], ilegibles: true }
+  }
+}
+
 /** La cuenta debe existir y pertenecer al perfil. */
 export function ensureAccount(profileId: number, accountId: number): void {
   const row = db

@@ -15,9 +15,53 @@ export function partesFecha(iso: string): { anio: number; mes: number; dia: numb
   return { anio: anio!, mes: mes!, dia: dia! }
 }
 
-/** Días que tiene un mes. `mes` va de 1 a 12. */
+/** Los días de cada mes en un año común. Febrero se resuelve aparte. */
+const DIAS_POR_MES = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+
+/** La regla gregoriana completa: 2000 fue bisiesto y 1900 no. */
+export function esBisiesto(anio: number): boolean {
+  return (anio % 4 === 0 && anio % 100 !== 0) || anio % 400 === 0
+}
+
+/**
+ * Días que tiene un mes. `mes` va de 1 a 12.
+ *
+ * Es aritmética y no un `Date` a propósito: `Date.UTC` traduce los años de dos
+ * dígitos al siglo XX —el año 26 se vuelve 1926—, así que un `Date` daría el
+ * febrero equivocado justo donde esto se usa para decidir si una fecha existe.
+ */
 export function diasDelMes(anio: number, mes: number): number {
-  return new Date(Date.UTC(anio, mes, 0)).getUTCDate()
+  if (mes < 1 || mes > 12) return 0
+  return mes === 2 && esBisiesto(anio) ? 29 : DIAS_POR_MES[mes - 1]!
+}
+
+/**
+ * El año más antiguo que Finply acepta en una fecha.
+ *
+ * No es un gusto: toda la aritmética de fechas pasa por `Date.UTC`, que mapea
+ * los años de 0 a 99 al siglo XX. Una fecha del año 0026 se guardaría tal cual
+ * y se calcularía como 1926, y a partir de ahí ninguna cuenta que la toque
+ * significa nada. Con cuatro dígitos de verdad eso no puede pasar, y ningún
+ * libro de finanzas anota el año 999.
+ */
+export const ANIO_MINIMO = 1000
+
+/**
+ * Si 'AAAA-MM-DD' es un día que de verdad existe.
+ *
+ * La forma no basta: `2026-02-30` y `2026-13-45` la cumplen y no son fechas.
+ * Guardarlas es peor que rechazarlas, porque **ordenan como texto y no como
+ * calendario**: un movimiento en el mes 13 baja el saldo de la cuenta y no
+ * aparece en ningún reporte del año, así que el libro deja de cuadrar sin que
+ * nadie vea dónde. Y `2026-02-30` se convierte en el 2 de marzo en cuanto
+ * alguien cuenta días con él, de modo que la misma fecha cae en dos meses
+ * distintos según quién la mire.
+ */
+export function esFechaReal(iso: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return false
+  const { anio, mes, dia } = partesFecha(iso)
+  if (anio < ANIO_MINIMO) return false
+  return dia >= 1 && dia <= diasDelMes(anio, mes)
 }
 
 /**
@@ -164,4 +208,20 @@ export function correrMesTexto(mes: string, meses: number): string {
   const [anio, m] = mes.split('-').map(Number)
   const destino = correrMes(anio!, m!, meses)
   return `${String(destino.anio).padStart(4, '0')}-${String(destino.mes).padStart(2, '0')}`
+}
+
+/**
+ * Meses entre dos 'AAAA-MM', **contando los dos extremos**: de julio a julio es
+ * 1, y de julio a septiembre son 3.
+ *
+ * Vive aquí por lo mismo que `correrMesTexto`. Esta cuenta estaba escrita otra
+ * vez en los reportes y otra vez en el panel de análisis, palabra por palabra,
+ * y las dos deciden divisores —el promedio de gasto de un periodo, la ventana
+ * de la comparativa—. Dos aritméticas que tienen que coincidir son dos
+ * aritméticas que se separan, y estas dividen dinero.
+ */
+export function mesesEntreTexto(desde: string, hasta: string): number {
+  const [ya, ma] = desde.split('-').map(Number)
+  const [yb, mb] = hasta.split('-').map(Number)
+  return yb! * 12 + mb! - (ya! * 12 + ma!) + 1
 }

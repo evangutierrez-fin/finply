@@ -11,6 +11,21 @@
 
 // ── Inventario: promedio ponderado móvil (D29) ────────────────────────────
 
+/**
+ * Tope de una cantidad de existencias, en milésimas: mil millones de unidades.
+ *
+ * Es el hermano de `MAX_CENTAVOS` y existe por lo mismo, no por opinión sobre
+ * qué es mucho inventario. `qty_milli` es una columna INTEGER de SQLite y
+ * `node:sqlite` se niega a **devolver** un entero que JavaScript no pueda
+ * representar exacto: una cantidad por encima de 2^53 entraba sin quejarse y a
+ * partir de ahí el almacén —y el respaldo del libro entero— contestaba 500.
+ * El techo del dinero no la cubría porque no es dinero.
+ *
+ * Mil millones de unidades dejan cuatro órdenes de magnitud de holgura para
+ * multiplicarla por un costo unitario antes de acercarse al entero seguro.
+ */
+export const MAX_MILESIMAS = 1_000_000_000_000
+
 export type TipoMovimientoExistencias = 'entrada' | 'salida' | 'ajuste'
 
 export interface MovimientoExistencias {
@@ -37,11 +52,46 @@ export interface EstadoExistencias {
 
 /** El costo de sacar `cantidadMilli` de un lote que vale `valorCents`. */
 function costoDeSalida(cantidadMilli: number, quedaMilli: number, valorCents: number): number {
+  if (quedaMilli <= 0 || cantidadMilli <= 0) return 0
   // Si la salida vacía la existencia, se lleva el valor **entero**: es lo
   // mismo que hace `parcialidades` con el último pago, y evita que quede un
   // residuo de centavos en un almacén sin nada dentro.
   if (cantidadMilli >= quedaMilli) return valorCents
   return Math.round((valorCents * cantidadMilli) / quedaMilli)
+}
+
+/** Cuánto mueve el anaquel un movimiento: positivo entra, negativo sale. */
+function delta(m: MovimientoExistencias): number {
+  return m.tipo === 'salida' ? -m.cantidadMilli : m.cantidadMilli
+}
+
+/**
+ * Lo más que se puede sacar con fecha `desde` sin dejar el anaquel en negativo
+ * en **ningún** momento posterior.
+ *
+ * No basta con mirar lo que hay hoy ni lo que había ese día. Meter una salida
+ * con fecha vieja baja el recorrido entero de ahí en adelante, así que lo que
+ * limita es el **punto más bajo** de ese tramo: con diez kilos que entraron el
+ * 1 y diez que salieron el 5, hoy hay cero y el día 3 había diez, pero sacar
+ * cinco con fecha 3 dejaría el día 5 en menos cinco. El mínimo del tramo es la
+ * única cifra que contesta bien las tres preguntas.
+ *
+ * Los movimientos tienen que venir en el orden en que ocurrieron.
+ */
+export function existenciaMinimaDesde(
+  movimientos: MovimientoExistencias[],
+  desde: string,
+): number {
+  let cantidad = 0
+  let minimo: number | null = null
+  for (const m of movimientos) {
+    // El punto de inserción: lo que hay justo antes del primer movimiento que
+    // la fecha nueva alcanza. Un movimiento nuevo se apunta al final de su día.
+    if (m.fecha > desde && minimo === null) minimo = cantidad
+    cantidad += delta(m)
+    if (m.fecha > desde) minimo = Math.min(minimo!, cantidad)
+  }
+  return minimo === null ? cantidad : Math.min(minimo, cantidad)
 }
 
 /**
@@ -63,28 +113,67 @@ export function recorrerExistencias(movimientos: MovimientoExistencias[]): Estad
   let valor = 0
   let costoVendido = 0
   let ajuste = 0
+  // Lo que salió **antes de haber entrado**. Con el validador de hoy no puede
+  // ocurrir —una salida no pasa si deja el anaquel en negativo—, pero sí llega
+  // de un libro viejo o de un respaldo hecho antes de esa regla, y hay que
+  // leerlo sin inventar cifras. La existencia nunca baja de cero: lo que falta
+  // se apunta aquí y se valúa con la primera entrada que llegue, que es el
+  // único costo que ese anaquel puede conocer. Sin esto, el promedio ponderado
+  // se calculaba contra una cantidad negativa y una compra de $2,000 dejaba
+  // cinco kilos valuados en $2,000 con el costo de ventas en cero: el almacén
+  // valía el doble y lo vendido no había costado nada.
+  let faltanteSalida = 0
+  let faltanteAjuste = 0
 
   for (const m of movimientos) {
     if (m.tipo === 'entrada') {
-      cantidad += m.cantidadMilli
-      valor += Math.round((m.cantidadMilli * m.costoUnitarioCents) / 1000)
+      const valorEntrada = Math.round((m.cantidadMilli * m.costoUnitarioCents) / 1000)
+      let restante = m.cantidadMilli
+      let repartido = 0
+      // El valor de la entrada se reparte entre lo que tapa y lo que se queda,
+      // y el residuo del redondeo va al final: lo que compraste vale lo que
+      // pagaste, se use para lo que se use.
+      const parte = (milli: number) => {
+        const c = Math.round((valorEntrada * milli) / m.cantidadMilli)
+        repartido += c
+        return c
+      }
+      const cubreSalida = Math.min(faltanteSalida, restante)
+      if (cubreSalida > 0) {
+        costoVendido += parte(cubreSalida)
+        faltanteSalida -= cubreSalida
+        restante -= cubreSalida
+      }
+      const cubreAjuste = Math.min(faltanteAjuste, restante)
+      if (cubreAjuste > 0) {
+        ajuste -= parte(cubreAjuste)
+        faltanteAjuste -= cubreAjuste
+        restante -= cubreAjuste
+      }
+      cantidad += restante
+      valor += valorEntrada - repartido
       continue
     }
     if (m.tipo === 'salida') {
-      const costo = costoDeSalida(m.cantidadMilli, cantidad, valor)
-      cantidad -= m.cantidadMilli
+      const cubierto = Math.min(m.cantidadMilli, Math.max(cantidad, 0))
+      const costo = costoDeSalida(cubierto, cantidad, valor)
+      cantidad -= cubierto
       valor -= costo
       costoVendido += costo
+      faltanteSalida += m.cantidadMilli - cubierto
       continue
     }
     // Ajuste: un conteo que no cuadró, una merma, algo que apareció. El delta
     // se valúa al promedio de hoy y **no** entra al costo de ventas: no lo
     // vendiste. Meterlo ahí inflaría el costo de lo que sí se vendió.
     if (m.cantidadMilli < 0) {
-      const costo = costoDeSalida(-m.cantidadMilli, cantidad, valor)
-      cantidad += m.cantidadMilli
+      const pedido = -m.cantidadMilli
+      const cubierto = Math.min(pedido, Math.max(cantidad, 0))
+      const costo = costoDeSalida(cubierto, cantidad, valor)
+      cantidad -= cubierto
       valor -= costo
       ajuste -= costo
+      faltanteAjuste += pedido - cubierto
     } else {
       const unitario = cantidad > 0 ? valor / cantidad : m.costoUnitarioCents / 1000
       const costo = Math.round(m.cantidadMilli * unitario)
@@ -157,7 +246,11 @@ export function parseHoras(raw: string): number | null {
 export interface RendimientoInmueble {
   /** Renta cobrada menos gasto atribuido, en la ventana mirada. */
   netoCents: number
-  /** Ese neto llevado a doce meses. */
+  /**
+   * Ese neto llevado a doce meses. Con menos de doce meses de contrato dentro
+   * de la ventana, se anualiza sobre **los que hubo**: un depto que se rentó
+   * hace dos meses no rinde al año lo que cobró en dos.
+   */
   anualizadoCents: number
   /**
    * El neto anualizado sobre lo que vale hoy, en puntos base. `null` cuando no
@@ -176,6 +269,13 @@ export interface RendimientoInmueble {
  * él mismo declaró que vale.
  *
  * El depósito **no entra**: no es suyo, lo tiene que devolver.
+ *
+ * ⚠ `meses` son los que el contrato **de verdad estuvo vivo** dentro de la
+ * ventana, no el largo de la ventana. Con doce fijos, un contrato firmado hace
+ * dos meses anualizaba lo cobrado en dos como si fuera un año entero: un depto
+ * de $20,000 al mes salía dejando $40,000 anuales, y su tasa, la sexta parte
+ * de la que era. Lo que se anualiza es un ritmo, y un ritmo necesita saber
+ * sobre cuánto tiempo se midió.
  */
 export function rendimientoInmueble(params: {
   cobradoCents: number
@@ -186,7 +286,12 @@ export function rendimientoInmueble(params: {
 }): RendimientoInmueble {
   const { cobradoCents, gastoCents, valorCents, costoCents, meses } = params
   const netoCents = cobradoCents - gastoCents
-  const anualizadoCents = meses > 0 ? Math.round((netoCents * 12) / meses) : 0
+  if (meses <= 0) {
+    // Un contrato que todavía no empieza no tiene ritmo que anualizar. Es "no
+    // se puede decir", no cero: cero se lee como que no deja nada.
+    return { netoCents, anualizadoCents: 0, tasaAnualBp: null, tasaSobreCostoBp: null }
+  }
+  const anualizadoCents = Math.round((netoCents * 12) / meses)
   const tasa = (base: number) =>
     base > 0 ? Math.round((anualizadoCents / base) * 10_000) : null
   return {

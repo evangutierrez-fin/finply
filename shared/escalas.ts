@@ -67,6 +67,36 @@ export interface Techo {
  * Lo recortado se marca en la barra y se dice con palabras: una escala cortada
  * en silencio es peor que una aplastada.
  */
+export interface Riel {
+  /** Ancho de cada parte, en porcentaje del riel. Cero si no se dibuja. */
+  partes: number[]
+  /** Ancho de la barra de lo que debes, en el **mismo** porcentaje del riel. */
+  debes: number
+}
+
+/**
+ * Los anchos de la barra de composición del patrimonio: lo que tienes,
+ * repartido, y lo que debes debajo, las dos a la misma escala.
+ *
+ * Vive aquí y no dentro del componente por la razón que encabeza este archivo:
+ * un ancho mal calculado se ve perfectamente bien y en un `.tsx` no se puede
+ * probar. Y hacía falta — la escala salía de la **suma algebraica** de las
+ * partes mientras solo se dibujaban las positivas, así que en cuanto una parte
+ * era negativa (una tarjeta que se comió la caja deja "En cuentas" bajo cero)
+ * el divisor era menor que lo dibujado y los tramos sumaban más de 100 %: la
+ * barra se salía del riel.
+ *
+ * Ahora la escala es lo que de verdad se pinta, y ninguna parte pasa del riel.
+ * Lo negativo no se esconde: sigue en la lista de abajo con su cifra y su
+ * signo, que es la tabla de esta gráfica (R19).
+ */
+export function rielDeComposicion(partes: number[], debesCents: number): Riel {
+  const bruto = partes.reduce((s, c) => s + Math.max(0, c), 0)
+  const escala = Math.max(bruto, debesCents, 1)
+  const ancho = (cents: number) => Math.min(100, Math.max(0, (cents / escala) * 100))
+  return { partes: partes.map(ancho), debes: ancho(debesCents) }
+}
+
 export function techoDeEscala(valores: number[], factor = 10, percentil = 0.9): Techo {
   const orden = valores.filter((v) => v > 0).sort((a, b) => a - b)
   if (orden.length === 0) return { techo: 1, recortados: 0 }

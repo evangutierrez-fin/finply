@@ -11,10 +11,13 @@ import { after, before, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { levantar, libroBase, type Cliente } from './ayuda.ts'
 import {
+  cifraPendiente,
   describirRecurrencia,
   fechaDeOcurrencia,
   MAX_PERIODOS,
   ocurrencias,
+  pesoPendiente,
+  restoPendiente,
   type ReglaRecurrencia,
 } from '../shared/recurrencias.ts'
 import { semanaISO } from '../shared/fechas.ts'
@@ -643,4 +646,51 @@ test('el respaldo se lleva las recurrencias y sus periodos resueltos', async () 
   const restaurar = await c.post('/api/respaldo/restaurar', respaldo)
   assert.equal(restaurar.status, 200, JSON.stringify(restaurar.body))
   assert.deepEqual(await bandeja(perfil.id), antes, 'la bandeja sobrevive al respaldo')
+})
+
+/**
+ * El peso de la bandeja, que dicen dos pantallas.
+ *
+ * Vive en el módulo puro por lo mismo que todo lo demás: la bandeja lo dibuja
+ * en un `.tsx` y la alerta del Resumen lo repetía en el servidor, así que
+ * había dos aritméticas para el mismo montón y se separaron.
+ */
+describe('lo que pesa lo que está por confirmar', () => {
+  const partidas = [
+    { type: 'gasto' as const, investmentId: null, amountCents: 1_200_00 },
+    { type: 'gasto' as const, investmentId: 7, amountCents: 500_00 },
+    { type: 'ingreso' as const, investmentId: null, amountCents: 3_000_00 },
+    { type: 'transferencia' as const, investmentId: null, amountCents: 900_00 },
+  ]
+
+  test('cada dirección en su montón, y el traspaso en ninguno', () => {
+    assert.deepEqual(pesoPendiente(partidas), {
+      gastoCents: 1_200_00,
+      aporteCents: 500_00,
+      ingresoCents: 3_000_00,
+    })
+  })
+
+  test('la cifra de un aviso es la que sale, nunca la suma de las tres', () => {
+    const peso = pesoPendiente(partidas)
+    assert.equal(cifraPendiente(peso), 1_200_00)
+    assert.notEqual(cifraPendiente(peso), 4_700_00)
+  })
+
+  test('sin gasto manda el aporte, y sin ninguno de los dos, lo que entra', () => {
+    assert.equal(cifraPendiente({ gastoCents: 0, aporteCents: 500_00, ingresoCents: 300 }), 500_00)
+    assert.equal(cifraPendiente({ gastoCents: 0, aporteCents: 0, ingresoCents: 300 }), 300)
+    assert.equal(cifraPendiente({ gastoCents: 0, aporteCents: 0, ingresoCents: 0 }), 0)
+  })
+
+  test('lo que la cifra deja fuera se dice, y si no deja nada no se dice nada', () => {
+    const pesos = (c: number) => `$${(c / 100).toFixed(2)}`
+    assert.equal(
+      restoPendiente(pesoPendiente(partidas), pesos),
+      '$500.00 van a una inversión y $3000.00 entran.',
+    )
+    assert.equal(restoPendiente({ gastoCents: 100, aporteCents: 0, ingresoCents: 0 }, pesos), '')
+    // Solo ingreso: la cifra del aviso **es** el ingreso, así que no sobra nada.
+    assert.equal(restoPendiente({ gastoCents: 0, aporteCents: 0, ingresoCents: 500 }, pesos), '')
+  })
 })

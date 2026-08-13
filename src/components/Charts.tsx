@@ -1,11 +1,17 @@
 import { useState, type Dispatch, type KeyboardEvent, type SetStateAction } from 'react'
 import type { MesReporte, PuntoPatrimonio, Summary } from '../../shared/types.ts'
-import { ticksBonitos, techoDeEscala } from '../../shared/escalas.ts'
+import { rielDeComposicion, ticksBonitos, techoDeEscala } from '../../shared/escalas.ts'
+import { diasDelMes, partesFecha } from '../../shared/fechas.ts'
 import { fmtCompacto, fmtDate, fmtMoney, MESES } from '../format.ts'
 
+/**
+ * Cuántas barras lleva el mes. Sale de `shared/fechas` y no de un `Date`: es la
+ * misma regla gregoriana que decide si una fecha existe, y tenerla dos veces
+ * —una aquí con `new Date`, otra allá con aritmética— es tener dos febreros.
+ */
 function daysInMonth(month: string): number {
-  const [y, m] = month.split('-').map(Number)
-  return new Date(y!, m!, 0).getDate()
+  const { anio, mes } = partesFecha(`${month}-01`)
+  return diasDelMes(anio, mes)
 }
 
 /**
@@ -661,10 +667,13 @@ export function Composicion({
   partes: { nombre: string; cents: number }[]
   debesCents: number
 }) {
-  const bruto = partes.reduce((s, p) => s + p.cents, 0)
-  if (bruto <= 0 && debesCents <= 0) return null
-  const escala = Math.max(bruto, debesCents, 1)
-  const parte = (cents: number) => `${Math.max(0, (cents / escala) * 100)}%`
+  // La aritmética del riel vive en `shared/escalas.ts`, probada: un ancho mal
+  // calculado se ve bien y en un `.tsx` no se puede comprobar.
+  if (partes.every((p) => p.cents <= 0) && debesCents <= 0) return null
+  const riel = rielDeComposicion(
+    partes.map((p) => p.cents),
+    debesCents,
+  )
 
   return (
     // `aria-hidden` por lo mismo que la minigráfica: cada tramo está escrito
@@ -685,7 +694,7 @@ export function Composicion({
               <span
                 key={p.nombre}
                 className={`composicion-parte parte-${i}`}
-                style={{ width: parte(p.cents) }}
+                style={{ width: `${riel.partes[i]}%` }}
                 title={p.nombre}
               />
             ) : null,
@@ -696,7 +705,7 @@ export function Composicion({
         <div className="composicion-fila">
           <span className="composicion-rotulo">Debes</span>
           <span className="composicion-riel">
-            <span className="composicion-parte parte-debes" style={{ width: parte(debesCents) }} />
+            <span className="composicion-parte parte-debes" style={{ width: `${riel.debes}%` }} />
           </span>
         </div>
       )}

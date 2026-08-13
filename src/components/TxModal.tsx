@@ -6,7 +6,7 @@ import type {
 import { libroPide, pideCampo, type CampoTx } from '../../shared/campos.ts'
 import { rotuloCategoria } from '../../shared/taxonomia.ts'
 import { api } from '../api.ts'
-import { fmtDate, parseAmount, todayISO } from '../format.ts'
+import { fmtDate, mensajeMonto, parseAmount, todayISO } from '../format.ts'
 import { useApp } from '../context.ts'
 import { Money } from './Money.tsx'
 import { Modal } from './Modal.tsx'
@@ -296,7 +296,7 @@ export function TxModal({
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     const cents = parseAmount(amount)
-    if (!cents) return setError('Escribe un monto válido, por ejemplo 250 o 1,250.50')
+    if (!cents) return setError(mensajeMonto(amount, 'Escribe un monto válido, por ejemplo 250 o 1,250.50'))
     if (!accountId) return setError('Elige una cuenta')
     setSaving(true)
     setError(null)

@@ -19,7 +19,7 @@
 // en una celda —son megas de base64, y una celda de Excel se corta a 32 767
 // caracteres—, así que viajan como archivos de verdad dentro del .zip.
 
-import { db, httpError } from './db.ts'
+import { db, filasCrudas, httpError } from './db.ts'
 import { TABLES } from './backup.ts'
 import { SCHEMA_VERSION } from './migrations.ts'
 import { armarCsv, armarCsvSecciones, celdaTexto, escalaCsv, montoCsv } from './csv.ts'
@@ -140,10 +140,12 @@ export function filasDe(tabla: Tabla, profileId: number): Record<string, unknown
       : alcance === 'propia'
         ? 'profile_id = ?'
         : `${alcance.llave} IN (SELECT id FROM ${alcance.padre} WHERE profile_id = ?)`
-  return db.prepare(`SELECT * FROM ${tabla} WHERE ${donde} ORDER BY ${orden}`).all(profileId) as Record<
-    string,
-    unknown
-  >[]
+  // Por `filasCrudas` y no por `.all()`: un libro escrito antes del techo de
+  // la cuarta vuelta puede traer un entero que JavaScript no representa
+  // exacto, y entonces esta —que es la puerta de salida— era justo la que
+  // tronaba. El CSV escribe la cifra tal cual, que es lo que hay que sacar:
+  // `escalaCsv` trabaja en BigInt precisamente para esto.
+  return filasCrudas(`SELECT * FROM ${tabla} WHERE ${donde} ORDER BY ${orden}`, profileId).filas
 }
 
 /** El encabezado de una columna: sin el sufijo de su escala, si lo tenía. */

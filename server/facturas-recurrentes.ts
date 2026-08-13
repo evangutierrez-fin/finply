@@ -45,7 +45,12 @@ const SELECT = `
   LEFT JOIN cost_centers cc ON cc.id = r.cost_center_id
 `
 
-function reglaDe(row: any): ReglaRecurrencia {
+/**
+ * La regla de fechas de una plantilla. Se exporta porque el calendario proyecta
+ * sus periodos y no puede reconstruirla por su cuenta: dos lecturas de la misma
+ * plantilla son dos calendarios que se separan.
+ */
+export function reglaDe(row: any): ReglaRecurrencia {
   return {
     frequency: row.frequency,
     dayOfMonth: row.day_of_month ?? null,

@@ -427,14 +427,21 @@ Tus datos nunca salen de tu máquina: todo vive en un archivo SQLite local.
 - **Diseño accesible** — pares de colores de gráfica validados para daltonismo
   en ambos temas (con textura como codificación secundaria), foco visible por
   teclado y respeto a `prefers-reduced-motion`.
-- **Las cuentas están auditadas, y el informe se publica** — cada dominio que
-  toca dinero se simuló de punta a punta —la vida entera de un crédito de 48
-  abonos, seis cortes de una tarjeta, dos años de una inversión, un año de
-  libro, una factura cobrada en siete pedazos— y se comparó contra aritmética
-  **hecha aparte**: fórmulas cerradas de hoja de cálculo, no el propio código
-  de Finply. Salió un defecto de redondeo en el impuesto de una factura,
-  arreglado y con pruebas de regresión. El informe completo, con lo que **no**
-  cubre, está en [AUDITORIA.md](AUDITORIA.md).
+- **Las cuentas están auditadas dos veces, y el informe se publica** — cada
+  dominio que toca dinero se simuló de punta a punta —la vida entera de un
+  crédito de 48 abonos, seis cortes de una tarjeta, dos años de una inversión,
+  un año de libro, una factura cobrada en siete pedazos— y se comparó contra
+  aritmética **hecha aparte**: fórmulas cerradas de hoja de cálculo, no el
+  propio código de Finply. La primera vuelta sacó un defecto de redondeo en el
+  impuesto de una factura. La segunda fue a lo que la primera había dejado
+  fuera a propósito —los módulos de giro, el simulador, el import— y sacó
+  cinco más, todos arreglados y con pruebas de regresión que fallan contra el
+  código sin arreglar: una fecha que no existe podía entrar al libro y
+  descuadrarlo en silencio, una venta anterior a su compra valuaba el almacén
+  al doble, el rendimiento de un contrato recién firmado salía seis veces más
+  bajo, una renta ya cobrada se contaba dos veces en el flujo, y el resumen de
+  horas publicaba dos cifras bajo el mismo nombre. El informe completo, con lo
+  que **no** cubre, está en [AUDITORIA.md](AUDITORIA.md).
 
 ## Stack
 
@@ -478,6 +485,14 @@ Finply **no pide contraseña**, y por eso el servidor solo escucha en
 Si necesitas exponerlo a propósito, `API_HOST=0.0.0.0` lo permite, pero
 entonces cualquiera que sepa tu IP entra y escribe sin credenciales. Ponle un
 proxy con autenticación enfrente antes de hacerlo.
+
+Escuchar solo en loopback basta contra la red y **no basta contra el
+navegador**: una página cualquiera puede resolver su propio dominio a
+`127.0.0.1` —*DNS rebinding*— y a partir de ahí el navegador la trata como del
+mismo origen que Finply, sin CORS que estorbe. Por eso el servidor también
+comprueba **a nombre de quién** llega la petición: contesta a `localhost` y a
+una IP literal, y no a un dominio ajeno. Si lo pones detrás de un proxy con tu
+propio nombre, `FINPLY_HOSTS=finply.casa` lo añade.
 
 Tus datos viven en un solo archivo SQLite (`data/finply.db`, gitignoreado).
 Desde **Ajustes** puedes descargar un respaldo completo en JSON o restaurar uno
@@ -720,9 +735,15 @@ recurrencias, el flujo, los presupuestos, el patrimonio completo, los módulos
 por perfil y de giro, la personalización y la salida de tus datos. De aquí en
 adelante lo que se haga sale del uso, no de una lista.
 
-La **auditoría de las cuentas** ya se hizo: está en
-[AUDITORIA.md](AUDITORIA.md), con lo que se revisó, contra qué, lo que se
-encontró y lo que **no** cubre.
+La **auditoría de las cuentas** ya se hizo, y va por su **cuarta vuelta**:
+está en [AUDITORIA.md](AUDITORIA.md), con lo que se revisó, contra qué, lo que
+se encontró —veintiún hallazgos hasta hoy, todos arreglados y con su prueba de
+regresión— y lo que **no** cubre. La primera vuelta rehizo la aritmética, la
+segunda entró a los módulos de giro y a las fechas, la tercera fue por las
+juntas —los lugares donde el mismo peso se calcula dos veces— y la cuarta fue
+por lo que impedía compartir la app: el hueco que la tercera dejó escrito, la
+primera revisión de seguridad, y un recorrido de la app vista por vista
+comparando cada titular contra su propia API.
 
 **Lo que Finply no hace, y no es una promesa pendiente**
 

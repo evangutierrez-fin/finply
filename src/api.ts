@@ -9,6 +9,7 @@ import type {
   Almacen, Arrendamiento, Hora, MovimientoStock, Producto, ResumenHoras,
   Cotizacion, ResumenCotizaciones, TableroContraparte, SugerenciaTx,
   CampoPropio, PlantillaTx, ReglaImport, ComparacionEstrategia, ModoMonto,
+  RevisionRespaldo,
 } from '../shared/types.ts'
 
 /** Error de la API que conserva el código y el cuerpo, para poder reaccionar. */
@@ -1114,10 +1115,16 @@ export const api = {
     /** El navegador descarga el archivo directo desde esta ruta. */
     downloadUrl: '/api/respaldo',
     info: () => req<{ dbPath: string }>('/api/respaldo/info'),
+    /**
+     * Restaura y **dice qué venía dentro**. `revision` cuenta las fechas que no
+     * existen en el calendario y las cifras que la aritmética no puede releer:
+     * un respaldo viejo puede traerlas y se restaura igual —negarse sería peor,
+     * ese archivo puede ser lo único que queda—, pero el usuario se entera.
+     */
     restore: (snapshot: unknown) =>
-      req<{ restaurados: Record<string, number> }>('/api/respaldo/restaurar', {
-        method: 'POST',
-        body: JSON.stringify(snapshot),
-      }),
+      req<{ restaurados: Record<string, number>; revision: RevisionRespaldo }>(
+        '/api/respaldo/restaurar',
+        { method: 'POST', body: JSON.stringify(snapshot) },
+      ),
   },
 }

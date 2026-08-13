@@ -270,7 +270,12 @@ function GoalCard({ goal, index }: { goal: Goal; index: number }) {
       style={{ animationDelay: `${index * 60}ms` }}
     >
       <header className="deuda-head">
-        <h3>{goal.name}</h3>
+        {/* h2 y no h3: aquí las metas cuelgan directo del título de la vista,
+            sin encabezado de sección de por medio. Con h3 el índice del lector
+            de pantalla saltaba de nivel 1 a nivel 3, que se lee como si
+            faltara una sección. En Deudas e Inversiones sí hay un h2 arriba,
+            y por eso ahí las tarjetas son h3. */}
+        <h2>{goal.name}</h2>
         {goal.status === 'cumplida' ? (
           <span className="sello-mini">Cumplida</span>
         ) : goal.dueDate ? (

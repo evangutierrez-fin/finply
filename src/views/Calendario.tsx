@@ -5,6 +5,7 @@ import { useFetch } from '../hooks.ts'
 import { MESES, fmtDate, fmtMoney, formatoActual, todayISO } from '../format.ts'
 import { diasDelMes, diasEntre, fechaConDia, partesFecha } from '../../shared/fechas.ts'
 import { diasDesde } from '../../shared/formato.ts'
+import { pesoDeEventos } from '../../shared/calendario.ts'
 import { PropuestaModal, type ParaAsentar } from '../components/PropuestaModal.tsx'
 import type { BorradorTx, EventoCalendario, TipoEvento } from '../../shared/types.ts'
 
@@ -15,6 +16,7 @@ const ETIQUETA: Record<TipoEvento, string> = {
   deuda: 'Deuda',
   msi: 'A meses',
   factura: 'Factura',
+  factura_recurrente: 'Factura por emitir',
   renta: 'Renta',
   // Aquí no aparece nunca: el calendario es lo que está **por confirmar**, y
   // un movimiento con fecha futura ya está asentado. Lo cuenta el flujo.
@@ -153,7 +155,9 @@ function RejillaMes({
   const delMes = [...porDia.entries()]
     .filter(([f]) => f.startsWith(`${primero.slice(0, 7)}`))
     .flatMap(([, evs]) => evs)
-  const sumaMes = delMes.reduce((s, e) => s + (e.montoCents ?? 0), 0)
+  // Partido, como el encabezado de la vista: el pie de la rejilla sumaba lo
+  // que entra con lo que sale y daba una cifra que no es ninguna de las dos.
+  const { entraCents, saleCents } = pesoDeEventos(delMes)
 
   return (
     <table className="libro rejilla">
@@ -162,8 +166,9 @@ function RejillaMes({
           <span className="rejilla-mes">{MESES[mes - 1]} {anio}</span>
           {delMes.length > 0 && (
             <span className="rejilla-total">
-              {delMes.length} {delMes.length === 1 ? 'vencimiento' : 'vencimientos'} ·{' '}
-              {fmtMoney(sumaMes)}
+              {delMes.length} {delMes.length === 1 ? 'vencimiento' : 'vencimientos'}
+              {saleCents > 0 && <> · {fmtMoney(saleCents)} que pagas</>}
+              {entraCents > 0 && <> · {fmtMoney(entraCents)} que cobras</>}
             </span>
           )}
         </span>
@@ -313,8 +318,11 @@ export function Calendario() {
   for (const e of data?.eventos ?? []) {
     porDia.set(e.fecha, [...(porDia.get(e.fecha) ?? []), e])
   }
-  const totalConocido = (data?.eventos ?? []).reduce((s, e) => s + (e.montoCents ?? 0), 0)
-  const porDefinir = (data?.eventos ?? []).filter((e) => e.montoCents === null).length
+  // Partido por dirección, no sumado: la cifra de arriba juntaba lo que un
+  // cliente te va a pagar con lo que tú vas a pagar, y ese total no lo
+  // confirma ninguna otra pantalla. El Flujo, con la misma ventana y los
+  // mismos eventos, siempre los enseñó aparte (D14).
+  const { entraCents, saleCents, sinMonto: porDefinir } = pesoDeEventos(data?.eventos ?? [])
 
   return (
     <div className="vista">
@@ -373,9 +381,20 @@ export function Calendario() {
         data && (
           <>
             <section className="hoja cal-resumen">
-              <div className="tarjetas-resumen-dato">
-                <span className="rotulo">Compromisos en {dias} días</span>
-                <span className="hero-cifra-media">{fmtMoney(totalConocido)}</span>
+              {/* Dos cifras y no una suma: lo que sale es el compromiso —de eso
+                  avisa un calendario— y lo que entra va al lado, con su nombre.
+                  Sumarlas daba un total que el Flujo nunca confirma (D14). */}
+              <div className="cal-resumen-cifras">
+                <div className="tarjetas-resumen-dato">
+                  <span className="rotulo">Vas a pagar en {dias} días</span>
+                  <span className="hero-cifra-media">{fmtMoney(saleCents)}</span>
+                </div>
+                {entraCents > 0 && (
+                  <div className="tarjetas-resumen-dato">
+                    <span className="rotulo">Y vas a cobrar</span>
+                    <span className="hero-cifra-media">{fmtMoney(entraCents)}</span>
+                  </div>
+                )}
               </div>
               <p className="cal-resumen-nota">
                 {data.eventos.length} {data.eventos.length === 1 ? 'vencimiento' : 'vencimientos'}{' '}

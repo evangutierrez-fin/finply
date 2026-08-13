@@ -9,8 +9,11 @@
 
 import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs'
 import path from 'node:path'
-import { db, dataDir, httpError, inTransaction } from './db.ts'
+import { db, dataDir, filasCrudas, httpError, inTransaction } from './db.ts'
 import { SCHEMA_VERSION } from './migrations.ts'
+import { esFechaReal } from '../shared/fechas.ts'
+import type { HallazgoRespaldo, RevisionRespaldo } from '../shared/types.ts'
+import { MAX_CENTAVOS } from '../shared/formato.ts'
 
 /** Formato del archivo de respaldo. Sube si deja de ser compatible. */
 const BACKUP_FORMAT = 1
@@ -138,16 +141,52 @@ const ORDEN_DE_VOLCADO: Record<string, string> = {
   categories: 'parent_id IS NOT NULL, rowid ASC',
 }
 
+/**
+ * Un entero de SQLite que JavaScript no puede representar exacto, escrito
+ * como texto. Es lo único que lo conserva **entero**: pasarlo a `Number` lo
+ * redondea en silencio, que es peor que no poder leerlo.
+ *
+ * Lo lee de vuelta `revisarSnapshot`, que lo cuenta y lo aparta al restaurar.
+ */
+function sinBigInts(fila: Record<string, unknown>): Record<string, unknown> {
+  const salida: Record<string, unknown> = {}
+  for (const [columna, valor] of Object.entries(fila)) {
+    if (typeof valor !== 'bigint') {
+      salida[columna] = valor
+      continue
+    }
+    const cabe =
+      valor >= BigInt(Number.MIN_SAFE_INTEGER) && valor <= BigInt(Number.MAX_SAFE_INTEGER)
+    salida[columna] = cabe ? Number(valor) : String(valor)
+  }
+  return salida
+}
+
+/**
+ * Una tabla, y si el libro **ya** trae una cifra ilegible, la misma tabla con
+ * esa cifra escrita como texto.
+ *
+ * Este es el otro lado del hallazgo 8, y el que quedó abierto: el techo
+ * protege a los libros nuevos y la revisión a los restaurados, pero quien
+ * escribió la cifra con una versión anterior seguía encerrado — la lectura
+ * lanzaba `RangeError` y la exportación era justo la puerta que necesitaba.
+ * Un libro del que no puedes salir no es tuyo.
+ *
+ * El reintento vive en `filasCrudas` porque las dos salidas —este respaldo y
+ * el .zip de "llevarte tus datos"— tropezaban con lo mismo, y dos puertas que
+ * deben abrir igual no pueden tener cada una su propio arreglo.
+ */
+function volcar(table: string, orden: string): Record<string, unknown>[] {
+  const { filas, ilegibles } = filasCrudas(`SELECT * FROM ${table} ORDER BY ${orden}`)
+  return ilegibles ? filas.map(sinBigInts) : filas
+}
+
 /** Vuelca todas las tablas —todos los perfiles— a un objeto plano. */
 export function exportSnapshot(): Snapshot {
   const tables: Snapshot['tables'] = {}
   for (const table of TABLES) {
     // Por rowid, no por id: las tablas puente no tienen columna `id`.
-    const orden = ORDEN_DE_VOLCADO[table] ?? 'rowid ASC'
-    tables[table] = db.prepare(`SELECT * FROM ${table} ORDER BY ${orden}`).all() as Record<
-      string,
-      unknown
-    >[]
+    tables[table] = volcar(table, ORDEN_DE_VOLCADO[table] ?? 'rowid ASC')
   }
   return {
     finply: BACKUP_FORMAT,
@@ -194,13 +233,196 @@ function parseSnapshot(raw: unknown): Snapshot {
   return data as Snapshot
 }
 
+/** Cuántos ejemplos se devuelven. Más que esto ya no es un aviso, es un volcado. */
+const MAX_EJEMPLOS = 8
+
+/**
+ * Si una columna guarda una fecha de calendario. Se mira el **nombre**, que es
+ * la convención del esquema entero: `date`, `due_date`, `start_date`,
+ * `valid_until`, `paused_from`. Los `_at` quedan fuera a propósito: son marcas
+ * de tiempo con hora, no días del calendario.
+ */
+function esColumnaDeFecha(nombre: string): boolean {
+  if (nombre.endsWith('_at')) return false
+  return (
+    nombre === 'date' ||
+    nombre.endsWith('_date') ||
+    nombre === 'valid_until' ||
+    nombre === 'paused_from' ||
+    nombre === 'paused_until'
+  )
+}
+
+/** Si una cifra de dinero es de las que el libro puede volver a leer. */
+function montoLegible(valor: unknown): boolean {
+  return (
+    typeof valor === 'number' && Number.isSafeInteger(valor) && Math.abs(valor) <= MAX_CENTAVOS
+  )
+}
+
+/**
+ * Las columnas que la base guarda como entero, por tabla.
+ *
+ * Se le pregunta al esquema en vez de adivinar por el nombre. La diferencia
+ * importa: un folio de factura es texto y puede ser una tirada larguísima de
+ * dígitos perfectamente legítima —marcarlo por su forma lo habría apartado—,
+ * mientras que `qty_milli` o `position` son enteros aunque no lo parezcan.
+ */
+function columnasEnteras(table: string): Set<string> {
+  const info = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string; type: string }[]
+  return new Set(info.filter((c) => c.type.toUpperCase() === 'INTEGER').map((c) => c.name))
+}
+
+/**
+ * Los enteros que **no** son una magnitud: la llave de la fila y sus ligas.
+ *
+ * Quedan fuera de la revisión a propósito. Un id lo pone SQLite y no el
+ * usuario, así que llegar a uno ilegible pediría nueve mil billones de filas;
+ * y si alguna vez llegara, apartarlo en 1 lo estrellaría contra otra fila o
+ * rompería la liga en silencio. Un id imposible tiene que fallar ruidosamente
+ * al restaurar, que es lo que ya hace la comprobación de llaves foráneas.
+ */
+function esLlave(columna: string): boolean {
+  return columna === 'id' || columna.endsWith('_id')
+}
+
+/**
+ * Con cuánto se restaura una cifra que el libro no puede releer.
+ *
+ * **Un centavo, y no cero**, por una razón que no es de gusto: casi toda
+ * columna de dinero del esquema lleva `CHECK (amount_cents > 0)`, así que un
+ * cero haría que la restauración entera fallara con un 400 — y entonces el
+ * usuario se quedaría sin su respaldo por querer protegerlo, que es exactamente
+ * lo contrario de lo que se buscaba. Restaurar obedece las mismas reglas que
+ * todo lo demás.
+ *
+ * Un centavo al lado de una cifra de verdad es inconfundible, y el informe trae
+ * lo que decía para volver a escribirlo.
+ */
+const MONTO_ILEGIBLE = 1
+
+/**
+ * Revisa lo que el respaldo trae dentro **sin negarse a restaurarlo**, y de
+ * paso deja sin efecto lo único que no se puede restaurar.
+ *
+ * La segunda vuelta de la auditoría dejó esto escrito como hueco conocido: la
+ * restauración comprueba llaves foráneas y las reglas de la base, no el
+ * calendario. Un archivo hecho antes del hallazgo 4 puede traer un `2026-02-30`
+ * —que existe para el texto y no para la aritmética— y uno anterior al hallazgo
+ * 8 puede traer una cifra que ninguna pantalla podrá volver a leer.
+ *
+ * La decisión de fondo no cambia, y es la que gobierna las dos ramas de abajo:
+ * **negarse a restaurar el respaldo de alguien es peor que restaurarlo con un
+ * renglón torcido.** Ese archivo puede ser lo único que le queda. Pero las dos
+ * cosas no son iguales, y tratarlas igual sería el error:
+ *
+ *   · **La fecha se restaura tal cual.** El libro abre, los saldos cuadran y lo
+ *     único que se pierde es ese renglón en los reportes del año. Cuál era la
+ *     fecha de verdad solo lo sabe el usuario.
+ *   · **La cifra ilegible no se restaura: entra en un centavo.** Aquí no hay
+ *     elección que tomar. Se comprobó escribiéndola: la fila entra, y a partir
+ *     de ahí ninguna lectura de esa cuenta contesta — **ni la exportación del
+ *     respaldo siguiente**. Restaurarla tal cual sería devolverle al usuario un
+ *     libro que no puede abrir y del que ya no puede sacar nada. La fila se
+ *     conserva entera —su fecha, su concepto, su cuenta, sus ligas— y el valor
+ *     original viaja en el informe para que lo vuelva a escribir. Por qué un
+ *     centavo y no cero, en `MONTO_ILEGIBLE`.
+ *
+ * Muta `snapshot` a propósito: es el objeto que se va a insertar, y sanear en
+ * una copia dejaría la puerta abierta a insertar el original por descuido.
+ */
+export function revisarSnapshot(snapshot: Snapshot): RevisionRespaldo {
+  const revision: RevisionRespaldo = { fechas: 0, montos: 0, cifras: 0, ejemplos: [] }
+  const apuntar = (h: HallazgoRespaldo) => {
+    if (h.motivo === 'fecha') revision.fechas++
+    else if (h.motivo === 'monto') revision.montos++
+    else revision.cifras++
+    if (revision.ejemplos.length < MAX_EJEMPLOS) revision.ejemplos.push(h)
+  }
+
+  for (const tabla of TABLES) {
+    const filas = snapshot.tables[tabla] ?? []
+    if (filas.length === 0) continue
+    const enteras = columnasEnteras(tabla)
+    for (const fila of filas) {
+      for (const [columna, valor] of Object.entries(fila)) {
+        if (valor === null || valor === undefined) continue
+        if (esColumnaDeFecha(columna)) {
+          if (typeof valor !== 'string' || !esFechaReal(valor)) {
+            apuntar({ tabla, columna, valor: String(valor).slice(0, 40), motivo: 'fecha' })
+          }
+          continue
+        }
+        if (columna.endsWith('_cents')) {
+          if (montoLegible(valor)) continue
+          apuntar({ tabla, columna, valor: String(valor).slice(0, 40), motivo: 'monto' })
+          fila[columna] = MONTO_ILEGIBLE
+          continue
+        }
+        // Y las demás magnitudes enteras, que caen en la misma trampa sin ser
+        // dinero: una cantidad de existencias basta para que el libro no abra.
+        if (esLlave(columna) || !enteras.has(columna)) continue
+        if (typeof valor === 'number' && Number.isSafeInteger(valor)) continue
+        apuntar({ tabla, columna, valor: String(valor).slice(0, 40), motivo: 'cifra' })
+        fila[columna] = MONTO_ILEGIBLE
+      }
+    }
+  }
+  return revision
+}
+
+/**
+ * Las filas de una tabla, agrupadas por **qué columnas trae cada una**.
+ *
+ * Antes se miraba solo la primera fila y sus columnas decidían por todas, que
+ * es correcto mientras el archivo sea homogéneo y una pérdida silenciosa en
+ * cuanto deje de serlo: si al primer renglón le faltaba el concepto, la
+ * columna se caía del INSERT y **todos los conceptos de la tabla se perdían**
+ * sin un solo aviso. Y al revés —si la primera lo traía y otra no— se mandaba
+ * `null` a una columna `NOT NULL` y reventaba la restauración entera.
+ *
+ * Agrupar arregla las dos: cada renglón entra con lo que trae, y una columna
+ * ausente se **omite** en vez de mandarse nula, que es lo que deja a SQLite
+ * aplicar su valor por omisión. Un archivo sano tiene una sola forma, así que
+ * esto no cambia nada para él (R11: el número de consultas sigue sin depender
+ * del tamaño del libro, solo de cuántas formas distintas traiga el archivo).
+ *
+ * `Object.hasOwn` y no `in`: lo heredado no es una columna del respaldo.
+ */
+function porForma(
+  table: string,
+  rows: Record<string, unknown>[],
+): Map<string[], Record<string, unknown>[]> {
+  const conocidas = columnsOf(table)
+  const porClave = new Map<string, { columns: string[]; filas: Record<string, unknown>[] }>()
+  for (const row of rows) {
+    const columns = conocidas.filter((c) => Object.hasOwn(row, c))
+    if (columns.length === 0) {
+      throw httpError(400, `La tabla "${table}" del respaldo no trae ninguna columna conocida`)
+    }
+    const clave = columns.join(',')
+    const grupo = porClave.get(clave) ?? { columns, filas: [] }
+    grupo.filas.push(row)
+    porClave.set(clave, grupo)
+  }
+  return new Map([...porClave.values()].map((g) => [g.columns, g.filas]))
+}
+
 /**
  * Reemplaza el contenido del libro por el del respaldo. Todo ocurre dentro de
  * una transacción: si el archivo trae una sola referencia rota, no se aplica
  * nada y el libro anterior sigue intacto.
+ *
+ * Antes de escribir nada pasa por `revisarSnapshot`, que además de contar lo
+ * que viene torcido **deja en cero las cifras que el libro no puede releer**:
+ * ver ahí por qué esa es la única de las dos que no se restaura tal cual.
  */
-export function importSnapshot(raw: unknown): { restaurados: Record<string, number> } {
+export function importSnapshot(raw: unknown): {
+  restaurados: Record<string, number>
+  revision: RevisionRespaldo
+} {
   const snapshot = parseSnapshot(raw)
+  const revision = revisarSnapshot(snapshot)
   const restaurados: Record<string, number> = {}
 
   inTransaction(() => {
@@ -211,19 +433,15 @@ export function importSnapshot(raw: unknown): { restaurados: Record<string, numb
       const rows = snapshot.tables[table] ?? []
       restaurados[table] = rows.length
       if (rows.length === 0) continue
-      // Solo se copian las columnas que esta versión conoce: un respaldo viejo
-      // al que le falte una columna nueva toma el valor por omisión.
-      const columns = columnsOf(table).filter((c) => c in rows[0]!)
-      if (columns.length === 0) {
-        throw httpError(400, `La tabla "${table}" del respaldo no trae ninguna columna conocida`)
-      }
-      const insert = db.prepare(
-        `INSERT INTO ${table} (${columns.join(', ')})
-         VALUES (${columns.map(() => '?').join(', ')})`,
-      )
       try {
-        for (const row of rows) {
-          insert.run(...columns.map((c) => (row[c] ?? null) as any))
+        for (const [columns, filas] of porForma(table, rows)) {
+          const insert = db.prepare(
+            `INSERT INTO ${table} (${columns.join(', ')})
+             VALUES (${columns.map(() => '?').join(', ')})`,
+          )
+          for (const row of filas) {
+            insert.run(...columns.map((c) => (row[c] ?? null) as any))
+          }
         }
       } catch (err) {
         // Referencias rotas, montos negativos, tipos fuera del catálogo: el
@@ -240,7 +458,7 @@ export function importSnapshot(raw: unknown): { restaurados: Record<string, numb
     }
   })
 
-  return { restaurados }
+  return { restaurados, revision }
 }
 
 const SNAPSHOT_DIR = path.join(dataDir, 'respaldos')

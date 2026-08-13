@@ -207,6 +207,7 @@ export function Importar({ onVerMovimientos }: { onVerMovimientos: () => void })
             ref={fileInput}
             type="file"
             accept=".csv,text/csv,text/plain"
+            aria-label="Archivo CSV de movimientos para importar"
             className="ajustes-archivo"
             onChange={(e) => {
               const file = e.target.files?.[0]

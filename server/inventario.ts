@@ -22,7 +22,12 @@
 
 import { db, httpError } from './db.ts'
 import { finDeMes, hoyISO } from '../shared/fechas.ts'
-import { recorrerExistencias, type MovimientoExistencias } from '../shared/giro.ts'
+import {
+  cantidadTexto,
+  existenciaMinimaDesde,
+  recorrerExistencias,
+  type MovimientoExistencias,
+} from '../shared/giro.ts'
 import type { Almacen, MovimientoStock, Producto } from '../shared/types.ts'
 
 function mapMovimiento(row: any): MovimientoStock {
@@ -250,13 +255,38 @@ export function registrarMovimiento(input: EntradaMovimiento): Producto {
   }
 
   // Sacar más de lo que hay dejaría una existencia negativa, y de ahí en
-  // adelante el costo promedio deja de significar nada. Se dice cuánto hay.
+  // adelante el costo promedio deja de significar nada.
+  //
+  // Se mide contra el **punto más bajo del tramo que la fecha alcanza**, no
+  // contra lo que hay hoy: una salida con fecha vieja baja todo el recorrido
+  // desde ahí, y comparar contra el total de siempre dejaba pasar una venta
+  // anterior a la compra que la surtía. Eso valuaba el almacén al doble y
+  // dejaba su costo de ventas en cero — el defecto que también arregló
+  // `recorrerExistencias` para los libros que ya lo tienen dentro.
   const saca = input.kind === 'salida' ? input.qtyMilli : input.kind === 'ajuste' && input.qtyMilli < 0 ? -input.qtyMilli : 0
-  if (saca > producto.cantidadMilli) {
-    throw httpError(
-      400,
-      `Solo tienes ${producto.cantidadMilli / 1000} ${producto.unit} de ${producto.name}`,
-    )
+  if (saca > 0) {
+    const historial: MovimientoExistencias[] = (
+      db
+        .prepare(
+          'SELECT date, kind, qty_milli FROM stock_moves WHERE product_id = ? ORDER BY date ASC, id ASC',
+        )
+        .all(input.productId) as any[]
+    ).map((m) => ({
+      fecha: m.date,
+      tipo: m.kind,
+      cantidadMilli: m.qty_milli,
+      costoUnitarioCents: 0,
+    }))
+    const disponible = existenciaMinimaDesde(historial, input.date)
+    if (saca > disponible) {
+      throw httpError(
+        400,
+        disponible === producto.cantidadMilli
+          ? `Solo tienes ${cantidadTexto(disponible)} ${producto.unit} de ${producto.name}`
+          : `Con fecha ${input.date} solo puedes sacar ${cantidadTexto(disponible)} ` +
+            `${producto.unit} de ${producto.name}: más dejaría la existencia en negativo`,
+      )
+    }
   }
   if (input.kind === 'salida' && input.qtyMilli <= 0) {
     throw httpError(400, 'Una salida saca una cantidad positiva')

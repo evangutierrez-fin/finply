@@ -10,6 +10,77 @@
 // (Fase 10a) o los campos del formulario (Fase 20): lo que decide cómo se lee
 // una cifra se equivoca en silencio, y dentro de un `.tsx` no se puede probar.
 
+/**
+ * Techo de cualquier cifra de dinero: un billón de pesos, en centavos.
+ *
+ * **No es una opinión sobre qué es mucho dinero: es lo que impide que el libro
+ * se rompa.** Los centavos viven en columnas INTEGER de SQLite, que son de 64
+ * bits, y `node:sqlite` se niega a *devolver* un entero que JavaScript no pueda
+ * representar exacto — por encima de 2^53 lanza `RangeError`. Un dedazo de
+ * ceros de más pasaba la validación, el INSERT lo escribía sin quejarse, y de
+ * ahí en adelante **cualquier lectura de esa cuenta contestaba un 500**: la
+ * partida quedaba dentro del libro y no había pantalla capaz de enseñarla ni
+ * formulario capaz de corregirla. Es el peor modo de fallar que hay — el que
+ * deja el dato adentro y la puerta cerrada.
+ *
+ * Por la puerta del CSV era distinto y peor: `parseMonto` devolvía `1e22`, que
+ * es finito y no es entero, y el saldo de la cuenta pasaba a ser un flotante.
+ *
+ * Vive aquí, y no en el validador, porque son **tres puertas** las que escriben
+ * dinero y las tres tienen que estar de acuerdo: la API (`server/validators`),
+ * el import de CSV (`server/valores`, que no pasa por el validador) y el
+ * formulario (`src/format`, que lo dice antes de mandar la petición). Es la
+ * misma razón por la que `esFechaReal` acabó en `shared/fechas`.
+ *
+ * Un billón deja noventa partidas en el tope antes de acercarse al entero
+ * seguro, y es la cifra que ya acotaba el objetivo del simulador.
+ */
+export const MAX_CENTAVOS = 1_000_000_000_000_00
+
+/**
+ * Si lo que se escribió **es** una cantidad y lo único que le pasa es que no
+ * cabe en el libro.
+ *
+ * Existe porque leer un monto puede fallar por dos razones muy distintas y los
+ * formularios solo sabían decir una: quien tecleaba veinte dígitos recibía
+ * "escribe un monto, por ejemplo 250 o 1,250.50" —la guía correcta y una
+ * respuesta absurda, porque sí escribió un monto—. La cifra no llega al libro
+ * en ninguno de los dos casos, para eso está `MAX_CENTAVOS`; lo que faltaba era
+ * decirle cuál de los dos es el suyo.
+ *
+ * Vive aquí y no en el formulario por lo mismo que el techo: se equivoca en
+ * silencio y en un `.tsx` no se puede probar.
+ */
+export function montoPasaDelTecho(raw: string): boolean {
+  const limpio = raw.replace(/[$,\s]/g, '')
+  if (!/^-?\d+(\.\d{1,2})?$/.test(limpio)) return false
+  const cents = Math.round(parseFloat(limpio) * 100)
+  return !Number.isSafeInteger(cents) || Math.abs(cents) > MAX_CENTAVOS
+}
+
+/** El techo escrito como se lee, para poder ponerlo dentro de la frase. */
+function techoEnPesos(): string {
+  return new Intl.NumberFormat('es-MX', {
+    style: 'currency',
+    currency: 'MXN',
+    maximumFractionDigits: 0,
+  }).format(MAX_CENTAVOS / 100)
+}
+
+/**
+ * El mensaje que le toca a un monto que no se pudo leer.
+ *
+ * `base` es lo que cada formulario ya decía, con su propia voz —"para el
+ * presupuesto", "para el tope del mes"—: se conserva, y solo se sustituye
+ * cuando la razón de verdad es otra. Un solo lugar decide la frase del techo,
+ * así que las nueve puertas que piden un monto no pueden acabar diciendo nueve
+ * cosas distintas de lo mismo.
+ */
+export function mensajeMonto(raw: string, base: string): string {
+  if (!montoPasaDelTecho(raw)) return base
+  return `Esa cifra pasa de ${techoEnPesos()}, que es el tope de un libro de Finply. Revisa los ceros.`
+}
+
 /** Las tres formas de escribir una fecha. Nulo o desconocido: 'corto'. */
 export type FormatoFecha = 'corto' | 'numerico' | 'iso'
 
@@ -97,5 +168,20 @@ export function pesosCon(cents: number, formato: Formato, currency = 'MXN'): str
     currency,
     ...(formato.sinCentavos ? { minimumFractionDigits: 0, maximumFractionDigits: 0 } : {}),
   }
-  return new Intl.NumberFormat('es-MX', opciones).format(cents / 100)
+  return new Intl.NumberFormat('es-MX', opciones).format(sinCeroNegativo(cents) / 100)
+}
+
+/**
+ * El cero no tiene signo.
+ *
+ * JavaScript sí tiene `-0`, e `Intl` lo escribe `-$0.00`. Aparece en cuanto
+ * una vista niega una cifra para enseñarla como salida —`-data.expenseCents`—
+ * y el mes no tuvo gastos: el Resumen decía "Salió −$0.00". Ni siquiera sale
+ * en rojo, porque `-0 < 0` es falso, así que es solo un signo que sobra.
+ *
+ * Se arregla aquí y no en la vista porque las vistas que niegan una cifra son
+ * muchas y la puerta por la que se escribe el dinero es una.
+ */
+export function sinCeroNegativo(cents: number): number {
+  return cents === 0 ? 0 : cents
 }

@@ -103,6 +103,11 @@ function Resultados({ datos }: { datos: EstadoResultados }) {
   return (
     <>
       <table className="tabla resultados">
+        {/* La única tabla del libro sin renglón de encabezados, y con razón:
+            un estado de resultados no tiene columnas que nombrar, tiene
+            conceptos y su monto. El `caption` le da el nombre que un lector de
+            pantalla necesita para anunciarla, sin ocupar un renglón. */}
+        <caption className="sr-only">Estado de resultados del periodo</caption>
         <tbody>
           <tr className="resultados-fuerte">
             <td>

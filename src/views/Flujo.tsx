@@ -34,6 +34,7 @@ const ETIQUETA: Record<TipoEvento, string> = {
   deuda: 'Deuda',
   msi: 'A meses',
   factura: 'Factura',
+  factura_recurrente: 'Factura por emitir',
   renta: 'Renta',
   movimiento: 'Ya asentado',
 }
@@ -50,6 +51,9 @@ const DESTINO: Record<TipoEvento, View> = {
   msi: 'tarjetas',
   deuda: 'deudas',
   factura: 'facturas',
+  // A Facturas también: ahí vive la bandeja donde se emite el periodo que este
+  // renglón está proyectando.
+  factura_recurrente: 'facturas',
   renta: 'inmuebles',
   movimiento: 'movimientos',
 }

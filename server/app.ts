@@ -87,11 +87,74 @@ export function traducirError(err: unknown): { status: number; error: string } {
 }
 
 /**
+ * Los nombres con los que se puede llamar a este servidor.
+ *
+ * Finply no pide contraseña porque escucha solo en `127.0.0.1` y asume que
+ * nadie más lo alcanza. Eso es cierto para la red y **falso para el
+ * navegador**: una página cualquiera puede resolver su propio dominio a
+ * `127.0.0.1` —reasignación de DNS, el ataque se llama *DNS rebinding*— y a
+ * partir de ese momento el navegador la considera del mismo origen que
+ * `http://sudominio:4321`. La política de mismo origen deja de estorbar, no
+ * hay CORS que valga, y esa página lee el libro entero.
+ *
+ * Lo único que el atacante no puede falsear es el nombre: para rebotar el DNS
+ * necesita un **dominio suyo**, así que la cabecera `Host` de esa petición
+ * dice `malicioso.example` y no `localhost`. Se comprueba ahí.
+ *
+ * Una IP literal se acepta —quien puso `API_HOST=0.0.0.0` a propósito llega
+ * por la IP de su máquina, y una IP no se rebota: no hay DNS que cambiar—. Y
+ * `FINPLY_HOSTS` deja añadir nombres para quien lo ponga detrás de un proxy
+ * con su propio dominio, que es una decisión suya y explícita.
+ */
+const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1'])
+
+/** El nombre sin el puerto. `[::1]:4321` → `::1`. */
+function soloElNombre(host: string): string {
+  const sinPuerto = host.startsWith('[')
+    ? host.slice(1, host.indexOf(']'))
+    : (host.split(':')[0] ?? '')
+  return sinPuerto.toLowerCase()
+}
+
+/** Una IP escrita como IP. No hay DNS que rebotar contra ella. */
+function esIpLiteral(nombre: string): boolean {
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(nombre)) return true
+  return nombre.includes(':') && /^[0-9a-f:.]+$/.test(nombre)
+}
+
+export function hostPermitido(host: string | undefined, extra: string[] = []): boolean {
+  // Sin `Host` no hay HTTP/1.1 válido, y HTTP/1.0 sin cabecera solo lo manda
+  // algo que no es un navegador: no es la vía del ataque y se deja pasar.
+  if (!host) return true
+  const nombre = soloElNombre(host)
+  if (nombre === '') return false
+  return LOOPBACK.has(nombre) || esIpLiteral(nombre) || extra.includes(nombre)
+}
+
+function nombresExtra(): string[] {
+  return (process.env.FINPLY_HOSTS ?? '')
+    .split(',')
+    .map((n) => n.trim().toLowerCase())
+    .filter((n) => n !== '')
+}
+
+/**
  * Arma la app de Express sin ponerla a escuchar, para que las pruebas puedan
  * levantarla en un puerto efímero.
  */
 export function createApp(): express.Express {
   const app = express()
+
+  const extra = nombresExtra()
+  app.use((req, res, next) => {
+    if (hostPermitido(req.headers.host, extra)) return next()
+    res.status(403).json({
+      error:
+        `Esta petición llegó a nombre de "${req.headers.host}", que no es esta máquina. ` +
+        'Finply solo contesta a localhost. Si lo pusiste detrás de un dominio propio, ' +
+        'nómbralo en FINPLY_HOSTS.',
+    })
+  })
 
   app.use(express.json({ limit: LIMITE_CUERPO_BYTES }))
 

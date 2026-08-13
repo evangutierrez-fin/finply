@@ -14,14 +14,8 @@ import { bienesPorMes } from './bienes.ts'
 import { recorrer, type EntradaInversion } from '../shared/inversiones.ts'
 import { mediana } from '../shared/estadistica.ts'
 import { agruparPorPadre } from '../shared/taxonomia.ts'
+import { correrMesTexto, mesesEntreTexto } from '../shared/fechas.ts'
 import type { Comparativa, ReporteAnual } from '../shared/types.ts'
-
-/** Mueve un 'AAAA-MM' N meses. */
-function correrMes(month: string, delta: number): string {
-  const [y, m] = month.split('-').map(Number)
-  const total = y! * 12 + (m! - 1) + delta
-  return `${Math.floor(total / 12)}-${String((((total % 12) + 12) % 12) + 1).padStart(2, '0')}`
-}
 
 /**
  * Cuánto de un movimiento cuenta como ingreso o gasto. Los que solo mueven
@@ -528,10 +522,10 @@ export function comparativa(
   previo?: { desde: string; hasta: string },
 ): Comparativa {
   // Sin segundo periodo, el de antes: el mismo número de meses, justo antes.
-  const largo = mesesEntre(actual.desde, actual.hasta)
+  const largo = mesesEntreTexto(actual.desde, actual.hasta)
   const contra = previo ?? {
-    desde: correrMes(actual.desde, -largo),
-    hasta: correrMes(actual.hasta, -largo),
+    desde: correrMesTexto(actual.desde, -largo),
+    hasta: correrMesTexto(actual.hasta, -largo),
   }
 
   const totales = (r: { desde: string; hasta: string }) => {
@@ -563,11 +557,4 @@ export function comparativa(
     previo: { ...contra, ...totales(contra) },
     categorias,
   }
-}
-
-/** Meses entre dos 'AAAA-MM', contando los dos extremos. */
-function mesesEntre(desde: string, hasta: string): number {
-  const [ya, ma] = desde.split('-').map(Number)
-  const [yb, mb] = hasta.split('-').map(Number)
-  return yb! * 12 + mb! - (ya! * 12 + ma!) + 1
 }

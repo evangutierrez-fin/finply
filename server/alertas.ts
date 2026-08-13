@@ -17,6 +17,7 @@
 // no se reescribe. Hay una prueba que cuenta las consultas.
 
 import { db, modulosDe } from './db.ts'
+import { almacen, mesDe as mesDeInventario } from './inventario.ts'
 import { presupuestosDelMes } from './presupuestos.ts'
 import type { ModuloId } from '../shared/modulos.ts'
 import { estadoTarjetas } from './tarjetas.ts'
@@ -24,6 +25,7 @@ import { listar as listarRecurrencias } from './recurrencias.ts'
 import { tablaAmortizacion } from '../shared/credito.ts'
 import { diasEntre, hoyISO, sumarDias } from '../shared/fechas.ts'
 import { cantidadTexto } from '../shared/giro.ts'
+import { cifraPendiente, pesoPendiente, restoPendiente } from '../shared/recurrencias.ts'
 import type { Alerta } from '../shared/types.ts'
 
 /**
@@ -194,16 +196,33 @@ function deRecurrencias(profileId: number, hoy: string): Alerta[] {
   const conPendientes = recs.filter((r) => r.pendientes > 0)
   const pendientes = conPendientes.reduce((s, r) => s + r.pendientes, 0)
   if (pendientes > 0) {
-    const monto = conPendientes.reduce((s, r) => s + r.pendientes * r.amountCents, 0)
+    // `montoPropuestoCents` y no `amountCents`: con monto variable son cifras
+    // distintas —la columna es el fijo de la plantilla y lo propuesto es el
+    // promedio de lo asentado—, y la que vale es la que la bandeja va a
+    // proponer. Con la columna, el Resumen anunciaba $500 de un atraso que el
+    // calendario y la bandeja valuaban en $4,500 (D14).
+    //
+    // Y **partido por dirección**, no sumado: sumar el sueldo que entra con la
+    // colegiatura que sale daba una cifra que la bandeja no enseña nunca. La
+    // aritmética es la misma que usa la bandeja, en `shared/recurrencias.ts`.
+    const peso = pesoPendiente(
+      conPendientes.map((r) => ({
+        type: r.type,
+        investmentId: r.investmentId,
+        amountCents: r.pendientes * r.montoPropuestoCents,
+      })),
+    )
+    const resto = restoPendiente(peso, pesos)
+    const deQuien =
+      conPendientes.length === 1
+        ? `De ${etiqueta(conPendientes[0]!.note, conPendientes[0]!.type)}, sin asentar en el libro`
+        : `De ${conPendientes.length} plantillas, sin asentar en el libro`
     alertas.push({
       tipo: 'recurrencia',
       severidad: 'media',
       titulo: `${pendientes} ${pendientes === 1 ? 'partida' : 'partidas'} por confirmar`,
-      detalle:
-        conPendientes.length === 1
-          ? `De ${etiqueta(conPendientes[0]!.note, conPendientes[0]!.type)}, sin asentar en el libro`
-          : `De ${conPendientes.length} plantillas, sin asentar en el libro`,
-      montoCents: monto,
+      detalle: resto ? `${deQuien}. ${resto}` : deQuien,
+      montoCents: cifraPendiente(peso),
       refId: conPendientes.length === 1 ? conPendientes[0]!.id : null,
       vista: 'recurrencias',
     })
@@ -216,15 +235,27 @@ function deRecurrencias(profileId: number, hoy: string): Alerta[] {
       diasEntre(hoy, r.proximaFecha) <= DIAS_AVISO_RECURRENCIA,
   )
   if (proximas.length > 0) {
-    const monto = proximas.reduce((s, r) => s + r.amountCents, 0)
+    // Lo mismo que arriba: "suman $3,450 entre todos" juntaba $1,450 de un
+    // curso con $2,000 que se van a una inversión propia y siguen siendo
+    // tuyos. Sumarlos no describe nada.
+    const peso = pesoPendiente(
+      proximas.map((r) => ({
+        type: r.type,
+        investmentId: r.investmentId,
+        amountCents: r.montoPropuestoCents,
+      })),
+    )
+    const monto = cifraPendiente(peso)
+    const resto = restoPendiente(peso, pesos)
     const una = proximas.length === 1 ? proximas[0]! : null
+    const entreTodos = resto ? `Suman ${pesos(monto)}, y aparte ${resto}` : `Suman ${pesos(monto)} entre todos`
     alertas.push({
       tipo: 'recurrencia',
       severidad: 'media',
       titulo: una
         ? `${etiqueta(una.note, una.type)} ${una.type === 'ingreso' ? 'entra' : 'se cobra'} ${cuando(hoy, una.proximaFecha!)}`
         : `${proximas.length} movimientos recurrentes en ${DIAS_AVISO_RECURRENCIA} días`,
-      detalle: una ? una.descripcion : `Suman ${pesos(monto)} entre todos`,
+      detalle: una ? una.descripcion : entreTodos,
       montoCents: monto,
       refId: una?.id ?? null,
       vista: 'recurrencias',
@@ -454,29 +485,28 @@ function deCotizaciones(profileId: number, hoy: string): Alerta[] {
 /**
  * El anaquel que se está vaciando. Solo habla de productos con mínimo puesto:
  * sin él, Finply no tiene forma de saber cuánto es poco para ese negocio.
+ *
+ * ⚠ La existencia sale de `almacen`, la misma que pinta la vista, y no de un
+ * `SUM` propio. Aquí había una segunda aritmética, y se separó en cuanto
+ * `recorrerExistencias` puso el piso en cero: con un libro que salió negativo
+ * —por un respaldo viejo o por borrar la entrada que surtía una salida— la
+ * vista decía "0 kg" y esta alerta decía "−10 kg" del mismo producto. Dos
+ * cifras de la misma cosa, que es justo lo que este archivo evita reusando
+ * `estadoTarjetas` y `listar` en vez de reescribirlos.
  */
-function deExistencias(profileId: number): Alerta[] {
-  const filas: any[] = db
-    .prepare(
-      `SELECT p.id, p.name, p.unit, p.min_qty_milli AS minimo,
-        COALESCE((SELECT SUM(CASE WHEN m.kind = 'salida' THEN -m.qty_milli ELSE m.qty_milli END)
-          FROM stock_moves m WHERE m.product_id = p.id), 0) AS existencia
-       FROM products p
-       WHERE p.profile_id = ? AND p.archived = 0 AND p.min_qty_milli IS NOT NULL
-       ORDER BY p.name ASC`,
-    )
-    .all(profileId)
-
-  return filas
-    .filter((p) => p.existencia < p.minimo)
+function deExistencias(profileId: number, hoy: string): Alerta[] {
+  const { desde, hasta } = mesDeInventario(hoy)
+  return almacen(profileId, desde, hasta)
+    .productos.filter((p) => !p.archived && p.bajoMinimo)
+    .sort((a, b) => a.name.localeCompare(b.name))
     .map((p) => ({
       tipo: 'existencias' as const,
-      severidad: p.existencia <= 0 ? ('alta' as const) : ('media' as const),
+      severidad: p.cantidadMilli <= 0 ? ('alta' as const) : ('media' as const),
       titulo:
-        p.existencia <= 0 ? `Te quedaste sin ${p.name}` : `Queda poco ${p.name}`,
+        p.cantidadMilli <= 0 ? `Te quedaste sin ${p.name}` : `Queda poco ${p.name}`,
       detalle:
-        `${cantidadTexto(p.existencia)} ${p.unit} contra un mínimo de ` +
-        `${cantidadTexto(p.minimo)}`,
+        `${cantidadTexto(p.cantidadMilli)} ${p.unit} contra un mínimo de ` +
+        `${cantidadTexto(p.minQtyMilli ?? 0)}`,
       montoCents: null,
       refId: p.id,
       vista: 'inventario' as const,
@@ -556,7 +586,7 @@ export function alertas(profileId: number, hoy = hoyISO()): Alerta[] {
     ...(con('recurrencias') ? deRecurrencias(profileId, hoy) : []),
     ...(con('metas') ? deMetas(profileId, hoy) : []),
     ...(con('inmuebles') ? deArrendamientos(profileId, hoy) : []),
-    ...(con('inventario') ? deExistencias(profileId) : []),
+    ...(con('inventario') ? deExistencias(profileId, hoy) : []),
     ...(con('negocio') ? deCotizaciones(profileId, hoy) : []),
   ].filter((a) => {
     const modulo = MODULO_DE[a.tipo]

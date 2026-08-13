@@ -14,8 +14,10 @@
 // perfil y lo cambia al cambiar de perfil.
 
 import {
-  FORMATO_POR_OMISION, MESES, fechaCon, fechaConAnio, pesosCon, type Formato,
+  FORMATO_POR_OMISION, MAX_CENTAVOS, MESES, fechaCon, fechaConAnio, pesosCon, sinCeroNegativo,
+  type Formato,
 } from '../shared/formato.ts'
+import { correrMesTexto } from '../shared/fechas.ts'
 
 let formatoActivo: Formato = FORMATO_POR_OMISION
 
@@ -39,7 +41,10 @@ export function fmtMoney(cents: number, currency = 'MXN'): string {
     f = new Intl.NumberFormat('es-MX', { style: 'currency', currency })
     formatters.set(currency, f)
   }
-  return f.format(cents / 100)
+  // `sinCeroNegativo` también aquí: este es el camino rápido y se salta
+  // `pesosCon`, que es donde vive la regla. Sin esto, el cero llevaría signo
+  // en las trescientas llamadas que no piden "sin centavos".
+  return f.format(sinCeroNegativo(cents) / 100)
 }
 
 /**
@@ -69,6 +74,11 @@ export function fmtCompacto(cents: number): string {
  * teclea en Finply es un monto y un monto de cero no significa nada. La
  * excepción es el saldo de un corte de conciliación (D19): el estado de cuenta
  * de una tarjeta viene en negativo, y el de una cuenta vacía viene en cero.
+ *
+ * El techo es el mismo `MAX_CENTAVOS` que exige la API: el formulario lo dice
+ * en el momento —el campo se queda en rojo— en vez de dejar que el usuario
+ * mande la petición para que se la rechacen. Es la misma cifra en las tres
+ * puertas, no tres copias.
  */
 export function parseAmount(
   raw: string,
@@ -78,9 +88,12 @@ export function parseAmount(
   const patron = opciones.permitirNegativo ? /^-?\d+(\.\d{1,2})?$/ : /^\d+(\.\d{1,2})?$/
   if (!patron.test(clean)) return null
   const cents = Math.round(parseFloat(clean) * 100)
+  if (!Number.isSafeInteger(cents) || Math.abs(cents) > MAX_CENTAVOS) return null
   if (opciones.permitirNegativo) return cents
   return cents > 0 ? cents : null
 }
+
+export { mensajeMonto } from '../shared/formato.ts'
 
 /** '24.5' | '24,5' | '0' → puntos base, o null si no es una tasa. */
 export function parseTasa(raw: string): number | null {
@@ -125,12 +138,13 @@ export function currentMonth(): string {
   return todayISO().slice(0, 7)
 }
 
+/**
+ * Mueve un mes 'AAAA-MM'. Es `correrMesTexto` con el nombre que el cliente ya
+ * usaba en veinte llamadas: la aritmética es la del servidor, no una copia —era
+ * la sexta, y la única que además dejaba el año sin rellenar.
+ */
 export function shiftMonth(month: string, delta: number): string {
-  const [y, m] = month.split('-').map(Number)
-  const total = (y! * 12 + (m! - 1)) + delta
-  const ny = Math.floor(total / 12)
-  const nm = (total % 12) + 1
-  return `${ny}-${String(nm).padStart(2, '0')}`
+  return correrMesTexto(month, delta)
 }
 
 export function isPastDue(dueDate: string | null): boolean {

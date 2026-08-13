@@ -17,7 +17,7 @@ import {
   TIPO_OPERATIVO,
 } from '../reportes.ts'
 import { agruparPorPadre } from '../../shared/taxonomia.ts'
-import { hoyISO, sumarDias } from '../../shared/fechas.ts'
+import { correrMesTexto, finDeMes, hoyISO, sumarDias } from '../../shared/fechas.ts'
 import { summaryQuery } from '../validators.ts'
 import type { Account, Summary } from '../../shared/types.ts'
 
@@ -26,11 +26,15 @@ const router = Router()
 /** Cuántos días trae la minigráfica de cada cuenta, contando hoy. */
 const DIAS_SPARK = 30
 
-/** El último día del mes anterior a un 'AAAA-MM'. */
+/**
+ * El último día del mes anterior a un 'AAAA-MM'.
+ *
+ * Con la aritmética de `shared/fechas` y no con un `Date`: es la misma razón que
+ * dejó escrita `diasDelMes` —`Date` mapea los años de dos dígitos al siglo XX—
+ * y, sobre todo, es la cifra contra la que el Resumen compara el total de hoy.
+ */
 function cierreAnterior(mes: string): string {
-  const [y, m] = mes.split('-').map(Number)
-  // El día 0 del mes es el último del anterior, y `Date.UTC` lo resuelve solo.
-  return new Date(Date.UTC(y!, m! - 1, 0)).toISOString().slice(0, 10)
+  return finDeMes(`${correrMesTexto(mes, -1)}-01`)
 }
 
 /**

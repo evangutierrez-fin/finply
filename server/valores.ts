@@ -8,6 +8,9 @@
 // puede ser mil o uno— así que aquí se decide con reglas explícitas y la
 // vista previa muestra el valor resultante para que el usuario lo verifique.
 
+import { esFechaReal } from '../shared/fechas.ts'
+import { MAX_CENTAVOS } from '../shared/formato.ts'
+
 /**
  * Texto → centavos con signo, o null si no es un monto.
  *
@@ -64,18 +67,26 @@ export function parseMonto(raw: string): number | null {
   if (decimales.length > 2) return null
 
   const cents = Number(entero || '0') * 100 + Number(decimales.padEnd(2, '0') || '0')
-  if (!Number.isFinite(cents)) return null
+  // Finito no basta, y por eso esto no es una precaución teórica: una columna
+  // con veinte dígitos daba `1e22`, que es finito, no es entero seguro y se
+  // escribía tal cual porque el import no pasa por el validador de la API. El
+  // saldo de la cuenta dejaba de ser un entero de centavos y se volvía un
+  // flotante — el libro entero deja de cuadrar y nadie ve dónde. El techo es el
+  // mismo de la API (`MAX_CENTAVOS`) para que las dos puertas no discrepen.
+  if (!Number.isSafeInteger(cents) || cents > MAX_CENTAVOS) return null
   return negativo ? -cents : cents
 }
 
-function esFechaReal(y: number, m: number, d: number): boolean {
-  if (m < 1 || m > 12 || d < 1) return false
-  const dias = new Date(Date.UTC(y, m, 0)).getUTCDate()
-  return d <= dias
-}
-
+/**
+ * La fecha armada, con el **año a cuatro dígitos**.
+ *
+ * El padding no es cosmético: sin él, un archivo con `0026-03-05` producía la
+ * cadena `26-03-05`, que no es AAAA-MM-DD y ordena antes que cualquier fecha
+ * de verdad. El import escribe en la base sin pasar por el validador de la
+ * API, así que lo que salga de aquí es lo que se guarda.
+ */
 const iso = (y: number, m: number, d: number) =>
-  `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+  `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
 
 /**
  * Texto → 'AAAA-MM-DD', o null si no es una fecha válida.
@@ -83,15 +94,27 @@ const iso = (y: number, m: number, d: number) =>
  * Con formato `03/04/2026` se toma **día primero**, que es la convención en
  * México y en casi toda Latinoamérica. La vista previa muestra la fecha
  * resultante precisamente para que un archivo en otro formato se note.
+ *
+ * Que el día **exista** lo decide `esFechaReal`, la misma función que usa el
+ * validador de la API. Aquí había una copia con su propia aritmética, y una
+ * copia de una regla que debe coincidir es una regla que se separa: esta
+ * aceptaba años de dos dígitos como si fueran del siglo XX, así que el 29 de
+ * febrero de un bisiesto podía caer del lado equivocado.
  */
 export function parseFecha(raw: string): string | null {
   const texto = raw.trim()
   if (!texto) return null
 
+  const armar = (y: number, m: number, d: number): string | null => {
+    if (m < 1 || m > 12 || d < 1 || d > 31) return null
+    const fecha = iso(y, m, d)
+    return esFechaReal(fecha) ? fecha : null
+  }
+
   const conAnioPrimero = texto.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/)
   if (conAnioPrimero) {
     const [, y, m, d] = conAnioPrimero.map(Number) as [number, number, number, number]
-    return esFechaReal(y, m, d) ? iso(y, m, d) : null
+    return armar(y, m, d)
   }
 
   const diaPrimero = texto.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/)
@@ -100,7 +123,7 @@ export function parseFecha(raw: string): string | null {
     if (y < 100) y += y < 70 ? 2000 : 1900
     // Un "mes" mayor a 12 solo puede ser el día: el archivo venía al revés.
     if (m > 12 && d <= 12) [d, m] = [m, d]
-    return esFechaReal(y, m, d) ? iso(y, m, d) : null
+    return armar(y, m, d)
   }
   return null
 }

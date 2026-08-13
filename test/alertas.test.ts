@@ -466,3 +466,182 @@ describe('R11: el costo no crece con el libro', () => {
     }
   })
 })
+
+/**
+ * Tercera vuelta de la auditoría: el Resumen no puede valuar una partida
+ * distinto de como la valúan la bandeja y el calendario (D14).
+ */
+describe('la alerta de recurrencias dice el monto que se va a proponer', () => {
+  /** Una plantilla de monto variable con tres asentadas muy por encima del fijo. */
+  async function libroConPromedio(nombre: string) {
+    const { perfil, cuenta, categorias } = await libroBase(c, nombre)
+    const gasto = categorias.find((k: any) => k.kind === 'gasto')
+    const rec = (
+      await c.post('/api/recurrencias', {
+        profileId: perfil.id,
+        accountId: cuenta.id,
+        type: 'gasto',
+        amountCents: 100_00,
+        categoryId: gasto.id,
+        note: 'Luz',
+        frequency: 'mensual',
+        dayOfMonth: 5,
+        startDate: '2026-01-05',
+        amountMode: 'promedio',
+      })
+    ).body
+    for (const periodo of ['2026-01', '2026-02', '2026-03']) {
+      const r = await c.post(`/api/recurrencias/${rec.id}/asentar?profileId=${perfil.id}`, {
+        periodo,
+        amountCents: 900_00,
+      })
+      assert.equal(r.status, 201, JSON.stringify(r.body))
+    }
+    return { perfil, rec }
+  }
+
+  test('lo por confirmar se valúa con el promedio, no con la columna fija', async () => {
+    const { perfil } = await libroConPromedio('Promedio')
+    const hoy = '2026-08-07'
+    const bandeja = (
+      await c.get(`/api/recurrencias/pendientes?profileId=${perfil.id}&hoy=${hoy}`)
+    ).body
+    assert.ok(bandeja.total > 0, 'tenía que haber atraso que contar')
+    assert.equal(bandeja.items[0].amountCents, 900_00, 'la bandeja propone el promedio')
+
+    const alerta = de(await alertasDe(perfil.id, hoy), 'recurrencia').find((a) =>
+      a.titulo.includes('por confirmar'),
+    )
+    assert.ok(alerta, 'no salió la alerta de partidas por confirmar')
+    // Con la columna fija esto daba $500 de un atraso que vale $4,500: nueve
+    // veces menos, y en la única pantalla que el usuario mira todos los días.
+    assert.equal(
+      alerta.montoCents,
+      bandeja.total * 900_00,
+      'el Resumen valúa el atraso distinto que la bandeja',
+    )
+  })
+
+  test('y lo que viene pronto, también', async () => {
+    const { perfil } = await libroConPromedio('Promedio2')
+    // Dos días antes del 5 de septiembre, con agosto ya resuelto para que la
+    // próxima sin resolver sea la de septiembre.
+    const hoy = '2026-09-03'
+    const cal = (await c.get(`/api/calendario?profileId=${perfil.id}&hoy=${hoy}&dias=3`)).body
+    const evento = cal.eventos.find((e: any) => e.tipo === 'recurrencia')
+    assert.ok(evento, 'el calendario tenía que anunciarla')
+
+    const alerta = de(await alertasDe(perfil.id, hoy), 'recurrencia').find(
+      (a) => !a.titulo.includes('por confirmar'),
+    )
+    assert.ok(alerta, 'no salió la alerta de lo que se cobra pronto')
+    assert.equal(alerta.montoCents, evento.montoCents, 'dos pantallas, dos cifras')
+  })
+
+  test('con monto fijo no cambia nada, y no se consulta el promedio', async () => {
+    const { perfil, cuenta, categorias } = await libroBase(c, 'Fijo')
+    const gasto = categorias.find((k: any) => k.kind === 'gasto')
+    await c.post('/api/recurrencias', {
+      profileId: perfil.id,
+      accountId: cuenta.id,
+      type: 'gasto',
+      amountCents: 300_00,
+      categoryId: gasto.id,
+      note: 'Renta',
+      frequency: 'mensual',
+      dayOfMonth: 1,
+      startDate: '2026-06-01',
+    })
+    const hoy = '2026-08-07'
+    const bandeja = (
+      await c.get(`/api/recurrencias/pendientes?profileId=${perfil.id}&hoy=${hoy}`)
+    ).body
+    const alerta = de(await alertasDe(perfil.id, hoy), 'recurrencia').find((a) =>
+      a.titulo.includes('por confirmar'),
+    )
+    assert.equal(alerta.montoCents, bandeja.total * 300_00)
+  })
+})
+
+/**
+ * La misma bandeja, contada dos veces (D14).
+ *
+ * La alerta del Resumen y la bandeja de Recurrencias hablan **del mismo
+ * montón**, y hasta la cuarta vuelta cada una lo sumaba a su manera: la
+ * bandeja separaba el gasto del aporte a una inversión —D6: mover dinero a un
+ * fondo tuyo no es gasto— y dejaba el ingreso fuera del titular; la alerta
+ * sumaba las tres direcciones en una sola cifra. Con un sueldo por confirmar,
+ * el Resumen anunciaba una cantidad que no aparecía en ninguna otra pantalla.
+ */
+describe('la alerta y la bandeja pesan lo mismo', () => {
+  const HOY = '2026-08-09'
+
+  /** Un libro con las tres direcciones pendientes: gasto, aporte y sueldo. */
+  async function libroConLasTres(nombre: string) {
+    const { perfil, cuenta, categorias } = await libroBase(c, nombre)
+    const gasto = categorias.find((k: any) => k.kind === 'gasto')
+    const ingreso = categorias.find((k: any) => k.kind === 'ingreso')
+    const fondo = (
+      await c.post('/api/investments', { profileId: perfil.id, name: 'Fondo', kind: 'fondo' })
+    ).body
+
+    const base = {
+      profileId: perfil.id,
+      accountId: cuenta.id,
+      frequency: 'mensual' as const,
+      dayOfMonth: 1,
+      startDate: '2026-07-01',
+    }
+    await c.post('/api/recurrencias', {
+      ...base, type: 'gasto', amountCents: 1_200_00, categoryId: gasto.id, note: 'Colegiatura',
+    })
+    await c.post('/api/recurrencias', {
+      ...base, type: 'gasto', amountCents: 500_00, note: 'Aporte al fondo', investmentId: fondo.id,
+    })
+    await c.post('/api/recurrencias', {
+      ...base, type: 'ingreso', amountCents: 3_000_00, categoryId: ingreso.id, note: 'Sueldo',
+    })
+    return perfil
+  }
+
+  test('el aviso enseña el gasto de la bandeja, no la suma de las direcciones', async () => {
+    const perfil = await libroConLasTres('Tres')
+    const bandeja = (await c.get(`/api/recurrencias/pendientes?profileId=${perfil.id}&hoy=${HOY}`))
+      .body
+    const gastoDeLaBandeja = bandeja.items
+      .filter((p: any) => p.type === 'gasto' && !p.investmentId)
+      .reduce((s: number, p: any) => s + p.amountCents, 0)
+    assert.ok(gastoDeLaBandeja > 0, 'la bandeja no trajo gasto que comparar')
+
+    const alerta = de(await alertasDe(perfil.id, HOY), 'recurrencia').find((a: any) =>
+      a.titulo.includes('por confirmar'),
+    )
+    assert.ok(alerta, 'no hubo aviso de partidas por confirmar')
+    assert.equal(
+      alerta.montoCents,
+      gastoDeLaBandeja,
+      'el aviso y la bandeja dicen dos cifras del mismo montón',
+    )
+
+    // Y lo que la cifra deja fuera **se dice**, en vez de sumarse a ella.
+    assert.match(alerta.detalle, /inversión/)
+    assert.match(alerta.detalle, /entran/)
+    const suma = bandeja.items.reduce((s: number, p: any) => s + p.amountCents, 0)
+    assert.notEqual(alerta.montoCents, suma, 'volvió a sumar las tres direcciones')
+  })
+
+  test('sin gasto, el aviso habla de lo que entra y no de cero', async () => {
+    const { perfil, cuenta, categorias } = await libroBase(c, 'SoloIngreso')
+    const ingreso = categorias.find((k: any) => k.kind === 'ingreso')
+    await c.post('/api/recurrencias', {
+      profileId: perfil.id, accountId: cuenta.id, type: 'ingreso', amountCents: 2_500_00,
+      categoryId: ingreso.id, note: 'Iguala', frequency: 'mensual', dayOfMonth: 1,
+      startDate: '2026-07-01',
+    })
+    const alerta = de(await alertasDe(perfil.id, HOY), 'recurrencia').find((a: any) =>
+      a.titulo.includes('por confirmar'),
+    )
+    assert.ok(alerta)
+    assert.equal(alerta.montoCents, 2 * 2_500_00, 'un aviso de $0 no le dice nada a nadie')
+  })
+})
